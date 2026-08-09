@@ -171,6 +171,14 @@ func (r *Renderer) renderToolLine(run toolRun, statusColor, status string) {
 }
 
 func toolSummary(call dora.ToolCall) string {
+	if call.Name == "skill" {
+		var input struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(call.Input, &input) == nil && input.Name != "" {
+			return input.Name
+		}
+	}
 	if call.Name == "bash" {
 		var input struct {
 			Command string `json:"command"`

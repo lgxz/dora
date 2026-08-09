@@ -185,6 +185,136 @@ tools:
 	}
 }
 
+func TestRunLoadsSkillBesideConfig(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch calls {
+		case 1:
+			tools := body["tools"].([]any)
+			function := tools[0].(map[string]any)["function"].(map[string]any)
+			if function["name"] != "skill" || !strings.Contains(function["description"].(string), "system-status") {
+				t.Fatalf("function = %#v", function)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-skill","type":"function","function":{"name":"skill","arguments":"{\"name\":\"system-status\"}"}}]}}]}`), nil
+		case 2:
+			messages := body["messages"].([]any)
+			result := messages[len(messages)-1].(map[string]any)
+			if result["role"] != "tool" || !strings.Contains(result["content"].(string), "Inspect CPU and memory") {
+				t.Fatalf("skill result = %#v", result)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"skill loaded"}}]}`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skills")
+	skillDir := filepath.Join(skillRoot, "system-status")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: system-status
+description: Analyze local system resources.
+---
+
+Inspect CPU and memory before drawing conclusions.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	configContents := `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "inspect"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || stdout.String() != "skill loaded\n" {
+		t.Fatalf("calls = %d, stdout = %q", calls, stdout.String())
+	}
+}
+
+func TestRunIgnoresEmptyDefaultSkillDirectory(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["tools"]; exists {
+			t.Fatalf("unexpected tools = %#v", body["tools"])
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"no skills"}}]}`), nil
+	})}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "skills"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunRejectsMissingAdditionalSkillDirectory(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+skills:
+  directories:
+    - %s
+`, filepath.Join(root, "missing"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "read directory") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	var output bytes.Buffer
 	err := Run(context.Background(), []string{"--help"}, IO{

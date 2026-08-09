@@ -147,3 +147,10 @@ func TestToolSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 		t.Fatalf("summary = %q", summary)
 	}
 }
+
+func TestToolSummaryShowsSkillName(t *testing.T) {
+	summary := toolSummary(dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)})
+	if summary != "system-status" {
+		t.Fatalf("summary = %q", summary)
+	}
+}

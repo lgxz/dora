@@ -4,6 +4,12 @@ model:
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
 
+# Dora automatically discovers a skills directory beside this file.
+# Add other directories only when needed:
+# skills:
+#   directories:
+#     - /absolute/path/to/additional-skills
+
 tools:
   bash:
     enabled: false

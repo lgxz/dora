@@ -12,8 +12,9 @@ import (
 
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
-	Model Model `yaml:"model"`
-	Tools Tools `yaml:"tools,omitempty"`
+	Model  Model  `yaml:"model"`
+	Tools  Tools  `yaml:"tools,omitempty"`
+	Skills Skills `yaml:"skills,omitempty"`
 }
 
 // Model describes one configured model endpoint.
@@ -35,6 +36,12 @@ type Bash struct {
 	Enabled        bool   `yaml:"enabled"`
 	WorkingDir     string `yaml:"working_dir,omitempty"`
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty"`
+}
+
+// Skills configures local directories containing SKILL.md packages. Skills
+// are disabled when no directories are configured.
+type Skills struct {
+	Directories []string `yaml:"directories,omitempty"`
 }
 
 // DefaultPath returns the platform-specific default configuration path.
@@ -102,6 +109,11 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Tools.Bash.TimeoutSeconds < 0 {
 		return errors.New("tools.bash.timeout_seconds cannot be negative")
+	}
+	for index, directory := range cfg.Skills.Directories {
+		if directory == "" {
+			return fmt.Errorf("skills.directories[%d] cannot be empty", index)
+		}
 	}
 	return nil
 }

@@ -43,6 +43,43 @@ model:
 	}
 }
 
+func TestLoadAcceptsSkillDirectories(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+skills:
+  directories:
+    - /opt/dora/skills
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skills.Directories) != 1 || cfg.Skills.Directories[0] != "/opt/dora/skills" {
+		t.Fatalf("directories = %#v", cfg.Skills.Directories)
+	}
+}
+
+func TestLoadRejectsEmptySkillDirectory(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+skills:
+  directories:
+    - ""
+`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `
 model:

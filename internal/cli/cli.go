@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"dora/internal/session"
 	"dora/model/openai"
 	"dora/model/openairesponses"
+	"dora/skill"
 	bashtool "dora/tool/bash"
 )
 
@@ -124,6 +127,23 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	var tools []dora.Tool
+	skillDirectories, err := configuredSkillDirectories(*configPath, cfg.Skills.Directories)
+	if err != nil {
+		return err
+	}
+	if len(skillDirectories) > 0 {
+		skills, err := skill.New(skill.Config{Directories: skillDirectories})
+		if errors.Is(err, skill.ErrNoSkills) {
+			skills = nil
+			err = nil
+		}
+		if err != nil {
+			return err
+		}
+		if skills != nil {
+			tools = append(tools, skills)
+		}
+	}
 	if cfg.Tools.Bash.Enabled {
 		bash, err := bashtool.New(bashtool.Config{
 			WorkingDir: cfg.Tools.Bash.WorkingDir,
@@ -171,6 +191,40 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return saveErr
 	}
 	return outputErr
+}
+
+func configuredSkillDirectories(configPath string, additional []string) ([]string, error) {
+	absoluteConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config path for skills: %w", err)
+	}
+	defaultDirectory := filepath.Join(filepath.Dir(absoluteConfig), "skills")
+	info, err := os.Stat(defaultDirectory)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect default skill directory %q: %w", defaultDirectory, err)
+	}
+
+	directories := make([]string, 0, len(additional)+1)
+	seen := make(map[string]struct{}, len(additional)+1)
+	if err == nil {
+		if !info.IsDir() {
+			return nil, fmt.Errorf("default skill path %q is not a directory", defaultDirectory)
+		}
+		directories = append(directories, defaultDirectory)
+		seen[defaultDirectory] = struct{}{}
+	}
+	for _, directory := range additional {
+		absolute, err := filepath.Abs(directory)
+		if err != nil {
+			return nil, fmt.Errorf("resolve skill directory %q: %w", directory, err)
+		}
+		if _, exists := seen[absolute]; exists {
+			continue
+		}
+		seen[absolute] = struct{}{}
+		directories = append(directories, absolute)
+	}
+	return directories, nil
 }
 
 func readPrompt(args []string, stdin io.Reader, stdinIsTerminal bool) (string, error) {

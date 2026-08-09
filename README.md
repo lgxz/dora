@@ -110,6 +110,51 @@ the same session name concurrently.
 Use `--config`, `--model`, or `--base-url` to override the corresponding
 configuration for one invocation.
 
+### Skills
+
+Skills are local instruction packages loaded by the model only when relevant.
+Each skill is a directory containing a `SKILL.md` with strict YAML front
+matter:
+
+```text
+skills/
+└── system-status/
+    └── SKILL.md
+```
+
+```markdown
+---
+name: system-status
+description: Analyze CPU, memory, disk, and busy processes.
+---
+
+# System status
+
+Inspect the machine methodically and summarize actionable findings.
+```
+
+By default, Dora discovers the `skills` directory beside the active
+`config.yaml`. On macOS with the default config path, that is
+`~/Library/Application Support/dora/skills`. No configuration is needed.
+
+Use `skills.directories` only to add more parent directories:
+
+```yaml
+skills:
+  directories:
+    - /absolute/path/to/additional-skills
+```
+
+Dora advertises only skill names and descriptions in the `skill` tool schema.
+The absolute skill directory and complete `SKILL.md` are returned when the
+model calls that tool, allowing instructions to reference files such as
+`scripts/check.sh`. The skill tool never executes those files; execution still
+requires an enabled tool such as Bash. Names must contain lowercase letters,
+numbers, and hyphens, and must match their directory name. Duplicate names are
+rejected. A missing or empty default directory simply leaves the tool disabled;
+malformed discovered skills and missing explicitly configured directories are
+errors.
+
 ### Bash tool
 
 The Bash tool is disabled by default. Enable it explicitly when the model
