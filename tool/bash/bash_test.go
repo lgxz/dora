@@ -25,6 +25,15 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 	}
 }
 
+func TestNewReportsUnavailableExecutable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := New(Config{})
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+}
+
 func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 	tool, err := New(Config{})
 	if err != nil {

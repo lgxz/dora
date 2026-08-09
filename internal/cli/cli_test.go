@@ -282,6 +282,44 @@ tools:
 	}
 }
 
+func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["tools"]; exists {
+			t.Fatalf("unexpected tools = %#v", body["tools"])
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"no bash needed"}}]}`), nil
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "no bash needed\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestRunLoadsSkillBesideConfig(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -373,6 +411,9 @@ model:
   provider: openai-compatible
   name: test-model
   base_url: https://example.test/v1
+tools:
+  bash:
+    enabled: false
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}

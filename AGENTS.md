@@ -44,8 +44,8 @@ Both packages translate their wire protocol to and from the types in the root
 
 ### Tools and skills
 
-- `tool/bash/`: optional Bash tool with working-directory, timeout, and output
-  limits.
+- `tool/bash/`: default-enabled Bash tool with working-directory, timeout, and
+  output limits; it stays unavailable when no Bash executable is found.
 - `skill/`: discovers and validates `SKILL.md` packages and exposes them through
   one on-demand `dora.Tool`.
 

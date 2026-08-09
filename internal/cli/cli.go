@@ -175,10 +175,16 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			WorkingDir: cfg.Tools.Bash.WorkingDir,
 			Timeout:    time.Duration(cfg.Tools.Bash.TimeoutSeconds) * time.Second,
 		})
+		if errors.Is(err, bashtool.ErrUnavailable) {
+			bash = nil
+			err = nil
+		}
 		if err != nil {
 			return err
 		}
-		tools = append(tools, bash)
+		if bash != nil {
+			tools = append(tools, bash)
+		}
 	}
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{

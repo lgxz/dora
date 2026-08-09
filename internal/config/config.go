@@ -36,7 +36,8 @@ type Tools struct {
 	Bash Bash `yaml:"bash,omitempty"`
 }
 
-// Bash configures the Bash command tool. It is disabled by default.
+// Bash configures the Bash command tool. Load defaults Enabled to true; YAML
+// can disable it explicitly.
 type Bash struct {
 	Enabled        bool   `yaml:"enabled"`
 	WorkingDir     string `yaml:"working_dir,omitempty"`
@@ -61,7 +62,7 @@ func Load(path string) (Config, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 
-	var cfg Config
+	cfg := Config{Tools: Tools{Bash: Bash{Enabled: true}}}
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}

@@ -198,19 +198,20 @@ above.
 
 ### Bash tool
 
-The Bash tool is disabled by default. Enable it explicitly when the model
-should be allowed to execute commands:
+The Bash tool is enabled by default when a `bash` executable is available. If
+Dora cannot find Bash, it starts without the tool. Disable it explicitly when
+the model should not be allowed to execute commands:
 
 ```yaml
 tools:
   bash:
-    enabled: true
+    enabled: false
     working_dir: /path/to/project
     timeout_seconds: 30
 ```
 
 The tool runs `bash -lc` in the configured directory. It returns exit code,
 stdout, stderr, timeout, and truncation information to the model as JSON.
-Output is limited to 1 MiB per stream. Enabling this tool grants the model the
-same filesystem and process permissions as the `dora` process, so only enable
-it in an environment you trust.
+Output is limited to 1 MiB per stream. This tool grants the model the same
+filesystem and process permissions as the `dora` process, so disable it unless
+you trust the environment in which Dora runs.

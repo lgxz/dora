@@ -7,6 +7,43 @@ import (
 	"testing"
 )
 
+func TestLoadEnablesBashByDefault(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Tools.Bash.Enabled {
+		t.Fatal("bash is disabled, want default enabled")
+	}
+}
+
+func TestLoadAllowsBashToBeDisabled(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+tools:
+  bash:
+    enabled: false
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Bash.Enabled {
+		t.Fatal("bash is enabled after explicit disable")
+	}
+}
+
 func TestLoadResolvesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("DORA_TEST_API_KEY", "secret")
 	path := writeConfig(t, `

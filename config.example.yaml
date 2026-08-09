@@ -15,6 +15,7 @@ agent:
 
 tools:
   bash:
-    enabled: false
+    # Bash is enabled by default. Uncomment to disable it.
+    # enabled: false
     working_dir: .
     timeout_seconds: 30

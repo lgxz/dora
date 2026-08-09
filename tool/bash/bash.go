@@ -21,6 +21,10 @@ const (
 	defaultMaxOutputBytes = 1 << 20
 )
 
+// ErrUnavailable indicates that Bash is not installed or cannot be found on
+// the executable search path.
+var ErrUnavailable = errors.New("bash: executable unavailable")
+
 // Config controls Bash command execution.
 type Config struct {
 	WorkingDir     string
@@ -41,7 +45,7 @@ type Tool struct {
 func New(cfg Config) (*Tool, error) {
 	binary, err := exec.LookPath("bash")
 	if err != nil {
-		return nil, fmt.Errorf("bash: find executable: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 
 	workingDir := cfg.WorkingDir
