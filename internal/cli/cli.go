@@ -14,6 +14,7 @@ import (
 
 	"dora"
 	"dora/internal/config"
+	"dora/internal/paths"
 	"dora/internal/progress"
 	"dora/internal/session"
 	"dora/model/openai"
@@ -40,11 +41,7 @@ type IO struct {
 func Run(ctx context.Context, args []string, streams IO) error {
 	flags := flag.NewFlagSet("dora", flag.ContinueOnError)
 	flags.SetOutput(streams.Stderr)
-	defaultConfig, err := config.DefaultPath()
-	if err != nil {
-		return err
-	}
-	configPath := flags.String("config", defaultConfig, "path to YAML configuration")
+	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
 	var quiet bool
@@ -64,6 +61,13 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return nil
 		}
 		return err
+	}
+	if *configPath == "" {
+		defaultConfig, err := paths.ConfigFile()
+		if err != nil {
+			return err
+		}
+		*configPath = defaultConfig
 	}
 	if *fresh && sessionName == "" {
 		return errors.New("--fresh requires --session or -s")
@@ -96,7 +100,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if sessionName != "" {
 		sessionDir := streams.SessionDir
 		if sessionDir == "" {
-			sessionDir, err = session.DefaultDir()
+			sessionDir, err = paths.SessionsDir()
 			if err != nil {
 				return err
 			}
@@ -225,11 +229,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 }
 
 func configuredSkillDirectories(configPath string, additional []string) ([]string, error) {
-	absoluteConfig, err := filepath.Abs(configPath)
+	defaultDirectory, err := paths.SkillsDir(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve config path for skills: %w", err)
+		return nil, err
 	}
-	defaultDirectory := filepath.Join(filepath.Dir(absoluteConfig), "skills")
 	info, err := os.Stat(defaultDirectory)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect default skill directory %q: %w", defaultDirectory, err)

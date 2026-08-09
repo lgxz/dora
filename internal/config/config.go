@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,15 +47,6 @@ type Bash struct {
 // are disabled when no directories are configured.
 type Skills struct {
 	Directories []string `yaml:"directories,omitempty"`
-}
-
-// DefaultPath returns the platform-specific default configuration path.
-func DefaultPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("find user config directory: %w", err)
-	}
-	return filepath.Join(dir, "dora", "config.yaml"), nil
 }
 
 // Load strictly decodes and validates a YAML configuration file. Environment

@@ -40,10 +40,9 @@ Build the command:
 go build -o dora ./cmd/dora
 ```
 
-Create the configuration file at the platform config directory:
-
-- macOS: `~/Library/Application Support/dora/config.yaml`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/dora/config.yaml`
+Create the configuration file at
+`${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
+on every operating system, including macOS.
 
 You can also place it anywhere and pass `--config path/to/config.yaml`.
 
@@ -112,12 +111,11 @@ session as a versioned JSON snapshot with `0600` permissions. Session v2 binds
 the configured provider, model, and base URL: Chat Completions resumes from
 messages, while Responses additionally persists its opaque typed-item
 continuation. Use `--fresh` before changing a session's backend. Version 1
-session files are not supported. On macOS the
-default directory is `~/Library/Application Support/dora/sessions`; on Linux it
-is `${XDG_STATE_HOME:-~/.local/state}/dora/sessions`. Omit `--session`/`-s` to
-keep the existing stateless behavior. Session files can contain commands and
-tool output, so treat them as sensitive. Do not run two Dora processes against
-the same session name concurrently.
+session files are not supported. The default directory is
+`${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions` on every operating
+system. Omit `--session`/`-s` to keep the existing stateless behavior. Session
+files can contain commands and tool output, so treat them as sensitive. Do not
+run two Dora processes against the same session name concurrently.
 
 Use `--config`, `--model`, or `--base-url` to override the corresponding
 configuration for one invocation.
@@ -146,8 +144,8 @@ Inspect the machine methodically and summarize actionable findings.
 ```
 
 By default, Dora discovers the `skills` directory beside the active
-`config.yaml`. On macOS with the default config path, that is
-`~/Library/Application Support/dora/skills`. No configuration is needed.
+`config.yaml`. With the default config path, that is
+`${XDG_CONFIG_HOME:-$HOME/.config}/dora/skills`. No configuration is needed.
 
 Use `skills.directories` only to add more parent directories:
 
@@ -166,6 +164,22 @@ numbers, and hyphens, and must match their directory name. Duplicate names are
 rejected. A missing or empty default directory simply leaves the tool disabled;
 malformed discovered skills and missing explicitly configured directories are
 errors.
+
+### Migrating macOS paths
+
+Dora does not automatically read or migrate the previous macOS directory.
+Move existing files manually before running the new version:
+
+```sh
+mkdir -p "$HOME/.config/dora" "$HOME/.local/state/dora"
+mv "$HOME/Library/Application Support/dora/config.yaml" "$HOME/.config/dora/config.yaml"
+mv "$HOME/Library/Application Support/dora/skills" "$HOME/.config/dora/skills"
+mv "$HOME/Library/Application Support/dora/sessions" "$HOME/.local/state/dora/sessions"
+```
+
+Skip any `mv` command whose source does not exist. If an XDG environment
+variable is set, use its directory instead of the fallback destination shown
+above.
 
 ### Bash tool
 

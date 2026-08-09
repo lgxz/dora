@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 
 	"dora"
 )
@@ -60,25 +59,6 @@ func New(dir string) (*Store, error) {
 		return nil, fmt.Errorf("resolve session directory: %w", err)
 	}
 	return &Store{dir: absolute}, nil
-}
-
-// DefaultDir returns the platform-specific directory for named sessions.
-func DefaultDir() (string, error) {
-	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
-		return filepath.Join(stateHome, "dora", "sessions"), nil
-	}
-	if runtime.GOOS == "linux" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("find home directory: %w", err)
-		}
-		return filepath.Join(home, ".local", "state", "dora", "sessions"), nil
-	}
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("find user state directory: %w", err)
-	}
-	return filepath.Join(configDir, "dora", "sessions"), nil
 }
 
 // Load reads a named session. A missing session returns an empty snapshot.
