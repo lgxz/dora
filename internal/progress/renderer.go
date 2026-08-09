@@ -43,6 +43,18 @@ func New(output io.Writer, color bool) *Renderer {
 	return &Renderer{output: output, color: color, tools: make(map[string]toolRun)}
 }
 
+// Session reports whether a named conversation is new or being continued.
+func (r *Renderer) Session(name string, resumed bool) {
+	if r == nil || r.output == nil {
+		return
+	}
+	action := "开始任务"
+	if resumed {
+		action = "继续任务"
+	}
+	fmt.Fprintf(r.output, "%s %s「%s」\n", r.paint(blue, "⌁"), action, name)
+}
+
 // Observe implements dora.Observer.
 func (r *Renderer) Observe(update dora.Update) {
 	if r == nil || r.output == nil {

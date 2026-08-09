@@ -75,6 +75,23 @@ answer remains on stdout. Use `--quiet` or `-q` when only the answer is wanted:
 Colors are enabled automatically when stderr is a terminal. Set `NO_COLOR=1`
 to keep progress visible without ANSI colors.
 
+### Sessions
+
+Use a session name to continue the same conversation across CLI invocations:
+
+```sh
+./dora -s system-status "Analyze this machine's system status"
+./dora -s system-status "Continue with the busiest processes"
+```
+
+Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
+session as a versioned JSON snapshot with `0600` permissions. On macOS the
+default directory is `~/Library/Application Support/dora/sessions`; on Linux it
+is `${XDG_STATE_HOME:-~/.local/state}/dora/sessions`. Omit `--session`/`-s` to
+keep the existing stateless behavior. Session files can contain commands and
+tool output, so treat them as sensitive. Do not run two Dora processes against
+the same session name concurrently.
+
 Use `--config`, `--model`, or `--base-url` to override the corresponding
 configuration for one invocation.
 

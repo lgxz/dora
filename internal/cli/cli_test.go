@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"dora/internal/session"
 )
 
 func TestRunCallsConfiguredModel(t *testing.T) {
@@ -180,6 +182,93 @@ model:
 	}
 	if stdout.String() != "quiet answer\n" || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunContinuesNamedSession(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		switch calls {
+		case 1:
+			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "first task" {
+				t.Fatalf("first messages = %#v", messages)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"first answer"}}]}`), nil
+		case 2:
+			if len(messages) != 3 ||
+				messages[0].(map[string]any)["content"] != "first task" ||
+				messages[1].(map[string]any)["content"] != "first answer" ||
+				messages[2].(map[string]any)["content"] != "continue task" {
+				t.Fatalf("continued messages = %#v", messages)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"second answer"}}]}`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	configContents := `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, "sessions")
+
+	var firstProgress bytes.Buffer
+	firstOutput := bytes.Buffer{}
+	if err := Run(context.Background(), []string{"-s", "system", "--config", configPath, "first task"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &firstOutput,
+		Stderr:          &firstProgress,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+		SessionDir:      sessionDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(firstProgress.String(), "开始任务「system」") {
+		t.Fatalf("first progress = %q", firstProgress.String())
+	}
+
+	var secondProgress bytes.Buffer
+	secondOutput := bytes.Buffer{}
+	if err := Run(context.Background(), []string{"--session", "system", "--config", configPath, "continue task"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &secondOutput,
+		Stderr:          &secondProgress,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+		SessionDir:      sessionDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if secondOutput.String() != "second answer\n" || !strings.Contains(secondProgress.String(), "继续任务「system」") {
+		t.Fatalf("second output = %q, progress = %q", secondOutput.String(), secondProgress.String())
+	}
+
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 2 || len(snapshot.Messages) != 4 {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 

@@ -100,6 +100,17 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestRendererShowsSessionState(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false)
+	renderer.Session("system-status", false)
+	renderer.Session("system-status", true)
+	if !strings.Contains(output.String(), "开始任务「system-status」") ||
+		!strings.Contains(output.String(), "继续任务「system-status」") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestToolSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 	call := dora.ToolCall{
 		Name:  "bash",

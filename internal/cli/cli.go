@@ -13,6 +13,7 @@ import (
 	"dora"
 	"dora/internal/config"
 	"dora/internal/progress"
+	"dora/internal/session"
 	"dora/model/openai"
 	bashtool "dora/tool/bash"
 )
@@ -27,6 +28,7 @@ type IO struct {
 	StdinIsTerminal bool
 	ColorProgress   bool
 	HTTPClient      *http.Client
+	SessionDir      string
 }
 
 // Run executes the dora command.
@@ -43,6 +45,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	var quiet bool
 	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
 	flags.BoolVar(&quiet, "q", false, "hide run progress (shorthand)")
+	var sessionName string
+	flags.StringVar(&sessionName, "session", "", "continue a named session")
+	flags.StringVar(&sessionName, "s", "", "continue a named session (shorthand)")
 	flags.Usage = func() {
 		fmt.Fprintf(streams.Stderr, "Usage: dora [options] <prompt>\n")
 		fmt.Fprintf(streams.Stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
@@ -72,6 +77,26 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		cfg.Model.BaseURL = *baseURL
 	}
 
+	var sessionStore *session.Store
+	var snapshot session.Snapshot
+	if sessionName != "" {
+		sessionDir := streams.SessionDir
+		if sessionDir == "" {
+			sessionDir, err = session.DefaultDir()
+			if err != nil {
+				return err
+			}
+		}
+		sessionStore, err = session.New(sessionDir)
+		if err != nil {
+			return err
+		}
+		snapshot, err = sessionStore.Load(sessionName)
+		if err != nil {
+			return err
+		}
+	}
+
 	model, err := openai.New(openai.Config{
 		BaseURL:    cfg.Model.BaseURL,
 		APIKey:     cfg.Model.APIKey,
@@ -97,18 +122,31 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	messages := []dora.Message{{Role: dora.RoleUser, Content: prompt}}
+	messages := append([]dora.Message(nil), snapshot.Messages...)
+	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
 	var result dora.Result
 	if quiet {
 		result, err = agent.Run(ctx, messages)
 	} else {
-		result, err = agent.RunObserved(ctx, messages, progress.New(streams.Stderr, streams.ColorProgress))
+		renderer := progress.New(streams.Stderr, streams.ColorProgress)
+		if sessionName != "" {
+			renderer.Session(sessionName, snapshot.Revision > 0)
+		}
+		result, err = agent.RunObserved(ctx, messages, renderer)
 	}
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(streams.Stdout, result.Content)
-	return err
+
+	var saveErr error
+	if sessionStore != nil {
+		saveErr = sessionStore.Save(sessionName, snapshot.Revision, result.Messages)
+	}
+	_, outputErr := fmt.Fprintln(streams.Stdout, result.Content)
+	if saveErr != nil {
+		return saveErr
+	}
+	return outputErr
 }
 
 func readPrompt(args []string, stdin io.Reader, stdinIsTerminal bool) (string, error) {
