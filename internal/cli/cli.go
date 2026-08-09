@@ -12,6 +12,7 @@ import (
 
 	"dora"
 	"dora/internal/config"
+	"dora/internal/progress"
 	"dora/model/openai"
 	bashtool "dora/tool/bash"
 )
@@ -24,6 +25,7 @@ type IO struct {
 	Stdout          io.Writer
 	Stderr          io.Writer
 	StdinIsTerminal bool
+	ColorProgress   bool
 	HTTPClient      *http.Client
 }
 
@@ -38,6 +40,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", defaultConfig, "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	var quiet bool
+	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
+	flags.BoolVar(&quiet, "q", false, "hide run progress (shorthand)")
 	flags.Usage = func() {
 		fmt.Fprintf(streams.Stderr, "Usage: dora [options] <prompt>\n")
 		fmt.Fprintf(streams.Stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
@@ -92,7 +97,13 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	result, err := agent.Run(ctx, []dora.Message{{Role: dora.RoleUser, Content: prompt}})
+	messages := []dora.Message{{Role: dora.RoleUser, Content: prompt}}
+	var result dora.Result
+	if quiet {
+		result, err = agent.Run(ctx, messages)
+	} else {
+		result, err = agent.RunObserved(ctx, messages, progress.New(streams.Stderr, streams.ColorProgress))
+	}
 	if err != nil {
 		return err
 	}

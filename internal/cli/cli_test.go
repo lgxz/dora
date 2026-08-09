@@ -54,6 +54,9 @@ model:
 	if stdout.String() != "hello from model\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
+	if !strings.Contains(stderr.String(), "让我想想办法") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -145,6 +148,38 @@ func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Usage: dora") {
 		t.Fatalf("help = %q", output.String())
+	}
+}
+
+func TestRunQuietHidesProgress(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"quiet answer"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configContents := `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          &stderr,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "quiet answer\n" || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }
 

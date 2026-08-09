@@ -57,6 +57,12 @@ func New(model Model, tools ...Tool) (*Agent, error) {
 // Run invokes the model until it returns a response without tool calls.
 // Messages supplied by the caller are copied and never modified.
 func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
+	return a.RunObserved(ctx, messages, nil)
+}
+
+// RunObserved is Run with synchronous progress notifications. The observer is
+// optional and cannot modify the Agent's conversation history.
+func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Observer) (Result, error) {
 	if a == nil || a.model == nil {
 		return Result{}, errors.New("dora: agent is not initialized")
 	}
@@ -67,6 +73,7 @@ func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
+		notify(observer, Update{Kind: UpdateThinking})
 
 		response, err := a.model.Generate(ctx, Request{
 			Messages: cloneMessages(history),
@@ -82,6 +89,7 @@ func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
 			ToolCalls: cloneToolCalls(response.ToolCalls),
 		}
 		history = append(history, assistant)
+		notify(observer, Update{Kind: UpdateMessageAdded, Message: assistant})
 
 		if len(response.ToolCalls) == 0 {
 			return Result{
@@ -91,25 +99,51 @@ func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
 		}
 
 		for _, call := range response.ToolCalls {
+			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call})
 			tool, ok := a.tools[call.Name]
 			if !ok {
-				return Result{}, fmt.Errorf("dora: tool %q not found", call.Name)
+				err := fmt.Errorf("dora: tool %q not found", call.Name)
+				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
+				return Result{}, err
 			}
 
 			output, err := tool.Execute(ctx, cloneBytes(call.Input))
 			if err != nil {
-				return Result{}, fmt.Errorf("dora: execute tool %q: %w", call.Name, err)
+				err = fmt.Errorf("dora: execute tool %q: %w", call.Name, err)
+				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
+				return Result{}, err
 			}
 
-			history = append(history, Message{
+			toolMessage := Message{
 				Role:       RoleTool,
 				Content:    output,
 				ToolCallID: call.ID,
-			})
+			}
+			history = append(history, toolMessage)
+			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
 		}
 	}
 
 	return Result{}, ErrMaxModelCalls
+}
+
+func notify(observer Observer, update Update) {
+	if observer == nil {
+		return
+	}
+	update.Message = cloneMessage(update.Message)
+	update.ToolCall = cloneToolCall(update.ToolCall)
+	observer.Observe(update)
+}
+
+func cloneMessage(message Message) Message {
+	message.ToolCalls = cloneToolCalls(message.ToolCalls)
+	return message
+}
+
+func cloneToolCall(call ToolCall) ToolCall {
+	call.Input = cloneBytes(call.Input)
+	return call
 }
 
 func cloneMessages(messages []Message) []Message {

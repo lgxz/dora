@@ -65,6 +65,16 @@ export OPENAI_API_KEY="..."
 git diff | ./dora "Review this change"
 ```
 
+Progress is shown on stderr with a small Dora personality, while the final
+answer remains on stdout. Use `--quiet` or `-q` when only the answer is wanted:
+
+```sh
+./dora --quiet "Explain this repository"
+```
+
+Colors are enabled automatically when stderr is a terminal. Set `NO_COLOR=1`
+to keep progress visible without ANSI colors.
+
 Use `--config`, `--model`, or `--base-url` to override the corresponding
 configuration for one invocation.
 
