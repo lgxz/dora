@@ -3,6 +3,9 @@
 `dora` is a tiny, modular LLM agent kernel for Go. Its core is one loop and
 two interfaces: `Model` and `Tool`.
 
+See [`docs/architecture.md`](docs/architecture.md) for module boundaries,
+dependencies, interfaces, and runtime flows.
+
 ```go
 model := newMyModel()
 weather := newWeatherTool()
