@@ -44,6 +44,77 @@ tools:
 	}
 }
 
+func TestLoadEnablesPowerShellByDefault(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Tools.PowerShell.Enabled {
+		t.Fatal("powershell is disabled, want default enabled")
+	}
+}
+
+func TestLoadAllowsPowerShellToBeDisabled(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+tools:
+  powershell:
+    enabled: false
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.PowerShell.Enabled {
+		t.Fatal("powershell is enabled after explicit disable")
+	}
+}
+
+func TestLoadRejectsRemovedToolWorkingDirectory(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+tools:
+  bash:
+    working_dir: /tmp
+`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "working_dir") {
+		t.Fatalf("error = %v, want unknown working_dir", err)
+	}
+}
+
+func TestLoadRejectsToolTimeoutAboveLimit(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+tools:
+  powershell:
+    timeout_seconds: 3601
+`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "cannot exceed 3600") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestLoadResolvesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("DORA_TEST_API_KEY", "secret")
 	path := writeConfig(t, `

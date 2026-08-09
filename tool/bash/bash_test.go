@@ -10,7 +10,7 @@ import (
 )
 
 func TestExecuteReturnsCommandOutput(t *testing.T) {
-	tool, err := New(Config{WorkingDir: t.TempDir()})
+	tool, err := New(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,14 @@ func TestNewReportsUnavailableExecutable(t *testing.T) {
 	_, err := New(Config{})
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+}
+
+func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
+	tool := &Tool{timeout: 45 * time.Second}
+	spec := tool.Spec()
+	if !json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "default of 45s") {
+		t.Fatalf("schema = %s", spec.InputSchema)
 	}
 }
 
@@ -63,6 +71,33 @@ func TestExecuteTimesOut(t *testing.T) {
 	result := decodeResult(t, output)
 	if !result.TimedOut || result.ExitCode != -1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestExecuteUsesPerCommandTimeout(t *testing.T) {
+	tool, err := New(Config{Timeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 0.1; printf done","timeout_seconds":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, output)
+	if result.TimedOut || result.Stdout != "done" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestDecodeInputRejectsInvalidTimeout(t *testing.T) {
+	for _, raw := range []string{
+		`{"command":"true","timeout_seconds":0}`,
+		`{"command":"true","timeout_seconds":3601}`,
+	} {
+		if _, err := decodeInput(json.RawMessage(raw)); err == nil {
+			t.Fatalf("decodeInput(%s) succeeded", raw)
+		}
 	}
 }
 

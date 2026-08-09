@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const maxToolTimeoutSeconds = 3600
+
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
 	Model  Model  `yaml:"model"`
@@ -33,15 +35,22 @@ type Model struct {
 
 // Tools configures optional capabilities exposed to the model.
 type Tools struct {
-	Bash Bash `yaml:"bash,omitempty"`
+	Bash       Bash       `yaml:"bash,omitempty"`
+	PowerShell PowerShell `yaml:"powershell,omitempty"`
 }
 
 // Bash configures the Bash command tool. Load defaults Enabled to true; YAML
 // can disable it explicitly.
 type Bash struct {
-	Enabled        bool   `yaml:"enabled"`
-	WorkingDir     string `yaml:"working_dir,omitempty"`
-	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty"`
+	Enabled        bool `yaml:"enabled"`
+	TimeoutSeconds int  `yaml:"timeout_seconds,omitempty"`
+}
+
+// PowerShell configures the PowerShell command tool. Load defaults Enabled to
+// true; YAML can disable it explicitly.
+type PowerShell struct {
+	Enabled        bool `yaml:"enabled"`
+	TimeoutSeconds int  `yaml:"timeout_seconds,omitempty"`
 }
 
 // Skills configures local directories containing SKILL.md packages. Skills
@@ -62,7 +71,10 @@ func Load(path string) (Config, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 
-	cfg := Config{Tools: Tools{Bash: Bash{Enabled: true}}}
+	cfg := Config{Tools: Tools{
+		Bash:       Bash{Enabled: true},
+		PowerShell: PowerShell{Enabled: true},
+	}}
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
@@ -106,6 +118,15 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Tools.Bash.TimeoutSeconds < 0 {
 		return errors.New("tools.bash.timeout_seconds cannot be negative")
+	}
+	if cfg.Tools.Bash.TimeoutSeconds > maxToolTimeoutSeconds {
+		return fmt.Errorf("tools.bash.timeout_seconds cannot exceed %d", maxToolTimeoutSeconds)
+	}
+	if cfg.Tools.PowerShell.TimeoutSeconds < 0 {
+		return errors.New("tools.powershell.timeout_seconds cannot be negative")
+	}
+	if cfg.Tools.PowerShell.TimeoutSeconds > maxToolTimeoutSeconds {
+		return fmt.Errorf("tools.powershell.timeout_seconds cannot exceed %d", maxToolTimeoutSeconds)
 	}
 	if cfg.Agent.MaxModelCalls < 0 {
 		return errors.New("agent.max_model_calls cannot be negative")

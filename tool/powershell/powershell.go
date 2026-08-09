@@ -1,5 +1,5 @@
-// Package bash implements a dora.Tool that executes Bash commands.
-package bash
+// Package powershell implements a dora.Tool that executes PowerShell commands.
+package powershell
 
 import (
 	"bytes"
@@ -21,44 +21,44 @@ const (
 	defaultMaxOutputBytes = 1 << 20
 )
 
-// ErrUnavailable indicates that Bash is not installed or cannot be found on
-// the executable search path.
-var ErrUnavailable = errors.New("bash: executable unavailable")
+// ErrUnavailable indicates that PowerShell is not installed or cannot be
+// found on the executable search path.
+var ErrUnavailable = errors.New("powershell: executable unavailable")
 
-// Config controls Bash command execution.
+// Config controls PowerShell command execution.
 type Config struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
 }
 
-// Tool executes commands using Bash.
+// Tool executes commands using PowerShell.
 type Tool struct {
 	binary         string
 	timeout        time.Duration
 	maxOutputBytes int
 }
 
-// New creates a Bash tool. Commands inherit the process's current directory.
-// Zero timeout and output limit values use safe defaults.
+// New creates a PowerShell tool. It prefers PowerShell Core (pwsh) and falls
+// back to Windows PowerShell. Commands inherit the process's current directory.
 func New(cfg Config) (*Tool, error) {
-	binary, err := exec.LookPath("bash")
+	binary, err := findExecutable()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return nil, err
 	}
 
 	timeout := cfg.Timeout
 	if timeout < 0 {
-		return nil, errors.New("bash: timeout cannot be negative")
+		return nil, errors.New("powershell: timeout cannot be negative")
 	}
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
 	if timeout > maxTimeout {
-		return nil, fmt.Errorf("bash: timeout cannot exceed %s", maxTimeout)
+		return nil, fmt.Errorf("powershell: timeout cannot exceed %s", maxTimeout)
 	}
 	maxOutputBytes := cfg.MaxOutputBytes
 	if maxOutputBytes < 0 {
-		return nil, errors.New("bash: maximum output bytes cannot be negative")
+		return nil, errors.New("powershell: maximum output bytes cannot be negative")
 	}
 	if maxOutputBytes == 0 {
 		maxOutputBytes = defaultMaxOutputBytes
@@ -71,6 +71,16 @@ func New(cfg Config) (*Tool, error) {
 	}, nil
 }
 
+func findExecutable() (string, error) {
+	for _, name := range []string{"pwsh", "powershell.exe"} {
+		binary, err := exec.LookPath(name)
+		if err == nil {
+			return binary, nil
+		}
+	}
+	return "", ErrUnavailable
+}
+
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
 	timeoutDescription := fmt.Sprintf(
@@ -78,8 +88,8 @@ func (t *Tool) Spec() dora.ToolSpec {
 		t.timeout,
 	)
 	return dora.ToolSpec{
-		Name:        "bash",
-		Description: "Execute a Bash command",
+		Name:        "powershell",
+		Description: "Execute a PowerShell command.",
 		InputSchema: json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
@@ -104,9 +114,8 @@ func (t *Tool) Spec() dora.ToolSpec {
 // output so the model can inspect stderr and decide how to proceed.
 func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	if t == nil {
-		return "", errors.New("bash: tool is not initialized")
+		return "", errors.New("powershell: tool is not initialized")
 	}
-
 	input, err := decodeInput(raw)
 	if err != nil {
 		return "", err
@@ -118,10 +127,10 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
 	stdout := newLimitedBuffer(t.maxOutputBytes)
 	stderr := newLimitedBuffer(t.maxOutputBytes)
-	command := exec.CommandContext(runCtx, t.binary, "-lc", input.Command)
+	args := commandArgs(input.Command)
+	command := exec.CommandContext(runCtx, t.binary, args...)
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.WaitDelay = time.Second
@@ -130,13 +139,11 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-
 	result := commandResult{
 		Stdout:    stdout.String(),
 		Stderr:    stderr.String(),
 		Truncated: stdout.Truncated() || stderr.Truncated(),
 	}
-
 	switch {
 	case runErr == nil:
 		result.ExitCode = 0
@@ -146,16 +153,20 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	default:
 		var exitError *exec.ExitError
 		if !errors.As(runErr, &exitError) {
-			return "", fmt.Errorf("bash: execute command: %w", runErr)
+			return "", fmt.Errorf("powershell: execute command: %w", runErr)
 		}
 		result.ExitCode = exitError.ExitCode()
 	}
 
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("bash: encode result: %w", err)
+		return "", fmt.Errorf("powershell: encode result: %w", err)
 	}
 	return string(encoded), nil
+}
+
+func commandArgs(command string) []string {
+	return []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command}
 }
 
 type input struct {
@@ -168,23 +179,23 @@ func decodeInput(raw json.RawMessage) (input, error) {
 	decoder.DisallowUnknownFields()
 	var value input
 	if err := decoder.Decode(&value); err != nil {
-		return input{}, fmt.Errorf("bash: decode input: %w", err)
+		return input{}, fmt.Errorf("powershell: decode input: %w", err)
 	}
 	if value.Command == "" {
-		return input{}, errors.New("bash: command is required")
+		return input{}, errors.New("powershell: command is required")
 	}
 	if value.TimeoutSeconds != nil && *value.TimeoutSeconds < 1 {
-		return input{}, errors.New("bash: timeout_seconds must be positive")
+		return input{}, errors.New("powershell: timeout_seconds must be positive")
 	}
 	if value.TimeoutSeconds != nil && *value.TimeoutSeconds > maxTimeoutSeconds {
-		return input{}, fmt.Errorf("bash: timeout_seconds cannot exceed %d", maxTimeoutSeconds)
+		return input{}, fmt.Errorf("powershell: timeout_seconds cannot exceed %d", maxTimeoutSeconds)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return input{}, errors.New("bash: input must contain one JSON value")
+			return input{}, errors.New("powershell: input must contain one JSON value")
 		}
-		return input{}, fmt.Errorf("bash: decode input: %w", err)
+		return input{}, fmt.Errorf("powershell: decode input: %w", err)
 	}
 	return value, nil
 }
@@ -221,3 +232,5 @@ func (b *limitedBuffer) Write(value []byte) (int, error) {
 func (b *limitedBuffer) String() string { return b.buffer.String() }
 
 func (b *limitedBuffer) Truncated() bool { return b.truncated }
+
+var _ dora.Tool = (*Tool)(nil)

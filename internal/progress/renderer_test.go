@@ -148,6 +148,16 @@ func TestToolSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 	}
 }
 
+func TestToolSummaryShowsPowerShellCommand(t *testing.T) {
+	summary := toolSummary(dora.ToolCall{
+		Name:  "powershell",
+		Input: json.RawMessage(`{"command":"Get-Process"}`),
+	})
+	if summary != "Get-Process" {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
 func TestToolSummaryShowsSkillName(t *testing.T) {
 	summary := toolSummary(dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)})
 	if summary != "system-status" {

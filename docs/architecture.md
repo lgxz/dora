@@ -27,11 +27,13 @@ flowchart TD
     CLI --> Responses["model/openairesponses<br/>Responses API"]
     CLI --> Skill["skill<br/>Skill 工具"]
     CLI --> Bash["tool/bash<br/>Bash 工具"]
+    CLI --> PowerShell["tool/powershell<br/>PowerShell 工具"]
 
     OpenAI -->|"Model"| Core
     Responses -->|"StreamingModel"| Core
     Skill -->|"Tool"| Core
     Bash -->|"Tool"| Core
+    PowerShell -->|"Tool"| Core
     Progress -->|"Observer"| Core
     Session -->|"Message / State"| Core
 ```
@@ -57,7 +59,8 @@ flowchart TD
 | `model/openai` | OpenAI-compatible Chat Completions 协议适配 | `New`、`Client.Generate` |
 | `model/openairesponses` | Responses API、SSE 流和 provider continuation 适配 | `New`、`Client.GenerateStream` |
 | `skill` | 发现并校验本地 `SKILL.md`，按需向模型返回完整指令 | `New`，返回 `dora.Tool` |
-| `tool/bash` | 在受配置约束的目录、超时和输出上限内执行 Bash | `New`、`Tool.Spec`、`Tool.Execute` |
+| `tool/bash` | 在当前目录及超时和输出上限约束内执行 Bash | `New`、`Tool.Spec`、`Tool.Execute` |
+| `tool/powershell` | 使用 `pwsh` 或 `powershell.exe` 执行 PowerShell | `New`、`Tool.Spec`、`Tool.Execute` |
 
 ## 核心接口
 
@@ -233,15 +236,22 @@ Skill 是一个工具，而不是启动时直接拼入 prompt 的文本。这样
 
 ## Bash 工具
 
-Bash 默认启用；如果系统找不到 `bash` 可执行文件，CLI 会跳过该工具而不阻止 Dora 启动。用户可以通过配置显式禁用。工具可用时，每次调用通过 `bash -lc` 在固定工作目录中执行，具备以下边界：
+Bash 默认启用；如果系统找不到 `bash` 可执行文件，CLI 会跳过该工具而不阻止 Dora 启动。用户可以通过配置显式禁用。工具可用时，每次调用通过 `bash -lc` 在 Dora 当前目录中执行；模型需要切换目录时在命令内使用 `cd`。工具具备以下边界：
 
 - 默认超时 30 秒；
+- 每次工具调用可用 `timeout_seconds` 覆盖配置默认值，范围为 1 至 3600 秒；
 - stdout 和 stderr 各自受输出上限约束；
 - context 取消会终止子进程；
 - 结果以 JSON 返回退出码、stdout、stderr、超时和截断状态；
 - 命令非零退出属于模型可处理的工具结果，启动失败等基础设施错误才作为 Go error 返回。
 
 Bash 不是安全沙箱。启用它等于允许模型以 Dora 进程的系统权限执行命令。
+
+## PowerShell 工具
+
+PowerShell 是与 Bash 分离的 `powershell` 工具，输入 Schema 同样只接受 `command`，避免模型把两种 shell 的语法混在一次调用中。它默认启用并依次寻找 `pwsh`、`powershell.exe`；两者都不存在时，CLI 跳过该工具。若 Bash 与 PowerShell 都存在，两个工具会同时暴露。
+
+PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前目录执行命令，切换目录时由模型在命令内使用 `Set-Location`。它与 Bash 使用相同的 30 秒配置默认超时、1 至 3600 秒的单次调用覆盖范围、输出限制和结构化结果，同样不是安全沙箱。
 
 ## 配置与路径
 

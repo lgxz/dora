@@ -179,7 +179,7 @@ func toolSummary(call dora.ToolCall) string {
 			return input.Name
 		}
 	}
-	if call.Name == "bash" {
+	if call.Name == "bash" || call.Name == "powershell" {
 		var input struct {
 			Command string `json:"command"`
 		}

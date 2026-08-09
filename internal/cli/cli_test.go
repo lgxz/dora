@@ -252,7 +252,7 @@ func TestRunExecutesEnabledBashTool(t *testing.T) {
 	})}
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	configContents := fmt.Sprintf(`
+	configContents := `
 model:
   provider: openai-compatible
   name: test-model
@@ -260,8 +260,7 @@ model:
 tools:
   bash:
     enabled: true
-    working_dir: %s
-`, t.TempDir())
+`
 	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +316,54 @@ model:
 	}
 	if stdout.String() != "no bash needed\n" {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"bash", "pwsh", "pwsh.exe"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("placeholder"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		tools := body["tools"].([]any)
+		if len(tools) != 2 {
+			t.Fatalf("tools = %#v", tools)
+		}
+		var names []string
+		for _, raw := range tools {
+			function := raw.(map[string]any)["function"].(map[string]any)
+			names = append(names, function["name"].(string))
+		}
+		if strings.Join(names, ",") != "bash,powershell" {
+			t.Fatalf("tool names = %#v", names)
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -413,6 +460,8 @@ model:
   base_url: https://example.test/v1
 tools:
   bash:
+    enabled: false
+  powershell:
     enabled: false
 `), 0o600); err != nil {
 		t.Fatal(err)

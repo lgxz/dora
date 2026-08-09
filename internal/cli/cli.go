@@ -21,6 +21,7 @@ import (
 	"dora/model/openairesponses"
 	"dora/skill"
 	bashtool "dora/tool/bash"
+	powershelltool "dora/tool/powershell"
 )
 
 const maxStdinBytes = 16 << 20
@@ -172,8 +173,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if cfg.Tools.Bash.Enabled {
 		bash, err := bashtool.New(bashtool.Config{
-			WorkingDir: cfg.Tools.Bash.WorkingDir,
-			Timeout:    time.Duration(cfg.Tools.Bash.TimeoutSeconds) * time.Second,
+			Timeout: time.Duration(cfg.Tools.Bash.TimeoutSeconds) * time.Second,
 		})
 		if errors.Is(err, bashtool.ErrUnavailable) {
 			bash = nil
@@ -184,6 +184,21 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		if bash != nil {
 			tools = append(tools, bash)
+		}
+	}
+	if cfg.Tools.PowerShell.Enabled {
+		powershell, err := powershelltool.New(powershelltool.Config{
+			Timeout: time.Duration(cfg.Tools.PowerShell.TimeoutSeconds) * time.Second,
+		})
+		if errors.Is(err, powershelltool.ErrUnavailable) {
+			powershell = nil
+			err = nil
+		}
+		if err != nil {
+			return err
+		}
+		if powershell != nil {
+			tools = append(tools, powershell)
 		}
 	}
 

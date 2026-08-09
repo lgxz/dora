@@ -17,5 +17,8 @@ tools:
   bash:
     # Bash is enabled by default. Uncomment to disable it.
     # enabled: false
-    working_dir: .
+    timeout_seconds: 30
+  powershell:
+    # PowerShell is enabled by default. Uncomment to disable it.
+    # enabled: false
     timeout_seconds: 30

@@ -196,7 +196,7 @@ Skip any `mv` command whose source does not exist. If an XDG environment
 variable is set, use its directory instead of the fallback destination shown
 above.
 
-### Bash tool
+### Command tools
 
 The Bash tool is enabled by default when a `bash` executable is available. If
 Dora cannot find Bash, it starts without the tool. Disable it explicitly when
@@ -206,12 +206,40 @@ the model should not be allowed to execute commands:
 tools:
   bash:
     enabled: false
-    working_dir: /path/to/project
     timeout_seconds: 30
 ```
 
-The tool runs `bash -lc` in the configured directory. It returns exit code,
+The tool runs `bash -lc` in Dora's current directory. The model can use `cd`
+inside a command when it needs another directory. The tool returns exit code,
 stdout, stderr, timeout, and truncation information to the model as JSON.
 Output is limited to 1 MiB per stream. This tool grants the model the same
 filesystem and process permissions as the `dora` process, so disable it unless
 you trust the environment in which Dora runs.
+
+The independent `powershell` tool follows the same defaults. Dora prefers
+PowerShell Core (`pwsh`) and falls back to Windows PowerShell
+(`powershell.exe`). If Bash and PowerShell are both installed, both tools are
+available to the model, so their command syntaxes remain distinct.
+
+```yaml
+tools:
+  powershell:
+    enabled: false
+    timeout_seconds: 30
+```
+
+PowerShell also starts in Dora's current directory and can use `Set-Location`
+inside a command when needed.
+
+Both command tools accept an optional per-command timeout. It overrides the
+configured default for that call and cannot exceed 3600 seconds:
+
+```json
+{
+  "command": "go build ./...",
+  "timeout_seconds": 300
+}
+```
+
+When omitted, `timeout_seconds` comes from the corresponding YAML tool setting,
+or defaults to 30 seconds when that setting is zero or absent.

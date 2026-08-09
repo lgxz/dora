@@ -44,8 +44,10 @@ Both packages translate their wire protocol to and from the types in the root
 
 ### Tools and skills
 
-- `tool/bash/`: default-enabled Bash tool with working-directory, timeout, and
-  output limits; it stays unavailable when no Bash executable is found.
+- `tool/bash/`: default-enabled Bash tool with timeout and output limits; it
+  stays unavailable when no Bash executable is found.
+- `tool/powershell/`: independent PowerShell tool; it prefers `pwsh`, falls
+  back to `powershell.exe`, and stays unavailable when neither exists.
 - `skill/`: discovers and validates `SKILL.md` packages and exposes them through
   one on-demand `dora.Tool`.
 
