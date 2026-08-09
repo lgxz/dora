@@ -56,7 +56,7 @@ model:
 	if stdout.String() != "hello from model\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "让我想想办法") {
+	if !strings.Contains(stderr.String(), "dora: thinking") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

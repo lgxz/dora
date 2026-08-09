@@ -11,7 +11,7 @@ import (
 
 func TestRendererShowsDoraProgress(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false)
+	renderer := New(&output, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	call := dora.ToolCall{
 		ID:    "call-1",
@@ -37,11 +37,9 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 
 	for _, want := range []string{
-		"让我想想办法",
+		"dora: thinking",
 		"我先看看当前目录",
-		"准备使用 bash",
 		"bash · pwd ·",
-		"我再整理一下",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
@@ -51,7 +49,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 
 func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false)
+	renderer := New(&output, false, false)
 	calls := []dora.ToolCall{
 		{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"uptime"}`)},
 		{ID: "call-2", Name: "bash", Input: json.RawMessage(`{"command":"df -h"}`)},
@@ -74,27 +72,29 @@ func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 
 	for _, want := range []string{
 		"我会检查负载和磁盘",
-		"准备了 2 次道具调用",
-		"1. bash",
+		"bash · uptime",
 		"uptime",
-		"2. bash",
+		"bash · df -h",
 		"df -h",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
 		}
 	}
+	if strings.Contains(output.String(), "道具调用") {
+		t.Fatalf("output contains redundant batch heading: %q", output.String())
+	}
 }
 
 func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 	var colored bytes.Buffer
-	New(&colored, true).Observe(dora.Update{Kind: dora.UpdateThinking})
+	New(&colored, true, true).Observe(dora.Update{Kind: dora.UpdateThinking})
 	if !strings.Contains(colored.String(), "\x1b[") {
 		t.Fatalf("colored output = %q", colored.String())
 	}
 
 	var plain bytes.Buffer
-	New(&plain, false).Observe(dora.Update{Kind: dora.UpdateThinking})
+	New(&plain, true, false).Observe(dora.Update{Kind: dora.UpdateThinking})
 	if strings.Contains(plain.String(), "\x1b[") {
 		t.Fatalf("plain output = %q", plain.String())
 	}
@@ -102,11 +102,29 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 
 func TestRendererShowsSessionState(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false)
+	renderer := New(&output, false, false)
 	renderer.Session("system-status", false)
 	renderer.Session("system-status", true)
 	if !strings.Contains(output.String(), "开始任务「system-status」") ||
 		!strings.Contains(output.String(), "继续任务「system-status」") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我先检查系统状态。",
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+		},
+	})
+	if !strings.Contains(output.String(), "\x1b[1A\r\x1b[2K") ||
+		!strings.Contains(output.String(), "● 我先检查系统状态。") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

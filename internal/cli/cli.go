@@ -22,13 +22,14 @@ const maxStdinBytes = 16 << 20
 
 // IO contains the command's input and output streams.
 type IO struct {
-	Stdin           io.Reader
-	Stdout          io.Writer
-	Stderr          io.Writer
-	StdinIsTerminal bool
-	ColorProgress   bool
-	HTTPClient      *http.Client
-	SessionDir      string
+	Stdin            io.Reader
+	Stdout           io.Writer
+	Stderr           io.Writer
+	StdinIsTerminal  bool
+	TerminalProgress bool
+	ColorProgress    bool
+	HTTPClient       *http.Client
+	SessionDir       string
 }
 
 // Run executes the dora command.
@@ -128,7 +129,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if quiet {
 		result, err = agent.Run(ctx, messages)
 	} else {
-		renderer := progress.New(streams.Stderr, streams.ColorProgress)
+		renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
 		if sessionName != "" {
 			renderer.Session(sessionName, snapshot.Revision > 0)
 		}

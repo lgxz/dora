@@ -25,22 +25,22 @@ const (
 
 // Renderer gives semantic Agent updates a concise Dora personality.
 type Renderer struct {
-	output        io.Writer
-	color         bool
-	thinkingCount int
-	tools         map[string]toolRun
+	output   io.Writer
+	color    bool
+	terminal bool
+	waiting  bool
+	tools    map[string]toolRun
 }
 
 type toolRun struct {
 	call    dora.ToolCall
 	started time.Time
-	index   int
-	total   int
 }
 
-// New creates a progress Renderer. Color should only be enabled for a terminal.
-func New(output io.Writer, color bool) *Renderer {
-	return &Renderer{output: output, color: color, tools: make(map[string]toolRun)}
+// New creates a progress Renderer. Terminal enables in-place status updates;
+// color controls ANSI styling independently so NO_COLOR can be respected.
+func New(output io.Writer, terminal, color bool) *Renderer {
+	return &Renderer{output: output, terminal: terminal, color: color, tools: make(map[string]toolRun)}
 }
 
 // Session reports whether a named conversation is new or being continued.
@@ -79,56 +79,48 @@ func (r *Renderer) Observe(update dora.Update) {
 }
 
 func (r *Renderer) renderThinking() {
-	if r.thinkingCount > 0 {
-		fmt.Fprintln(r.output)
+	if r.terminal {
+		fmt.Fprintf(r.output, "%s 正在想办法…\n", r.paint(blue, "●"))
+	} else {
+		fmt.Fprintln(r.output, "dora: thinking...")
 	}
-	phrase := "让我想想办法…"
-	if r.thinkingCount > 0 {
-		phrase = "我再整理一下…"
-	}
-	fmt.Fprintf(r.output, "%s  %s\n", r.paint(blue, "● dora"), phrase)
-	r.thinkingCount++
+	r.waiting = true
 }
 
 func (r *Renderer) renderAssistantMessage(message dora.Message) {
+	r.replaceThinking(message)
 	if len(message.ToolCalls) == 0 {
 		return
 	}
-	if message.Content != "" {
-		for _, line := range strings.Split(message.Content, "\n") {
-			fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "│"), line)
-		}
-	}
 
-	if len(message.ToolCalls) == 1 {
-		fmt.Fprintf(
-			r.output,
-			"%s 准备使用 %s\n",
-			r.paint(yellow, "╭"),
-			r.paint(yellow, message.ToolCalls[0].Name),
-		)
-	} else {
-		fmt.Fprintf(
-			r.output,
-			"%s 这次准备了 %d 次道具调用\n",
-			r.paint(yellow, "╭"),
-			len(message.ToolCalls),
-		)
-	}
-
-	for index, call := range message.ToolCalls {
+	for _, call := range message.ToolCalls {
 		r.tools[call.ID] = toolRun{
-			call:  call,
-			index: index + 1,
-			total: len(message.ToolCalls),
+			call: call,
 		}
+	}
+}
+
+func (r *Renderer) replaceThinking(message dora.Message) {
+	if r.waiting {
+		r.waiting = false
+		if r.terminal {
+			fmt.Fprint(r.output, "\x1b[1A\r\x1b[2K")
+		}
+	}
+	if message.Content == "" || len(message.ToolCalls) == 0 {
+		return
+	}
+	lines := strings.Split(message.Content, "\n")
+	fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "●"), lines[0])
+	for _, line := range lines[1:] {
+		fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "│"), line)
 	}
 }
 
 func (r *Renderer) startTool(call dora.ToolCall) {
 	run, ok := r.tools[call.ID]
 	if !ok {
-		run = toolRun{call: call, index: 1, total: 1}
+		run = toolRun{call: call}
 	}
 	run.call = call
 	run.started = time.Now()
@@ -149,24 +141,21 @@ func (r *Renderer) renderToolFailure(call dora.ToolCall) {
 	run, ok := r.tools[call.ID]
 	delete(r.tools, call.ID)
 	if !ok {
-		run = toolRun{call: call, index: 1, total: 1}
+		run = toolRun{call: call}
 	}
 	r.renderToolLine(run, red, "遇到了一点状况")
 }
 
 func (r *Renderer) renderToolLine(run toolRun, statusColor, status string) {
-	branch := "╰"
 	label := run.call.Name
-	if run.total > 1 {
-		if run.index < run.total {
-			branch = "├"
-		}
-		label = fmt.Sprintf("%d. %s", run.index, run.call.Name)
+	marker := "•"
+	if statusColor == red {
+		marker = "△"
 	}
 	fmt.Fprintf(
 		r.output,
 		"%s %s %s %s\n",
-		r.paint(statusColor, branch),
+		r.paint(statusColor, marker),
 		r.paint(yellow, label),
 		r.paint(dim, "· "+toolSummary(run.call)),
 		r.paint(statusColor, "· "+status),

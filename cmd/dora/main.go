@@ -25,10 +25,11 @@ func main() {
 	}
 
 	err = cli.Run(ctx, os.Args[1:], cli.IO{
-		Stdin:           os.Stdin,
-		Stdout:          os.Stdout,
-		Stderr:          os.Stderr,
-		StdinIsTerminal: info.Mode()&os.ModeCharDevice != 0,
+		Stdin:            os.Stdin,
+		Stdout:           os.Stdout,
+		Stderr:           os.Stderr,
+		StdinIsTerminal:  info.Mode()&os.ModeCharDevice != 0,
+		TerminalProgress: stderrInfo.Mode()&os.ModeCharDevice != 0,
 		ColorProgress: stderrInfo.Mode()&os.ModeCharDevice != 0 &&
 			os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
 	})
