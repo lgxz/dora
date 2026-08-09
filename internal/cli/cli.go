@@ -50,6 +50,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	var sessionName string
 	flags.StringVar(&sessionName, "session", "", "continue a named session")
 	flags.StringVar(&sessionName, "s", "", "continue a named session (shorthand)")
+	fresh := flags.Bool("fresh", false, "start fresh and replace the named session on success")
 	flags.Usage = func() {
 		fmt.Fprintf(streams.Stderr, "Usage: dora [options] <prompt>\n")
 		fmt.Fprintf(streams.Stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
@@ -60,6 +61,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return nil
 		}
 		return err
+	}
+	if *fresh && sessionName == "" {
+		return errors.New("--fresh requires --session or -s")
 	}
 
 	prompt, err := readPrompt(flags.Args(), streams.Stdin, streams.StdinIsTerminal)
@@ -135,7 +139,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	messages := append([]dora.Message(nil), snapshot.Messages...)
+	var messages []dora.Message
+	if !*fresh {
+		messages = append(messages, snapshot.Messages...)
+	}
 	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
 	var result dora.Result
 	if quiet {
@@ -143,7 +150,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	} else {
 		renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
 		if sessionName != "" {
-			renderer.Session(sessionName, snapshot.Revision > 0)
+			if *fresh && snapshot.Revision > 0 {
+				renderer.FreshSession(sessionName)
+			} else {
+				renderer.Session(sessionName, snapshot.Revision > 0)
+			}
 		}
 		result, err = agent.RunObserved(ctx, messages, renderer)
 	}

@@ -111,6 +111,14 @@ func TestRendererShowsSessionState(t *testing.T) {
 	}
 }
 
+func TestRendererShowsFreshSession(t *testing.T) {
+	var output bytes.Buffer
+	New(&output, false, false).FreshSession("system-status")
+	if !strings.Contains(output.String(), "重新开始任务「system-status」") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, true, false)

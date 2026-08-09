@@ -91,6 +91,14 @@ Use a session name to continue the same conversation across CLI invocations:
 ./dora -s system-status "Continue with the busiest processes"
 ```
 
+Start over under the same session name with `--fresh`. Existing history is
+ignored for this run and replaced only after the new task succeeds; if the run
+fails, the previous session remains intact:
+
+```sh
+./dora -s system-status --fresh "Analyze this machine from scratch"
+```
+
 Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
 session as a versioned JSON snapshot with `0600` permissions. On macOS the
 default directory is `~/Library/Application Support/dora/sessions`; on Linux it

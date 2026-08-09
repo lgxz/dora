@@ -320,6 +320,108 @@ model:
 	}
 }
 
+func TestRunFreshReplacesSessionOnlyOnSuccess(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		switch calls {
+		case 1:
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"old answer"}}]}`), nil
+		case 2:
+			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "fresh task" {
+				t.Fatalf("fresh messages = %#v", messages)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"fresh answer"}}]}`), nil
+		case 3:
+			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "failing task" {
+				t.Fatalf("failing messages = %#v", messages)
+			}
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, "sessions")
+	run := func(args ...string) (string, error) {
+		var progress bytes.Buffer
+		err := Run(context.Background(), append([]string{"--config", configPath}, args...), IO{
+			Stdin:           strings.NewReader(""),
+			Stdout:          io.Discard,
+			Stderr:          &progress,
+			StdinIsTerminal: true,
+			HTTPClient:      httpClient,
+			SessionDir:      sessionDir,
+		})
+		return progress.String(), err
+	}
+	if _, err := run("-s", "replaceable", "old task"); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := run("-s", "replaceable", "--fresh", "fresh task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(progress, "重新开始任务「replaceable」") {
+		t.Fatalf("progress = %q", progress)
+	}
+
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshSnapshot, err := store.Load("replaceable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshSnapshot.Revision != 2 || len(freshSnapshot.Messages) != 2 || freshSnapshot.Messages[0].Content != "fresh task" {
+		t.Fatalf("fresh snapshot = %#v", freshSnapshot)
+	}
+
+	if _, err := run("-s", "replaceable", "--fresh", "failing task"); err == nil {
+		t.Fatal("expected model error")
+	}
+	afterFailure, err := store.Load("replaceable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.Revision != freshSnapshot.Revision || len(afterFailure.Messages) != 2 || afterFailure.Messages[0].Content != "fresh task" {
+		t.Fatalf("session changed after failure: %#v", afterFailure)
+	}
+}
+
+func TestRunFreshRequiresNamedSession(t *testing.T) {
+	err := Run(context.Background(), []string{"--fresh", "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires --session") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func fakeJSONResponse(body string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
