@@ -72,12 +72,12 @@ Run the focused package test while editing, then run the full validation before
 hand-off:
 
 ```sh
-go test ./...
-go vet ./...
-go test -race ./...
-go build -o /tmp/dora ./cmd/dora
-git diff --check
+make check
+make release
 ```
+
+`make check` runs `go test ./...`, `go vet ./...`, `go test -race ./...`, and
+`git diff --check`. `make release` verifies the stripped production build.
 
 If package boundaries, interfaces, runtime flow, persistence, or paths change,
 check whether `docs/architecture.md`, `README.md`, or `config.example.yaml` also

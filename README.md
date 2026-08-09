@@ -37,11 +37,23 @@ built-in memory, policy engine, middleware, or provider SDK.
 
 ## CLI
 
-Build the command:
+Build the command with debug information:
 
 ```sh
-go build -o dora ./cmd/dora
+make build
 ```
+
+The binary is written to `build/dora` (`build/dora.exe` on Windows). For a
+smaller distribution binary without symbol and DWARF debug data, use:
+
+```sh
+make release
+```
+
+The release target is equivalent to
+`go build -trimpath -ldflags="-s -w" -o build/dora ./cmd/dora`. On Windows the
+same Go command can be run directly with `build/dora.exe` as the output path
+when `make` is unavailable.
 
 Create the configuration file at
 `${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
