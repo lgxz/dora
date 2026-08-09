@@ -61,6 +61,54 @@ model:
 	}
 }
 
+func TestRunCallsResponsesProvider(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/v1/responses" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true || body["store"] != false {
+			t.Fatalf("body = %#v", body)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello from responses\"}]}]}}\n\n",
+			)),
+			Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		}, nil
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configContents := `
+model:
+  provider: openai-responses
+  name: test-model
+  base_url: https://example.test/v1
+`
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "hello from responses\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

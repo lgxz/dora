@@ -27,8 +27,10 @@ continue a conversation.
 
 ## Scope
 
-The first version deliberately has no streaming events, built-in memory,
-policies, middleware, provider SDKs, or parallel tool execution.
+The kernel supports optional model streaming events while keeping its baseline
+`Model` interface synchronous. Tool calls are deliberately executed only after
+the current model response completes, and are still sequential. There is no
+built-in memory, policy engine, middleware, or provider SDK.
 
 ## CLI
 
@@ -47,11 +49,16 @@ You can also place it anywhere and pass `--config path/to/config.yaml`.
 
 ```yaml
 model:
-  provider: openai-compatible
+  provider: openai-responses
   name: gpt-5
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
 ```
+
+Use `openai-responses` for OpenAI's Responses API with SSE streaming. The
+existing `openai-compatible` provider continues to use Chat Completions for
+compatible third-party and local endpoints. Responses tool loops replay typed
+output items locally and do not depend on server-side response storage.
 
 Literal `api_key` is also supported, but an environment variable keeps secrets
 out of the configuration file. The two options are mutually exclusive. API

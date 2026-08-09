@@ -68,6 +68,7 @@ func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Ob
 	}
 
 	history := cloneMessages(messages)
+	var continuation string
 
 	for range maxModelCalls {
 		if err := ctx.Err(); err != nil {
@@ -75,13 +76,26 @@ func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Ob
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
-		response, err := a.model.Generate(ctx, Request{
-			Messages: cloneMessages(history),
-			Tools:    cloneToolSpecs(a.specs),
-		})
+		request := Request{
+			Messages:     cloneMessages(history),
+			Tools:        cloneToolSpecs(a.specs),
+			Continuation: continuation,
+		}
+		var response Response
+		var err error
+		if streaming, ok := a.model.(StreamingModel); ok {
+			response, err = streaming.GenerateStream(ctx, request, func(event ModelEvent) {
+				if event.Kind == ModelEventContentDelta {
+					notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
+				}
+			})
+		} else {
+			response, err = a.model.Generate(ctx, request)
+		}
 		if err != nil {
 			return Result{}, fmt.Errorf("dora: generate response: %w", err)
 		}
+		continuation = response.Continuation
 
 		assistant := Message{
 			Role:      RoleAssistant,

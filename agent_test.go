@@ -14,6 +14,16 @@ func (f modelFunc) Generate(ctx context.Context, request Request) (Response, err
 	return f(ctx, request)
 }
 
+type streamingModelFunc func(context.Context, Request, func(ModelEvent)) (Response, error)
+
+func (f streamingModelFunc) Generate(context.Context, Request) (Response, error) {
+	panic("Generate must not be called for a StreamingModel")
+}
+
+func (f streamingModelFunc) GenerateStream(ctx context.Context, request Request, emit func(ModelEvent)) (Response, error) {
+	return f(ctx, request, emit)
+}
+
 type stubTool struct {
 	spec    ToolSpec
 	execute func(context.Context, json.RawMessage) (string, error)
@@ -111,6 +121,62 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("model calls = %d, want 2", calls)
+	}
+}
+
+func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
+	var calls int
+	streamReturned := false
+	toolExecuted := false
+	model := streamingModelFunc(func(_ context.Context, request Request, emit func(ModelEvent)) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "checking"})
+			emit(ModelEvent{Kind: ModelEventToolCallReady, ToolCall: ToolCall{ID: "call-1", Name: "weather"}})
+			if toolExecuted {
+				t.Fatal("tool executed before the streamed response completed")
+			}
+			streamReturned = true
+			return Response{
+				ToolCalls:    []ToolCall{{ID: "call-1", Name: "weather", Input: json.RawMessage(`{}`)}},
+				Continuation: "resp-1",
+			}, nil
+		case 2:
+			if request.Continuation != "resp-1" {
+				t.Fatalf("continuation = %q", request.Continuation)
+			}
+			return Response{Content: "sunny", Continuation: "resp-2"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "weather"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			if !streamReturned {
+				t.Fatal("tool executed while the model stream was active")
+			}
+			toolExecuted = true
+			return "sunny", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas string
+	result, err := agent.RunObserved(context.Background(), []Message{{Role: RoleUser, Content: "weather?"}}, ObserverFunc(func(update Update) {
+		if update.Kind == UpdateContentDelta {
+			deltas += update.Delta
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "sunny" || deltas != "checking" || !toolExecuted {
+		t.Fatalf("result = %#v, deltas = %q, toolExecuted = %v", result, deltas, toolExecuted)
 	}
 }
 

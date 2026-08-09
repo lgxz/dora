@@ -5,6 +5,7 @@ type UpdateKind string
 
 const (
 	UpdateThinking     UpdateKind = "thinking"
+	UpdateContentDelta UpdateKind = "content_delta"
 	UpdateMessageAdded UpdateKind = "message_added"
 	UpdateToolStarted  UpdateKind = "tool_started"
 	UpdateToolFailed   UpdateKind = "tool_failed"
@@ -14,6 +15,7 @@ const (
 // UpdateMessageAdded. ToolCall is populated for tool updates.
 type Update struct {
 	Kind     UpdateKind
+	Delta    string
 	Message  Message
 	ToolCall ToolCall
 	Err      error

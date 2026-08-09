@@ -26,6 +26,23 @@ model:
 	}
 }
 
+func TestLoadAcceptsOpenAIResponsesProvider(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-responses
+  name: gpt-5
+  base_url: https://api.openai.com/v1
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "openai-responses" {
+		t.Fatalf("provider = %q", cfg.Model.Provider)
+	}
+}
+
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `
 model:

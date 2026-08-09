@@ -15,6 +15,7 @@ import (
 	"dora/internal/progress"
 	"dora/internal/session"
 	"dora/model/openai"
+	"dora/model/openairesponses"
 	bashtool "dora/tool/bash"
 )
 
@@ -98,12 +99,23 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 
-	model, err := openai.New(openai.Config{
-		BaseURL:    cfg.Model.BaseURL,
-		APIKey:     cfg.Model.APIKey,
-		Model:      cfg.Model.Name,
-		HTTPClient: streams.HTTPClient,
-	})
+	var model dora.Model
+	switch cfg.Model.Provider {
+	case "openai-compatible":
+		model, err = openai.New(openai.Config{
+			BaseURL:    cfg.Model.BaseURL,
+			APIKey:     cfg.Model.APIKey,
+			Model:      cfg.Model.Name,
+			HTTPClient: streams.HTTPClient,
+		})
+	case "openai-responses":
+		model, err = openairesponses.New(openairesponses.Config{
+			BaseURL:    cfg.Model.BaseURL,
+			APIKey:     cfg.Model.APIKey,
+			Model:      cfg.Model.Name,
+			HTTPClient: streams.HTTPClient,
+		})
+	}
 	if err != nil {
 		return err
 	}

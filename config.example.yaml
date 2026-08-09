@@ -1,5 +1,5 @@
 model:
-  provider: openai-compatible
+  provider: openai-responses
   name: gpt-5
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY

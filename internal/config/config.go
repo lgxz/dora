@@ -16,7 +16,7 @@ type Config struct {
 	Tools Tools `yaml:"tools,omitempty"`
 }
 
-// Model describes one OpenAI-compatible model endpoint.
+// Model describes one configured model endpoint.
 type Model struct {
 	Provider  string `yaml:"provider"`
 	Name      string `yaml:"name"`
@@ -79,8 +79,10 @@ func Load(path string) (Config, error) {
 
 func (cfg *Config) resolveAndValidate() error {
 	model := &cfg.Model
-	if model.Provider != "openai-compatible" {
-		return fmt.Errorf("model.provider must be %q", "openai-compatible")
+	switch model.Provider {
+	case "openai-compatible", "openai-responses":
+	default:
+		return errors.New(`model.provider must be "openai-compatible" or "openai-responses"`)
 	}
 	if model.Name == "" {
 		return errors.New("model.name is required")
