@@ -80,6 +80,39 @@ skills:
 	}
 }
 
+func TestLoadAcceptsAgentModelCallLimit(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+agent:
+  max_model_calls: 96
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.MaxModelCalls != 96 {
+		t.Fatalf("max model calls = %d", cfg.Agent.MaxModelCalls)
+	}
+}
+
+func TestLoadRejectsNegativeAgentModelCallLimit(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: http://localhost
+agent:
+  max_model_calls: -1
+`)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `
 model:

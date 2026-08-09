@@ -85,6 +85,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if *baseURL != "" {
 		cfg.Model.BaseURL = *baseURL
 	}
+	backend := session.Backend{
+		Provider: cfg.Model.Provider,
+		Model:    cfg.Model.Name,
+		BaseURL:  strings.TrimRight(cfg.Model.BaseURL, "/"),
+	}
 
 	var sessionStore *session.Store
 	var snapshot session.Snapshot
@@ -101,8 +106,25 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		snapshot, err = sessionStore.Load(sessionName)
+		if *fresh && errors.Is(err, session.ErrUnsupportedVersion) {
+			revision, revisionErr := sessionStore.Revision(sessionName)
+			if revisionErr != nil {
+				return revisionErr
+			}
+			snapshot = session.Snapshot{Revision: revision}
+			err = nil
+		}
 		if err != nil {
 			return err
+		}
+		if snapshot.Revision > 0 && !*fresh && snapshot.Backend != backend {
+			return fmt.Errorf(
+				"session %q belongs to %s model %q at %s; use --fresh to replace it",
+				sessionName,
+				snapshot.Backend.Provider,
+				snapshot.Backend.Model,
+				snapshot.Backend.BaseURL,
+			)
 		}
 	}
 
@@ -155,18 +177,23 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		tools = append(tools, bash)
 	}
 
-	agent, err := dora.New(model, tools...)
+	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
+		MaxModelCalls: cfg.Agent.MaxModelCalls,
+	}, tools...)
 	if err != nil {
 		return err
 	}
 	var messages []dora.Message
+	var continuation string
 	if !*fresh {
 		messages = append(messages, snapshot.Messages...)
+		continuation = snapshot.Continuation
 	}
 	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
+	state := dora.State{Messages: messages, Continuation: continuation}
 	var result dora.Result
 	if quiet {
-		result, err = agent.Run(ctx, messages)
+		result, err = agent.RunState(ctx, state)
 	} else {
 		renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
 		if sessionName != "" {
@@ -176,7 +203,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 				renderer.Session(sessionName, snapshot.Revision > 0)
 			}
 		}
-		result, err = agent.RunObserved(ctx, messages, renderer)
+		result, err = agent.RunStateObserved(ctx, state, renderer)
 	}
 	if err != nil {
 		return err
@@ -184,7 +211,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 
 	var saveErr error
 	if sessionStore != nil {
-		saveErr = sessionStore.Save(sessionName, snapshot.Revision, result.Messages)
+		saveErr = sessionStore.Save(sessionName, snapshot.Revision, session.Snapshot{
+			Backend:      backend,
+			Messages:     result.Messages,
+			Continuation: result.Continuation,
+		})
 	}
 	_, outputErr := fmt.Fprintln(streams.Stdout, result.Content)
 	if saveErr != nil {

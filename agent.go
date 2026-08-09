@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const maxModelCalls = 16
+const defaultMaxModelCalls = 64
 
 var (
 	// ErrMaxModelCalls indicates that a model kept requesting tools without
@@ -17,21 +17,41 @@ var (
 // Agent runs the model-tool loop. It is immutable after construction and does
 // not retain conversation state between Run calls.
 type Agent struct {
-	model Model
-	tools map[string]Tool
-	specs []ToolSpec
+	model         Model
+	tools         map[string]Tool
+	specs         []ToolSpec
+	maxModelCalls int
+}
+
+// AgentConfig controls safeguards for the model-tool loop. A zero
+// MaxModelCalls uses the default limit.
+type AgentConfig struct {
+	MaxModelCalls int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
 func New(model Model, tools ...Tool) (*Agent, error) {
+	return NewWithConfig(model, AgentConfig{}, tools...)
+}
+
+// NewWithConfig creates an Agent with explicit loop safeguards.
+func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) {
 	if model == nil {
 		return nil, errors.New("dora: model is nil")
 	}
+	if cfg.MaxModelCalls < 0 {
+		return nil, errors.New("dora: MaxModelCalls cannot be negative")
+	}
+	maxModelCalls := cfg.MaxModelCalls
+	if maxModelCalls == 0 {
+		maxModelCalls = defaultMaxModelCalls
+	}
 
 	a := &Agent{
-		model: model,
-		tools: make(map[string]Tool, len(tools)),
-		specs: make([]ToolSpec, 0, len(tools)),
+		model:         model,
+		tools:         make(map[string]Tool, len(tools)),
+		specs:         make([]ToolSpec, 0, len(tools)),
+		maxModelCalls: maxModelCalls,
 	}
 
 	for _, tool := range tools {
@@ -60,17 +80,27 @@ func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
 	return a.RunObserved(ctx, messages, nil)
 }
 
+// RunState resumes a conversation with optional opaque model continuation.
+func (a *Agent) RunState(ctx context.Context, state State) (Result, error) {
+	return a.RunStateObserved(ctx, state, nil)
+}
+
 // RunObserved is Run with synchronous progress notifications. The observer is
 // optional and cannot modify the Agent's conversation history.
 func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Observer) (Result, error) {
+	return a.RunStateObserved(ctx, State{Messages: messages}, observer)
+}
+
+// RunStateObserved is RunState with synchronous progress notifications.
+func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Observer) (Result, error) {
 	if a == nil || a.model == nil {
 		return Result{}, errors.New("dora: agent is not initialized")
 	}
 
-	history := cloneMessages(messages)
-	var continuation string
+	history := cloneMessages(state.Messages)
+	continuation := state.Continuation
 
-	for range maxModelCalls {
+	for range a.maxModelCalls {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
@@ -107,8 +137,9 @@ func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Ob
 
 		if len(response.ToolCalls) == 0 {
 			return Result{
-				Content:  response.Content,
-				Messages: cloneMessages(history),
+				Content:      response.Content,
+				Messages:     cloneMessages(history),
+				Continuation: continuation,
 			}, nil
 		}
 
@@ -138,7 +169,7 @@ func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Ob
 		}
 	}
 
-	return Result{}, ErrMaxModelCalls
+	return Result{}, fmt.Errorf("%w (limit %d)", ErrMaxModelCalls, a.maxModelCalls)
 }
 
 func notify(observer Observer, update Update) {

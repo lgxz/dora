@@ -66,7 +66,7 @@ func TestGenerateStreamMapsRequestAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	continued, continuationErr := decodeContinuation(response.Continuation)
-	if response.Content != "hello" || continuationErr != nil || continued.BaseMessageCount != 1 || len(continued.Items) != 1 || deltas.String() != "hello" {
+	if response.Content != "hello" || continuationErr != nil || continued.BaseMessageCount != 1 || continued.MessageCount != 2 || len(continued.Items) != 1 || deltas.String() != "hello" {
 		t.Fatalf("response = %#v, deltas = %q", response, deltas.String())
 	}
 }
@@ -135,7 +135,7 @@ func TestContinuationReplaysTypedOutputAndToolResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = client.Generate(context.Background(), dora.Request{
-		Continuation: `{"base_message_count":1,"items":[{"id":"reasoning-1","type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-1","name":"weather","arguments":"{}"}]}`,
+		Continuation: `{"base_message_count":1,"message_count":2,"items":[{"id":"reasoning-1","type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-1","name":"weather","arguments":"{}"}]}`,
 		Messages: []dora.Message{
 			{Role: dora.RoleUser, Content: "weather?"},
 			{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "weather"}}},

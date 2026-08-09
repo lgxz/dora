@@ -32,14 +32,19 @@ func TestStoreRoundTrip(t *testing.T) {
 		{Role: dora.RoleAssistant, Content: "done"},
 	}
 
-	if err := store.Save("system-status", 0, messages); err != nil {
+	backend := Backend{Provider: "openai-responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
+	if err := store.Save("system-status", 0, Snapshot{
+		Backend:      backend,
+		Messages:     messages,
+		Continuation: "opaque-state",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := store.Load("system-status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 1 {
+	if snapshot.Revision != 1 || snapshot.Backend != backend || snapshot.Continuation != "opaque-state" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	if !jsonEqual(snapshot.Messages[1].ToolCalls[0].Input, messages[1].ToolCalls[0].Input) {
@@ -73,10 +78,11 @@ func TestStoreDetectsRevisionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save("task", 0, nil); err != nil {
+	next := Snapshot{Backend: Backend{Provider: "openai-compatible", Model: "test", BaseURL: "http://localhost"}}
+	if err := store.Save("task", 0, next); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save("task", 0, nil); !errors.Is(err, ErrConflict) {
+	if err := store.Save("task", 0, next); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want conflict", err)
 	}
 }
@@ -95,7 +101,7 @@ func TestStoreRejectsUnsafeName(t *testing.T) {
 func TestStoreRejectsUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "broken.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"revision":1,"messages":[],"extra":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"revision":1,"backend":{"provider":"openai-compatible","model":"test","base_url":"http://localhost"},"messages":[],"extra":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := New(dir)
@@ -105,5 +111,53 @@ func TestStoreRejectsUnknownFields(t *testing.T) {
 	_, err = store.Load("broken")
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStoreRejectsVersionOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"revision":1,"messages":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Load("old")
+	if err == nil || !strings.Contains(err.Error(), "unsupported version 1") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStoreCanReplaceVersionOneByRevision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"revision":7,"messages":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Revision("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != 7 {
+		t.Fatalf("revision = %d", revision)
+	}
+	if err := store.Save("old", revision, Snapshot{
+		Backend:  Backend{Provider: "openai-compatible", Model: "new", BaseURL: "http://localhost"},
+		Messages: []dora.Message{{Role: dora.RoleUser, Content: "replacement"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 8 || snapshot.Messages[0].Content != "replacement" {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

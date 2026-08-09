@@ -121,15 +121,15 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 		if err != nil {
 			return dora.Response{}, err
 		}
-		for _, message := range trailingToolMessages(request.Messages) {
-			item, err := encodeInput(inputItem{Type: "function_call_output", CallID: message.ToolCallID, Output: message.Content})
-			if err != nil {
-				return dora.Response{}, err
-			}
-			state.Items = append(state.Items, item)
+		if state.MessageCount < state.BaseMessageCount || state.MessageCount > len(request.Messages) {
+			return dora.Response{}, errors.New("openai responses: continuation has an invalid message boundary")
+		}
+		if err := appendContinuationMessages(&state.Items, request.Messages[state.MessageCount:]); err != nil {
+			return dora.Response{}, err
 		}
 	}
 	state.Items = append(state.Items, latest.Items...)
+	state.MessageCount = len(request.Messages) + 1
 	response.Continuation, err = encodeContinuation(state)
 	if err != nil {
 		return dora.Response{}, err
@@ -146,11 +146,6 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 	}
 
 	if request.Continuation != "" {
-		toolMessages := trailingToolMessages(request.Messages)
-		assistantIndex := len(request.Messages) - len(toolMessages) - 1
-		if assistantIndex < 0 || request.Messages[assistantIndex].Role != dora.RoleAssistant {
-			return responsesRequest{}, errors.New("openai responses: continuation is missing its assistant message")
-		}
 		state, err := decodeContinuation(request.Continuation)
 		if err != nil {
 			return responsesRequest{}, err
@@ -158,27 +153,15 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 		if len(state.Items) == 0 {
 			return responsesRequest{}, errors.New("openai responses: continuation contains no output items")
 		}
-		if state.BaseMessageCount < 0 || state.BaseMessageCount > assistantIndex {
+		if state.BaseMessageCount < 0 || state.MessageCount < state.BaseMessageCount || state.MessageCount > len(request.Messages) {
 			return responsesRequest{}, errors.New("openai responses: continuation has an invalid message boundary")
 		}
 		if err := appendMessages(&body.Input, request.Messages[:state.BaseMessageCount]); err != nil {
 			return responsesRequest{}, err
 		}
 		body.Input = append(body.Input, state.Items...)
-		for _, message := range toolMessages {
-			if message.ToolCallID == "" {
-				return responsesRequest{}, errors.New("openai responses: tool message is missing ToolCallID")
-			}
-			if err := appendInput(&body.Input, inputItem{
-				Type:   "function_call_output",
-				CallID: message.ToolCallID,
-				Output: message.Content,
-			}); err != nil {
-				return responsesRequest{}, err
-			}
-		}
-		if len(toolMessages) == 0 {
-			return responsesRequest{}, errors.New("openai responses: continuation has no tool outputs")
+		if err := appendContinuationMessages(&body.Input, request.Messages[state.MessageCount:]); err != nil {
+			return responsesRequest{}, err
 		}
 	} else {
 		if err := appendMessages(&body.Input, request.Messages); err != nil {
@@ -202,6 +185,36 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 		})
 	}
 	return body, nil
+}
+
+func appendContinuationMessages(input *[]json.RawMessage, messages []dora.Message) error {
+	for _, message := range messages {
+		switch message.Role {
+		case dora.RoleSystem, dora.RoleUser, dora.RoleAssistant:
+			if len(message.ToolCalls) > 0 {
+				return errors.New("openai responses: continuation contains an uncovered assistant tool call")
+			}
+			if message.Content != "" {
+				if err := appendInput(input, inputItem{Role: string(message.Role), Content: message.Content}); err != nil {
+					return err
+				}
+			}
+		case dora.RoleTool:
+			if message.ToolCallID == "" {
+				return errors.New("openai responses: tool message is missing ToolCallID")
+			}
+			if err := appendInput(input, inputItem{
+				Type:   "function_call_output",
+				CallID: message.ToolCallID,
+				Output: message.Content,
+			}); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("openai responses: unsupported message role %q", message.Role)
+		}
+	}
+	return nil
 }
 
 func appendMessages(input *[]json.RawMessage, messages []dora.Message) error {
@@ -254,14 +267,6 @@ func decodeContinuation(value string) (continuationState, error) {
 		return continuationState{}, fmt.Errorf("openai responses: decode continuation: %w", err)
 	}
 	return state, nil
-}
-
-func trailingToolMessages(messages []dora.Message) []dora.Message {
-	start := len(messages)
-	for start > 0 && messages[start-1].Role == dora.RoleTool {
-		start--
-	}
-	return messages[start:]
 }
 
 func readStream(reader io.Reader, emit func(dora.ModelEvent)) (dora.Response, error) {
@@ -422,6 +427,7 @@ type inputItem struct {
 
 type continuationState struct {
 	BaseMessageCount int               `json:"base_message_count"`
+	MessageCount     int               `json:"message_count"`
 	Items            []json.RawMessage `json:"items"`
 }
 

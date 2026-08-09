@@ -13,8 +13,14 @@ import (
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
 	Model  Model  `yaml:"model"`
+	Agent  Agent  `yaml:"agent,omitempty"`
 	Tools  Tools  `yaml:"tools,omitempty"`
 	Skills Skills `yaml:"skills,omitempty"`
+}
+
+// Agent configures model-tool loop safeguards.
+type Agent struct {
+	MaxModelCalls int `yaml:"max_model_calls,omitempty"`
 }
 
 // Model describes one configured model endpoint.
@@ -109,6 +115,9 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Tools.Bash.TimeoutSeconds < 0 {
 		return errors.New("tools.bash.timeout_seconds cannot be negative")
+	}
+	if cfg.Agent.MaxModelCalls < 0 {
+		return errors.New("agent.max_model_calls cannot be negative")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

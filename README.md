@@ -64,6 +64,14 @@ Literal `api_key` is also supported, but an environment variable keeps secrets
 out of the configuration file. The two options are mutually exclusive. API
 keys are optional for local endpoints that do not require authentication.
 
+Dora allows up to 64 model turns per task by default. Keep the safeguard but
+adjust it for unusually long tool workflows when needed:
+
+```yaml
+agent:
+  max_model_calls: 96
+```
+
 Run a one-shot prompt or combine an instruction with piped input:
 
 ```sh
@@ -100,7 +108,11 @@ fails, the previous session remains intact:
 ```
 
 Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
-session as a versioned JSON snapshot with `0600` permissions. On macOS the
+session as a versioned JSON snapshot with `0600` permissions. Session v2 binds
+the configured provider, model, and base URL: Chat Completions resumes from
+messages, while Responses additionally persists its opaque typed-item
+continuation. Use `--fresh` before changing a session's backend. Version 1
+session files are not supported. On macOS the
 default directory is `~/Library/Application Support/dora/sessions`; on Linux it
 is `${XDG_STATE_HOME:-~/.local/state}/dora/sessions`. Omit `--session`/`-s` to
 keep the existing stateless behavior. Session files can contain commands and

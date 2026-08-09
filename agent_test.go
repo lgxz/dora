@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -180,6 +181,29 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 	}
 }
 
+func TestRunStateResumesAndReturnsContinuation(t *testing.T) {
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		if request.Continuation != "saved-state" {
+			t.Fatalf("continuation = %q", request.Continuation)
+		}
+		return Response{Content: "done", Continuation: "next-state"}, nil
+	})
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := agent.RunState(context.Background(), State{
+		Messages:     []Message{{Role: RoleUser, Content: "continue"}},
+		Continuation: "saved-state",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "done" || result.Continuation != "next-state" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestRunDoesNotMutateCallerMessages(t *testing.T) {
 	inputBytes := json.RawMessage(`{"value":1}`)
 	input := []Message{{
@@ -278,5 +302,27 @@ func TestRunStopsAfterMaximumModelCalls(t *testing.T) {
 	_, err = agent.Run(context.Background(), nil)
 	if !errors.Is(err, ErrMaxModelCalls) {
 		t.Fatalf("error = %v, want %v", err, ErrMaxModelCalls)
+	}
+}
+
+func TestRunHonorsConfiguredMaximumModelCalls(t *testing.T) {
+	var calls int
+	model := modelFunc(func(context.Context, Request) (Response, error) {
+		calls++
+		return Response{ToolCalls: []ToolCall{{Name: "again"}}}, nil
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "again"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}
+	agent, err := NewWithConfig(model, AgentConfig{MaxModelCalls: 2}, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.Run(context.Background(), nil)
+	if !errors.Is(err, ErrMaxModelCalls) || !strings.Contains(err.Error(), "limit 2") || calls != 2 {
+		t.Fatalf("error = %v, calls = %d", err, calls)
 	}
 }

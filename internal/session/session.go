@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	fileVersion = 1
+	fileVersion = 2
 	maxFileSize = 64 << 20
 )
 
@@ -24,12 +24,25 @@ var (
 
 	// ErrConflict indicates that a session changed after it was loaded.
 	ErrConflict = errors.New("session revision conflict")
+
+	// ErrUnsupportedVersion indicates that a session must be replaced before
+	// it can be used by this version of Dora.
+	ErrUnsupportedVersion = errors.New("unsupported version")
 )
 
 // Snapshot is one committed version of a named conversation.
 type Snapshot struct {
-	Revision uint64
-	Messages []dora.Message
+	Revision     uint64
+	Backend      Backend
+	Messages     []dora.Message
+	Continuation string
+}
+
+// Backend identifies the model endpoint that owns an opaque continuation.
+type Backend struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url"`
 }
 
 // Store reads and atomically replaces named session snapshots.
@@ -104,10 +117,13 @@ func (s *Store) Load(name string) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("decode session %q: %w", name, err)
 	}
 	if stored.Version != fileVersion {
-		return Snapshot{}, fmt.Errorf("session %q uses unsupported version %d", name, stored.Version)
+		return Snapshot{}, fmt.Errorf("session %q uses %w %d", name, ErrUnsupportedVersion, stored.Version)
 	}
 	if stored.Revision == 0 {
 		return Snapshot{}, fmt.Errorf("session %q has invalid revision 0", name)
+	}
+	if err := validateBackend(stored.Backend); err != nil {
+		return Snapshot{}, fmt.Errorf("decode session %q backend: %w", name, err)
 	}
 
 	messages := make([]dora.Message, len(stored.Messages))
@@ -118,29 +134,83 @@ func (s *Store) Load(name string) (Snapshot, error) {
 		}
 		messages[index] = message
 	}
-	return Snapshot{Revision: stored.Revision, Messages: messages}, nil
+	return Snapshot{
+		Revision:     stored.Revision,
+		Backend:      stored.Backend,
+		Messages:     messages,
+		Continuation: stored.Continuation,
+	}, nil
 }
 
-// Save commits messages when the stored revision still matches expected.
-func (s *Store) Save(name string, expected uint64, messages []dora.Message) error {
+// Revision reads only the concurrency revision, regardless of session format.
+// It is used by explicit replacement flows that do not consume old contents.
+func (s *Store) Revision(name string) (uint64, error) {
+	path, err := s.path(name)
+	if err != nil {
+		return 0, err
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("open session %q: %w", name, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("inspect session %q: %w", name, err)
+	}
+	if info.Size() > maxFileSize {
+		return 0, fmt.Errorf("session %q exceeds 64 MiB", name)
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(file, maxFileSize))
+	var header struct {
+		Revision uint64 `json:"revision"`
+	}
+	if err := decoder.Decode(&header); err != nil {
+		return 0, fmt.Errorf("decode session %q revision: %w", name, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return 0, fmt.Errorf("decode session %q: multiple JSON values are not allowed", name)
+		}
+		return 0, fmt.Errorf("decode session %q revision: %w", name, err)
+	}
+	if header.Revision == 0 {
+		return 0, fmt.Errorf("session %q has invalid revision 0", name)
+	}
+	return header.Revision, nil
+}
+
+// Save commits a snapshot when the stored revision still matches expected.
+// The Revision field in next is ignored and assigned by the store.
+func (s *Store) Save(name string, expected uint64, next Snapshot) error {
 	path, err := s.path(name)
 	if err != nil {
 		return err
 	}
-	current, err := s.Load(name)
+	currentRevision, err := s.Revision(name)
 	if err != nil {
 		return err
 	}
-	if current.Revision != expected {
-		return fmt.Errorf("%w for %q: expected %d, found %d", ErrConflict, name, expected, current.Revision)
+	if currentRevision != expected {
+		return fmt.Errorf("%w for %q: expected %d, found %d", ErrConflict, name, expected, currentRevision)
+	}
+	if err := validateBackend(next.Backend); err != nil {
+		return fmt.Errorf("encode session %q backend: %w", name, err)
 	}
 
 	stored := sessionFile{
-		Version:  fileVersion,
-		Revision: expected + 1,
-		Messages: make([]messageRecord, len(messages)),
+		Version:      fileVersion,
+		Revision:     expected + 1,
+		Backend:      next.Backend,
+		Continuation: next.Continuation,
+		Messages:     make([]messageRecord, len(next.Messages)),
 	}
-	for index, message := range messages {
+	for index, message := range next.Messages {
 		record, err := newMessageRecord(message)
 		if err != nil {
 			return fmt.Errorf("encode session %q message %d: %w", name, index, err)
@@ -195,9 +265,24 @@ func (s *Store) path(name string) (string, error) {
 }
 
 type sessionFile struct {
-	Version  int             `json:"version"`
-	Revision uint64          `json:"revision"`
-	Messages []messageRecord `json:"messages"`
+	Version      int             `json:"version"`
+	Revision     uint64          `json:"revision"`
+	Backend      Backend         `json:"backend"`
+	Continuation string          `json:"continuation,omitempty"`
+	Messages     []messageRecord `json:"messages"`
+}
+
+func validateBackend(backend Backend) error {
+	if backend.Provider == "" {
+		return errors.New("provider is required")
+	}
+	if backend.Model == "" {
+		return errors.New("model is required")
+	}
+	if backend.BaseURL == "" {
+		return errors.New("base URL is required")
+	}
+	return nil
 }
 
 type messageRecord struct {

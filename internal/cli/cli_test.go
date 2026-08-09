@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"dora"
 	"dora/internal/session"
 )
 
@@ -106,6 +107,100 @@ model:
 	}
 	if stdout.String() != "hello from responses\n" {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input := body["input"].([]any)
+		switch calls {
+		case 1:
+			if len(input) != 1 || input[0].(map[string]any)["content"] != "first task" {
+				t.Fatalf("first input = %#v", input)
+			}
+			return fakeResponsesOutput(`[{"type":"function_call","call_id":"call-skill","name":"skill","arguments":"{\"name\":\"winuse\"}"}]`), nil
+		case 2:
+			if len(input) != 3 ||
+				input[1].(map[string]any)["type"] != "function_call" ||
+				input[2].(map[string]any)["type"] != "function_call_output" {
+				t.Fatalf("tool continuation input = %#v", input)
+			}
+			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"first answer"}]}]`), nil
+		case 3:
+			if len(input) != 5 ||
+				input[1].(map[string]any)["type"] != "function_call" ||
+				input[2].(map[string]any)["type"] != "function_call_output" ||
+				input[3].(map[string]any)["type"] != "message" ||
+				input[4].(map[string]any)["content"] != "second task" {
+				t.Fatalf("resumed input = %#v", input)
+			}
+			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"second answer"}]}]`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "skills", "winuse")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: winuse
+description: Operate native application interfaces.
+---
+Use the bundled interface tool.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-responses
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, "sessions")
+	run := func(prompt string) (string, error) {
+		var output bytes.Buffer
+		err := Run(context.Background(), []string{"-q", "-s", "wechat", "--config", configPath, prompt}, IO{
+			Stdin:           strings.NewReader(""),
+			Stdout:          &output,
+			Stderr:          io.Discard,
+			StdinIsTerminal: true,
+			HTTPClient:      httpClient,
+			SessionDir:      sessionDir,
+		})
+		return output.String(), err
+	}
+	if output, err := run("first task"); err != nil || output != "first answer\n" {
+		t.Fatalf("first output = %q, error = %v", output, err)
+	}
+	if output, err := run("second task"); err != nil || output != "second answer\n" {
+		t.Fatalf("second output = %q, error = %v", output, err)
+	}
+	if calls != 3 {
+		t.Fatalf("model calls = %d, want 3", calls)
+	}
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("wechat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 2 || snapshot.Continuation == "" || snapshot.Backend.Provider != "openai-responses" {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 
@@ -445,7 +540,134 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 2 || len(snapshot.Messages) != 4 {
+	if snapshot.Revision != 2 || len(snapshot.Messages) != 4 ||
+		snapshot.Backend.Provider != "openai-compatible" || snapshot.Continuation != "" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestRunRejectsSessionBackendMismatchUnlessFresh(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions")
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save("task", 0, session.Snapshot{
+		Backend: session.Backend{
+			Provider: "openai-compatible",
+			Model:    "old-model",
+			BaseURL:  "https://old.example/v1",
+		},
+		Messages: []dora.Message{{Role: dora.RoleUser, Content: "old"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: new-model
+  base_url: https://new.example/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requestCount := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requestCount++
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"fresh"}}]}`), nil
+	})}
+	streams := IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+		SessionDir:      sessionDir,
+	}
+	err = Run(context.Background(), []string{"-q", "-s", "task", "--config", configPath, "continue"}, streams)
+	if err == nil || !strings.Contains(err.Error(), "use --fresh") || requestCount != 0 {
+		t.Fatalf("error = %v, requests = %d", err, requestCount)
+	}
+	if err := Run(context.Background(), []string{"-q", "-s", "task", "--fresh", "--config", configPath, "restart"}, streams); err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("requests = %d", requestCount)
+	}
+	snapshot, err := store.Load("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Backend.Model != "new-model" || snapshot.Messages[0].Content != "restart" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestRunFreshReplacesVersionOneOnlyOnSuccess(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(sessionDir, "old.json")
+	oldContents := `{"version":1,"revision":4,"messages":[{"role":"user","content":"old"}]}`
+	if err := os.WriteFile(sessionPath, []byte(oldContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
+				Header:     make(http.Header),
+			}, nil
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"new"}}]}`), nil
+	})}
+	run := func() error {
+		return Run(context.Background(), []string{"-q", "-s", "old", "--fresh", "--config", configPath, "restart"}, IO{
+			Stdin:           strings.NewReader(""),
+			Stdout:          io.Discard,
+			Stderr:          io.Discard,
+			StdinIsTerminal: true,
+			HTTPClient:      httpClient,
+			SessionDir:      sessionDir,
+		})
+	}
+	if err := run(); err == nil {
+		t.Fatal("expected first run to fail")
+	}
+	afterFailure, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterFailure) != oldContents {
+		t.Fatalf("version 1 session changed after failure: %s", afterFailure)
+	}
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 5 || snapshot.Messages[0].Content != "restart" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -557,5 +779,15 @@ func fakeJSONResponse(body string) *http.Response {
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     make(http.Header),
+	}
+}
+
+func fakeResponsesOutput(output string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"type":"response.completed","response":{"id":"resp","output":` + output + "}}\n\n",
+		)),
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
 }

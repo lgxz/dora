@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"dora/internal/cli"
 )
@@ -15,12 +16,12 @@ func main() {
 
 	info, err := os.Stdin.Stat()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "dora:", err)
+		report(err)
 		os.Exit(1)
 	}
 	stderrInfo, err := os.Stderr.Stat()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "dora:", err)
+		report(err)
 		os.Exit(1)
 	}
 
@@ -34,7 +35,15 @@ func main() {
 			os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "dora:", err)
+		report(err)
 		os.Exit(1)
 	}
+}
+
+func report(err error) {
+	if strings.HasPrefix(err.Error(), "dora:") {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "dora:", err)
 }
