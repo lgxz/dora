@@ -67,3 +67,22 @@ git diff | ./dora "Review this change"
 
 Use `--config`, `--model`, or `--base-url` to override the corresponding
 configuration for one invocation.
+
+### Bash tool
+
+The Bash tool is disabled by default. Enable it explicitly when the model
+should be allowed to execute commands:
+
+```yaml
+tools:
+  bash:
+    enabled: true
+    working_dir: /path/to/project
+    timeout_seconds: 30
+```
+
+The tool runs `bash -lc` in the configured directory. It returns exit code,
+stdout, stderr, timeout, and truncation information to the model as JSON.
+Output is limited to 1 MiB per stream. Enabling this tool grants the model the
+same filesystem and process permissions as the `dora` process, so only enable
+it in an environment you trust.

@@ -13,6 +13,7 @@ import (
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
 	Model Model `yaml:"model"`
+	Tools Tools `yaml:"tools,omitempty"`
 }
 
 // Model describes one OpenAI-compatible model endpoint.
@@ -22,6 +23,18 @@ type Model struct {
 	BaseURL   string `yaml:"base_url"`
 	APIKey    string `yaml:"api_key,omitempty"`
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+}
+
+// Tools configures optional capabilities exposed to the model.
+type Tools struct {
+	Bash Bash `yaml:"bash,omitempty"`
+}
+
+// Bash configures the Bash command tool. It is disabled by default.
+type Bash struct {
+	Enabled        bool   `yaml:"enabled"`
+	WorkingDir     string `yaml:"working_dir,omitempty"`
+	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty"`
 }
 
 // DefaultPath returns the platform-specific default configuration path.
@@ -84,6 +97,9 @@ func (cfg *Config) resolveAndValidate() error {
 			return fmt.Errorf("environment variable %q is empty or unset", model.APIKeyEnv)
 		}
 		model.APIKey = value
+	}
+	if cfg.Tools.Bash.TimeoutSeconds < 0 {
+		return errors.New("tools.bash.timeout_seconds cannot be negative")
 	}
 	return nil
 }

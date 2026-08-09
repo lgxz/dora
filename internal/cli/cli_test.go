@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +72,66 @@ func TestReadPromptCombinesInstructionAndPipe(t *testing.T) {
 	}
 }
 
+func TestRunExecutesEnabledBashTool(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch calls {
+		case 1:
+			tools := body["tools"].([]any)
+			function := tools[0].(map[string]any)["function"].(map[string]any)
+			if function["name"] != "bash" {
+				t.Fatalf("function = %#v", function)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf dora\"}"}}]}}]}`), nil
+		case 2:
+			messages := body["messages"].([]any)
+			toolMessage := messages[len(messages)-1].(map[string]any)
+			if toolMessage["role"] != "tool" || !strings.Contains(toolMessage["content"].(string), `"stdout":"dora"`) {
+				t.Fatalf("tool message = %#v", toolMessage)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"command worked"}}]}`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configContents := fmt.Sprintf(`
+model:
+  provider: openai-compatible
+  name: test-model
+  base_url: https://example.test/v1
+tools:
+  bash:
+    enabled: true
+    working_dir: %s
+`, t.TempDir())
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"--config", configPath, "run it"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || stdout.String() != "command worked\n" {
+		t.Fatalf("calls = %d, stdout = %q", calls, stdout.String())
+	}
+}
+
 func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	var output bytes.Buffer
 	err := Run(context.Background(), []string{"--help"}, IO{
@@ -84,5 +145,13 @@ func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Usage: dora") {
 		t.Fatalf("help = %q", output.String())
+	}
+}
+
+func fakeJSONResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
 	}
 }

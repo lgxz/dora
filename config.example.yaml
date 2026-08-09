@@ -3,3 +3,9 @@ model:
   name: gpt-5
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
+
+tools:
+  bash:
+    enabled: false
+    working_dir: .
+    timeout_seconds: 30

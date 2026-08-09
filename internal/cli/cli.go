@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"dora"
 	"dora/internal/config"
 	"dora/model/openai"
+	bashtool "dora/tool/bash"
 )
 
 const maxStdinBytes = 16 << 20
@@ -74,7 +76,19 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	agent, err := dora.New(model)
+	var tools []dora.Tool
+	if cfg.Tools.Bash.Enabled {
+		bash, err := bashtool.New(bashtool.Config{
+			WorkingDir: cfg.Tools.Bash.WorkingDir,
+			Timeout:    time.Duration(cfg.Tools.Bash.TimeoutSeconds) * time.Second,
+		})
+		if err != nil {
+			return err
+		}
+		tools = append(tools, bash)
+	}
+
+	agent, err := dora.New(model, tools...)
 	if err != nil {
 		return err
 	}
