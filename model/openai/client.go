@@ -3,6 +3,7 @@
 package openai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -67,8 +69,14 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// Generate implements dora.Model.
+// Generate implements dora.Model. The response is received as a stream even
+// when the caller does not consume incremental events.
 func (c *Client) Generate(ctx context.Context, request dora.Request) (dora.Response, error) {
+	return c.GenerateStream(ctx, request, nil)
+}
+
+// GenerateStream implements dora.StreamingModel.
+func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit func(dora.ModelEvent)) (dora.Response, error) {
 	body, err := c.requestBody(request)
 	if err != nil {
 		return dora.Response{}, err
@@ -83,6 +91,7 @@ func (c *Client) Generate(ctx context.Context, request dora.Request) (dora.Respo
 		return dora.Response{}, fmt.Errorf("openai: create request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "text/event-stream")
 	if c.apiKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
@@ -93,46 +102,22 @@ func (c *Client) Generate(ctx context.Context, request dora.Request) (dora.Respo
 	}
 	defer httpResponse.Body.Close()
 
-	responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxResponseBytes+1))
-	if err != nil {
-		return dora.Response{}, fmt.Errorf("openai: read response: %w", err)
-	}
-	if len(responseBody) > maxResponseBytes {
-		return dora.Response{}, errors.New("openai: response exceeds 4 MiB")
-	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
+		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxResponseBytes+1))
+		if err != nil {
+			return dora.Response{}, fmt.Errorf("openai: read error response: %w", err)
+		}
 		return dora.Response{}, apiError(httpResponse.StatusCode, responseBody)
 	}
-
-	var decoded chatResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return dora.Response{}, fmt.Errorf("openai: decode response: %w", err)
+	response, err := readStream(httpResponse.Body, emit)
+	if err != nil {
+		return dora.Response{}, fmt.Errorf("openai: %w", err)
 	}
-	if len(decoded.Choices) == 0 {
-		return dora.Response{}, errors.New("openai: response contains no choices")
-	}
-
-	message := decoded.Choices[0].Message
-	result := dora.Response{Content: message.Content}
-	for _, call := range message.ToolCalls {
-		arguments := json.RawMessage(call.Function.Arguments)
-		if len(arguments) == 0 {
-			arguments = json.RawMessage(`{}`)
-		}
-		if !json.Valid(arguments) {
-			return dora.Response{}, fmt.Errorf("openai: tool %q returned invalid JSON arguments", call.Function.Name)
-		}
-		result.ToolCalls = append(result.ToolCalls, dora.ToolCall{
-			ID:    call.ID,
-			Name:  call.Function.Name,
-			Input: arguments,
-		})
-	}
-	return result, nil
+	return response, nil
 }
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
-	body := chatRequest{Model: c.model}
+	body := chatRequest{Model: c.model, Stream: true}
 	for _, message := range request.Messages {
 		converted := chatMessage{
 			Role:       string(message.Role),
@@ -182,6 +167,90 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	return body, nil
 }
 
+func readStream(reader io.Reader, emit func(dora.ModelEvent)) (dora.Response, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64<<10), maxResponseBytes)
+	var result dora.Response
+	calls := make(map[int]*streamedToolCall)
+	done := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			done = true
+			break
+		}
+		var event chatStreamEvent
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return dora.Response{}, fmt.Errorf("decode stream event: %w", err)
+		}
+		for _, choice := range event.Choices {
+			if choice.Index != 0 {
+				continue
+			}
+			if choice.Delta.Content != "" {
+				result.Content += choice.Delta.Content
+				if emit != nil {
+					emit(dora.ModelEvent{Kind: dora.ModelEventContentDelta, Delta: choice.Delta.Content})
+				}
+			}
+			for _, delta := range choice.Delta.ToolCalls {
+				call := calls[delta.Index]
+				if call == nil {
+					call = &streamedToolCall{}
+					calls[delta.Index] = call
+				}
+				if delta.ID != "" {
+					call.id = delta.ID
+				}
+				if delta.Function.Name != "" {
+					call.name = delta.Function.Name
+				}
+				call.arguments.WriteString(delta.Function.Arguments)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return dora.Response{}, fmt.Errorf("read stream: %w", err)
+	}
+	if !done {
+		return dora.Response{}, errors.New("stream ended before [DONE]")
+	}
+	indices := make([]int, 0, len(calls))
+	for index := range calls {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, index := range indices {
+		call := calls[index]
+		arguments := json.RawMessage(call.arguments.String())
+		if len(arguments) == 0 {
+			arguments = json.RawMessage(`{}`)
+		}
+		if !json.Valid(arguments) {
+			return dora.Response{}, fmt.Errorf("tool %q returned invalid JSON arguments", call.name)
+		}
+		toolCall := dora.ToolCall{ID: call.id, Name: call.name, Input: arguments}
+		result.ToolCalls = append(result.ToolCalls, toolCall)
+		if emit != nil {
+			emit(dora.ModelEvent{Kind: dora.ModelEventToolCallReady, ToolCall: toolCall})
+		}
+	}
+	return result, nil
+}
+
+type streamedToolCall struct {
+	id        string
+	name      string
+	arguments strings.Builder
+}
+
 func apiError(status int, body []byte) error {
 	var decoded struct {
 		Error struct {
@@ -205,6 +274,7 @@ type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
 	Tools    []chatTool    `json:"tools,omitempty"`
+	Stream   bool          `json:"stream"`
 }
 
 type chatMessage struct {
@@ -236,8 +306,21 @@ type chatFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-type chatResponse struct {
+type chatStreamEvent struct {
 	Choices []struct {
-		Message chatMessage `json:"message"`
+		Index int `json:"index"`
+		Delta struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
 	} `json:"choices"`
 }
+
+var _ dora.StreamingModel = (*Client)(nil)

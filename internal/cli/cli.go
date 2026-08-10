@@ -92,6 +92,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	backend := session.Backend{
 		Provider: cfg.Model.Provider,
+		API:      cfg.Model.API,
 		Model:    cfg.Model.Name,
 		BaseURL:  strings.TrimRight(cfg.Model.BaseURL, "/"),
 	}
@@ -124,9 +125,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		if snapshot.Revision > 0 && !*fresh && snapshot.Backend != backend {
 			return fmt.Errorf(
-				"session %q belongs to %s model %q at %s; use --fresh to replace it",
+				"session %q belongs to %s %s model %q at %s; use --fresh to replace it",
 				sessionName,
 				snapshot.Backend.Provider,
+				snapshot.Backend.API,
 				snapshot.Backend.Model,
 				snapshot.Backend.BaseURL,
 			)
@@ -134,15 +136,15 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 
 	var model dora.Model
-	switch cfg.Model.Provider {
-	case "openai-compatible":
+	switch cfg.Model.API {
+	case "chat_completions":
 		model, err = openai.New(openai.Config{
 			BaseURL:    cfg.Model.BaseURL,
 			APIKey:     cfg.Model.APIKey,
 			Model:      cfg.Model.Name,
 			HTTPClient: streams.HTTPClient,
 		})
-	case "openai-responses":
+	case "responses":
 		model, err = openairesponses.New(openairesponses.Config{
 			BaseURL:    cfg.Model.BaseURL,
 			APIKey:     cfg.Model.APIKey,

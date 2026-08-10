@@ -63,20 +63,21 @@ You can also place it anywhere and pass `--config path/to/config.yaml`.
 
 ```yaml
 model:
-  provider: openai-responses
-  name: gpt-5
-  base_url: https://api.openai.com/v1
-  api_key_env: OPENAI_API_KEY
+  provider: deepseek
 ```
 
-Use `openai-responses` for OpenAI's Responses API with SSE streaming. The
-existing `openai-compatible` provider continues to use Chat Completions for
-compatible third-party and local endpoints. Responses tool loops replay typed
-output items locally and do not depend on server-side response storage.
+The `deepseek` preset defaults to the `chat_completions` API,
+`deepseek-v4-flash`, `https://api.deepseek.com`, and `DEEPSEEK_API_KEY`. The
+`openai` preset defaults to `chat_completions`, `gpt-5`,
+`https://api.openai.com/v1`, and `OPENAI_API_KEY`. Override any preset field
+when needed, and set `api: responses` to use the Responses API. Both APIs
+always use SSE streaming. Responses tool loops replay typed output items
+locally and do not depend on server-side response storage.
 
 Literal `api_key` is also supported, but an environment variable keeps secrets
-out of the configuration file. The two options are mutually exclusive. API
-keys are optional for local endpoints that do not require authentication.
+out of the configuration file. A non-empty literal key takes precedence over
+`api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
+not require authentication.
 
 Dora allows up to 64 model turns per task by default. Keep the safeguard but
 adjust it for unusually long tool workflows when needed:
@@ -89,7 +90,7 @@ agent:
 Run a one-shot prompt or combine an instruction with piped input:
 
 ```sh
-export OPENAI_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
 ./dora "Explain this repository"
 git diff | ./dora "Review this change"
 ```
@@ -122,11 +123,11 @@ fails, the previous session remains intact:
 ```
 
 Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
-session as a versioned JSON snapshot with `0600` permissions. Session v2 binds
-the configured provider, model, and base URL: Chat Completions resumes from
-messages, while Responses additionally persists its opaque typed-item
-continuation. Use `--fresh` before changing a session's backend. Version 1
-session files are not supported. The default directory is
+session as a versioned JSON snapshot with `0600` permissions. Session v3 binds
+the configured provider, API, model, and base URL: Chat Completions resumes
+from messages, while Responses additionally persists its opaque typed-item
+continuation. Use `--fresh` before changing a session's backend. Version 1 and
+2 session files are not supported. The default directory is
 `${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions` on every operating
 system. Omit `--session`/`-s` to keep the existing stateless behavior. Session
 files can contain commands and tool output, so treat them as sensitive. Do not

@@ -16,6 +16,11 @@ import (
 	"dora/internal/session"
 )
 
+func TestMain(m *testing.M) {
+	_ = os.Setenv("OPENAI_API_KEY", "test-secret")
+	os.Exit(m.Run())
+}
+
 func TestRunCallsConfiguredModel(t *testing.T) {
 	// An explicit config path must not depend on the default XDG layout.
 	t.Setenv("XDG_CONFIG_HOME", "relative")
@@ -23,19 +28,13 @@ func TestRunCallsConfiguredModel(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body: io.NopCloser(strings.NewReader(
-				`{"choices":[{"message":{"role":"assistant","content":"hello from model"}}]}`,
-			)),
-			Header: make(http.Header),
-		}, nil
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"hello from model"}}]}`), nil
 	})}
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	configContents := fmt.Sprintf(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: %s
   api_key: secret
@@ -64,6 +63,44 @@ model:
 	}
 }
 
+func TestRunCallsDeepSeekPreset(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://api.deepseek.com/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer deepseek-secret" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "deepseek-v4-flash" || body["stream"] != true {
+			t.Fatalf("body = %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"deepseek answer"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model:\n  provider: deepseek\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "deepseek answer\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestRunCallsResponsesProvider(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/v1/responses" {
@@ -88,7 +125,8 @@ func TestRunCallsResponsesProvider(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	configContents := `
 model:
-  provider: openai-responses
+  provider: openai
+  api: responses
   name: test-model
   base_url: https://example.test/v1
 `
@@ -165,7 +203,8 @@ Use the bundled interface tool.
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-responses
+  provider: openai
+  api: responses
   name: test-model
   base_url: https://example.test/v1
 `), 0o600); err != nil {
@@ -201,7 +240,8 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 2 || snapshot.Continuation == "" || snapshot.Backend.Provider != "openai-responses" {
+	if snapshot.Revision != 2 || snapshot.Continuation == "" ||
+		snapshot.Backend.Provider != "openai" || snapshot.Backend.API != "responses" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -254,7 +294,7 @@ func TestRunExecutesEnabledBashTool(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	configContents := `
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 tools:
@@ -297,7 +337,7 @@ func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `), 0o600); err != nil {
@@ -350,7 +390,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `), 0o600); err != nil {
@@ -414,7 +454,7 @@ Inspect CPU and memory before drawing conclusions.
 	configPath := filepath.Join(root, "config.yaml")
 	configContents := `
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `
@@ -455,7 +495,7 @@ func TestRunIgnoresEmptyDefaultSkillDirectory(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 tools:
@@ -482,7 +522,7 @@ func TestRunRejectsMissingAdditionalSkillDirectory(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 skills:
@@ -525,7 +565,7 @@ func TestRunQuietHidesProgress(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	configContents := `
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `
@@ -583,7 +623,7 @@ func TestRunContinuesNamedSession(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	configContents := `
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `
@@ -633,7 +673,7 @@ model:
 		t.Fatal(err)
 	}
 	if snapshot.Revision != 2 || len(snapshot.Messages) != 4 ||
-		snapshot.Backend.Provider != "openai-compatible" || snapshot.Continuation != "" {
+		snapshot.Backend.Provider != "openai" || snapshot.Backend.API != "chat_completions" || snapshot.Continuation != "" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -647,7 +687,8 @@ func TestRunRejectsSessionBackendMismatchUnlessFresh(t *testing.T) {
 	}
 	if err := store.Save("task", 0, session.Snapshot{
 		Backend: session.Backend{
-			Provider: "openai-compatible",
+			Provider: "openai",
+			API:      "chat_completions",
 			Model:    "old-model",
 			BaseURL:  "https://old.example/v1",
 		},
@@ -658,7 +699,7 @@ func TestRunRejectsSessionBackendMismatchUnlessFresh(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: new-model
   base_url: https://new.example/v1
 `), 0o600); err != nil {
@@ -710,7 +751,7 @@ func TestRunFreshReplacesVersionOneOnlyOnSuccess(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `), 0o600); err != nil {
@@ -800,7 +841,7 @@ func TestRunFreshReplacesSessionOnlyOnSuccess(t *testing.T) {
 	configPath := filepath.Join(root, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`
 model:
-  provider: openai-compatible
+  provider: openai
   name: test-model
   base_url: https://example.test/v1
 `), 0o600); err != nil {
@@ -867,10 +908,31 @@ func TestRunFreshRequiresNamedSession(t *testing.T) {
 }
 
 func fakeJSONResponse(body string) *http.Response {
+	var decoded struct {
+		Choices []struct {
+			Message json.RawMessage `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil || len(decoded.Choices) == 0 {
+		panic("invalid fake Chat Completions response")
+	}
+	event, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0,
+			"delta": decoded.Choices[0].Message,
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return fakeChatResponse(string(event))
+}
+
+func fakeChatResponse(event string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("data: " + event + "\n\ndata: [DONE]\n\n")),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
 }
 

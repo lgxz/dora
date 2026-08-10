@@ -29,7 +29,7 @@ flowchart TD
     CLI --> Bash["tool/bash<br/>Bash 工具"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell 工具"]
 
-    OpenAI -->|"Model"| Core
+    OpenAI -->|"StreamingModel"| Core
     Responses -->|"StreamingModel"| Core
     Skill -->|"Tool"| Core
     Bash -->|"Tool"| Core
@@ -56,7 +56,7 @@ flowchart TD
 | `internal/paths` | 在所有平台解析统一的 XDG 默认路径 | `ConfigFile`、`SessionsDir`、`SkillsDir` |
 | `internal/session` | 持久化具名会话，校验版本和并发 revision | `New`、`Store.Load`、`Store.Revision`、`Store.Save` |
 | `internal/progress` | 将语义化运行事件渲染成终端输出 | `New`、`Renderer.Observe` |
-| `model/openai` | OpenAI-compatible Chat Completions 协议适配 | `New`、`Client.Generate` |
+| `model/openai` | OpenAI-compatible Chat Completions SSE 协议适配 | `New`、`Client.GenerateStream` |
 | `model/openairesponses` | Responses API、SSE 流和 provider continuation 适配 | `New`、`Client.GenerateStream` |
 | `skill` | 发现并校验本地 `SKILL.md`，按需向模型返回完整指令 | `New`，返回 `dora.Tool` |
 | `tool/bash` | 在当前目录及超时和输出上限约束内执行 Bash | `New`、`Tool.Spec`、`Tool.Execute` |
@@ -158,10 +158,10 @@ sequenceDiagram
 - Agent 不可变，运行历史保存在局部变量中。
 - 输入消息、工具调用和输出状态均进行防御性复制。
 - 模型返回多个工具调用时，按返回顺序串行执行。
-- Responses 内容可以边接收边显示，但工具必须等整次模型响应完成后才开始执行。
+- 两种 API 的内容都可以边接收边显示，但工具必须等整次模型响应完成后才开始执行。
 - 工具执行错误会终止本次任务；工具自身可以选择把命令失败编码成正常结果。例如 Bash 将非零退出码返回给模型，而不是直接终止 Agent。
 - 如果模型持续调用工具，达到 `MaxModelCalls` 后返回明确错误；默认上限为 64。
-- 当前 CLI 不注入系统提示词。`Message` 和两个 provider 都支持 `system` role，库调用者可以自行传入。
+- 当前 CLI 不注入系统提示词。`Message` 和两个 API adapter 都支持 `system` role，库调用者可以自行传入。
 
 ## CLI 运行流程
 
@@ -170,8 +170,8 @@ sequenceDiagram
 1. 解析参数，从命令参数和标准输入组合用户 prompt。
 2. 解析默认或显式配置路径，严格加载 YAML。
 3. 应用 `--model`、`--base-url` 等单次覆盖项。
-4. 若指定 session，读取快照并校验 provider、model 和 base URL。
-5. 根据 `model.provider` 创建具体模型适配器。
+4. 若指定 session，读取快照并校验 provider、API、model 和 base URL。
+5. 根据 `model.api` 创建具体模型适配器；provider 负责提供服务商默认值。
 6. 发现 skills，并按配置创建可用工具。
 7. 构造无状态的 `dora.Agent`。
 8. 将历史消息和本次用户消息组成 `State`，执行 Agent。
@@ -185,7 +185,7 @@ CLI 的标准输出只承载最终结果；运行过程和错误写到标准错�
 
 ### Chat Completions
 
-`model/openai` 将 Dora 消息和工具结构转换为 `/chat/completions` 请求。它实现基础 `Model` 接口，每次请求读取完整 JSON 响应；跨任务恢复依赖完整消息历史，`Continuation` 为空。
+`model/openai` 将 Dora 消息和工具结构转换为 `/chat/completions` 请求。它固定请求 SSE 流，将文本和分片工具参数聚合成完整响应，并实现 `StreamingModel`；跨任务恢复依赖完整消息历史，`Continuation` 为空。
 
 ### Responses API
 
@@ -212,7 +212,7 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions/<name>.json
 快照包含：
 
 - 格式版本和单调递增的 revision；
-- provider、model、base URL 组成的 backend 身份；
+- provider、API、model、base URL 组成的 backend 身份；
 - provider-neutral 完整消息；
 - provider 专属 continuation。
 
@@ -255,7 +255,7 @@ PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前�
 
 ## 配置与路径
 
-`internal/config` 使用严格 YAML 解码：未知字段、多文档、非法 provider、冲突的 API key 来源和负数限制都会报错。API key 可以直接配置，也可以运行时从指定环境变量读取。
+`internal/config` 使用严格 YAML 解码：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。`openai` 与 `deepseek` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。
 
 `internal/paths` 在所有操作系统上使用统一 XDG 布局：
 
@@ -271,11 +271,11 @@ XDG 环境变量必须是绝对路径。显式 `--config` 不依赖默认配置�
 
 ### 添加模型 provider
 
-1. 在 `model/<provider>` 中实现 `dora.Model`，需要增量输出时再实现 `dora.StreamingModel`。
-2. 将协议专属状态封装进 `Continuation`，不要泄漏到 Agent 核心。
-3. 在配置校验中注册 provider 名称。
+1. OpenAI 协议兼容服务商只需在配置 preset 中注册 provider 及默认 endpoint、model 和 API key 环境变量。
+2. 新协议需要在独立 `model/<protocol>` 包中实现 `dora.StreamingModel`。
+3. 将协议专属状态封装进 `Continuation`，不要泄漏到 Agent 核心。
 4. 在 `internal/cli` 的组合逻辑中创建实现。
-5. 添加协议转换、错误响应和 CLI 组装测试。
+5. 添加默认值、协议转换、错误响应和 CLI 组装测试。
 
 ### 添加工具
 
@@ -292,7 +292,7 @@ XDG 环境变量必须是绝对路径。显式 `--config` 不依赖默认配置�
 
 - Agent 和工具调用目前是单 goroutine、串行执行。
 - HTTP 请求异步性由调用方 goroutine 决定；核心没有任务调度器。
-- Responses 支持流式文本显示，但尚未在流未结束时提前执行已完成的工具调用。
+- Chat Completions 和 Responses 都支持流式文本显示，但尚未在流未结束时提前执行已完成的工具调用。
 - Session 是完整 JSON 快照而非追加日志，最大 64 MiB。
 - Session 没有跨进程锁，只通过 revision 防止静默覆盖。
 - CLI 是组合根；provider 和工具增多后，可以再提取 factory/registry，但当前规模下保持显式 switch 更简单。

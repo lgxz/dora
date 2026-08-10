@@ -26,11 +26,12 @@ type Agent struct {
 
 // Model describes one configured model endpoint.
 type Model struct {
-	Provider  string `yaml:"provider"`
-	Name      string `yaml:"name"`
-	BaseURL   string `yaml:"base_url"`
-	APIKey    string `yaml:"api_key,omitempty"`
-	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	Provider  string  `yaml:"provider"`
+	API       string  `yaml:"api,omitempty"`
+	Name      string  `yaml:"name"`
+	BaseURL   string  `yaml:"base_url"`
+	APIKey    string  `yaml:"api_key,omitempty"`
+	APIKeyEnv *string `yaml:"api_key_env,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.
@@ -95,24 +96,31 @@ func Load(path string) (Config, error) {
 
 func (cfg *Config) resolveAndValidate() error {
 	model := &cfg.Model
-	switch model.Provider {
-	case "openai-compatible", "openai-responses":
+	preset, ok := modelPresets[model.Provider]
+	if !ok {
+		return errors.New(`model.provider must be "openai" or "deepseek"`)
+	}
+	if model.API == "" {
+		model.API = "chat_completions"
+	}
+	switch model.API {
+	case "chat_completions", "responses":
 	default:
-		return errors.New(`model.provider must be "openai-compatible" or "openai-responses"`)
+		return errors.New(`model.api must be "chat_completions" or "responses"`)
 	}
 	if model.Name == "" {
-		return errors.New("model.name is required")
+		model.Name = preset.name
 	}
 	if model.BaseURL == "" {
-		return errors.New("model.base_url is required")
+		model.BaseURL = preset.baseURL
 	}
-	if model.APIKey != "" && model.APIKeyEnv != "" {
-		return errors.New("model.api_key and model.api_key_env are mutually exclusive")
+	if model.APIKeyEnv == nil {
+		model.APIKeyEnv = &preset.apiKeyEnv
 	}
-	if model.APIKeyEnv != "" {
-		value, ok := os.LookupEnv(model.APIKeyEnv)
+	if model.APIKey == "" && *model.APIKeyEnv != "" {
+		value, ok := os.LookupEnv(*model.APIKeyEnv)
 		if !ok || value == "" {
-			return fmt.Errorf("environment variable %q is empty or unset", model.APIKeyEnv)
+			return fmt.Errorf("environment variable %q is empty or unset", *model.APIKeyEnv)
 		}
 		model.APIKey = value
 	}
@@ -137,4 +145,23 @@ func (cfg *Config) resolveAndValidate() error {
 		}
 	}
 	return nil
+}
+
+type modelPreset struct {
+	name      string
+	baseURL   string
+	apiKeyEnv string
+}
+
+var modelPresets = map[string]modelPreset{
+	"openai": {
+		name:      "gpt-5",
+		baseURL:   "https://api.openai.com/v1",
+		apiKeyEnv: "OPENAI_API_KEY",
+	},
+	"deepseek": {
+		name:      "deepseek-v4-flash",
+		baseURL:   "https://api.deepseek.com",
+		apiKeyEnv: "DEEPSEEK_API_KEY",
+	},
 }
