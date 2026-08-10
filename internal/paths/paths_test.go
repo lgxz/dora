@@ -6,66 +6,66 @@ import (
 	"testing"
 )
 
-func TestConfigFileUsesXDGConfigHome(t *testing.T) {
+func TestConfigFileUsesDoraHome(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("DORA_HOME", root)
 
 	path, err := ConfigFile()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "dora", "config.yaml")
+	want := filepath.Join(root, "config.yaml")
 	if path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
 
-func TestConfigFileFallsBackToLinuxLayout(t *testing.T) {
+func TestConfigFileFallsBackToHomeDotDora(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("DORA_HOME", "")
 
 	path, err := ConfigFile()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".config", "dora", "config.yaml")
+	want := filepath.Join(home, ".dora", "config.yaml")
 	if path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
 
-func TestSessionsDirUsesXDGStateHome(t *testing.T) {
+func TestSessionsDirUsesDoraHome(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", root)
+	t.Setenv("DORA_HOME", root)
 
 	path, err := SessionsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "dora", "sessions")
+	want := filepath.Join(root, "sessions")
 	if path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
 
-func TestSessionsDirFallsBackToLinuxLayout(t *testing.T) {
+func TestSessionsDirFallsBackToHomeDotDora(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("DORA_HOME", "")
 
 	path, err := SessionsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".local", "state", "dora", "sessions")
+	want := filepath.Join(home, ".dora", "sessions")
 	if path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
 
-func TestRejectsRelativeXDGHome(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "relative")
+func TestRejectsRelativeDoraHome(t *testing.T) {
+	t.Setenv("DORA_HOME", "relative")
 
 	_, err := ConfigFile()
 	if err == nil || !strings.Contains(err.Error(), "absolute") {

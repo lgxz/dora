@@ -120,11 +120,11 @@ configuration file and selects that provider automatically. For example,
 `model.provider` explicitly. If none are set, Dora retains `deepseek` as the
 fallback and reports that `DEEPSEEK_API_KEY` is missing.
 
-To customize the defaults, create
-`${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
-on every operating system, including macOS. You can also place the file
-anywhere and pass `--config path/to/config.yaml`; an explicitly requested file
-must exist.
+To customize the defaults, create `~/.dora/config.yaml`. Dora uses this
+`~/.dora/` layout on every operating system, including macOS. Set the
+`DORA_HOME` environment variable to an absolute path to override the home
+directory. You can also place the file anywhere and pass
+`--config path/to/config.yaml`; an explicitly requested file must exist.
 
 ```yaml
 model:
@@ -221,10 +221,10 @@ the configured provider, API, model, and base URL: Chat Completions resumes
 from messages, while Responses additionally persists its opaque typed-item
 continuation. Use `--fresh` before changing a session's backend. Version 1 and
 2 session files are not supported. The default directory is
-`${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions` on every operating
-system. Omit `--session`/`-s` to keep the existing stateless behavior. Session
-files can contain commands and tool output, so treat them as sensitive. Do not
-run two Dora processes against the same session name concurrently.
+`~/.dora/sessions` on every operating system. Omit `--session`/`-s` to keep
+the existing stateless behavior. Session files can contain commands and tool
+output, so treat them as sensitive. Do not run two Dora processes against the
+same session name concurrently.
 
 Use `--config`, `--model`, `--base-url`, `--max-rounds`, `--skills-dir`, or
 `--no-skills` to override the corresponding configuration for one invocation.
@@ -253,8 +253,8 @@ Inspect the machine methodically and summarize actionable findings.
 ```
 
 By default, Dora discovers the `skills` directory beside the active
-`config.yaml`. With the default config path, that is
-`${XDG_CONFIG_HOME:-$HOME/.config}/dora/skills`. No configuration is needed.
+`config.yaml`. With the default config path, that is `~/.dora/skills`. No
+configuration is needed.
 
 Use `skills.directories` only to add more parent directories:
 
@@ -291,15 +291,14 @@ Dora does not automatically read or migrate the previous macOS directory.
 Move existing files manually before running the new version:
 
 ```sh
-mkdir -p "$HOME/.config/dora" "$HOME/.local/state/dora"
-mv "$HOME/Library/Application Support/dora/config.yaml" "$HOME/.config/dora/config.yaml"
-mv "$HOME/Library/Application Support/dora/skills" "$HOME/.config/dora/skills"
-mv "$HOME/Library/Application Support/dora/sessions" "$HOME/.local/state/dora/sessions"
+mkdir -p "$HOME/.dora"
+mv "$HOME/Library/Application Support/dora/config.yaml" "$HOME/.dora/config.yaml"
+mv "$HOME/Library/Application Support/dora/skills" "$HOME/.dora/skills"
+mv "$HOME/Library/Application Support/dora/sessions" "$HOME/.dora/sessions"
 ```
 
-Skip any `mv` command whose source does not exist. If an XDG environment
-variable is set, use its directory instead of the fallback destination shown
-above.
+Skip any `mv` command whose source does not exist. If `DORA_HOME` is set, use
+its directory instead of the fallback destination shown above.
 
 ## Releasing
 

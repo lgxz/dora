@@ -19,7 +19,7 @@ flowchart TD
     Main["cmd/dora<br/>进程入口"] --> CLI["internal/cli<br/>解析、装配、编排"]
 
     CLI --> Config["internal/config<br/>YAML 配置"]
-    CLI --> Paths["internal/paths<br/>XDG 路径"]
+    CLI --> Paths["internal/paths<br/>~/.dora 路径"]
     CLI --> Session["internal/session<br/>会话快照"]
     CLI --> Update["internal/update<br/>standalone 自更新"]
     CLI --> Progress["internal/progress<br/>终端进度"]
@@ -58,7 +58,7 @@ flowchart TD
 | `cmd/dora` | 进程启动、信号处理、终端能力检测、最终错误输出 | `main` |
 | `internal/cli` | 参数解析、依赖装配、session 恢复与保存、输入输出编排 | `Run(context.Context, []string, IO)` |
 | `internal/config` | 严格读取、解析和校验 YAML 配置 | `Load(string)` |
-| `internal/paths` | 在所有平台解析统一的 XDG 默认路径 | `ConfigFile`、`SessionsDir`、`SkillsDir` |
+| `internal/paths` | 在所有平台解析统一的 `~/.dora` 默认路径 | `ConfigFile`、`SessionsDir`、`SkillsDir` |
 | `internal/session` | 持久化具名会话，校验版本和并发 revision | `New`、`Store.Load`、`Store.Revision`、`Store.Save` |
 | `internal/update` | 查询稳定 Release、验证归档并可回滚地替换 standalone 二进制 | `New`、`Service.Update` |
 | `internal/progress` | 将语义化运行事件渲染成终端输出 | `New`、`Renderer.Observe` |
@@ -216,7 +216,7 @@ CLI 的标准输出只承载最终结果；运行过程和错误写到标准错�
 `internal/session` 使用单个版本化 JSON 文件保存一个具名任务：
 
 ```text
-${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions/<name>.json
+~/.dora/sessions/<name>.json
 ```
 
 快照包含：
@@ -269,15 +269,15 @@ Bash 与 PowerShell 保持独立的公开工具及 shell 启动策略，并共�
 
 `internal/config` 提供内置 provider preset，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。provider 缺省时，配置层直接复用 preset 中的 API key 环境变量映射：仅一个环境变量非空则选择对应 provider，多个非空则要求显式选择，全部为空则回退 DeepSeek。命令工具的 `enabled` 是三态配置：缺省时由 CLI 应用平台策略，显式 `true` 或 `false` 完全覆盖。`openai`、`deepseek` 与 `trust` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
 
-`internal/paths` 在所有操作系统上使用统一 XDG 布局：
+`internal/paths` 在所有操作系统上使用统一的 `~/.dora` 布局：
 
 | 内容 | 默认路径 |
 | --- | --- |
-| 可选配置 | `${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml` |
+| 可选配置 | `~/.dora/config.yaml` |
 | Skills | 活动配置文件同级的 `skills/` |
-| Sessions | `${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions` |
+| Sessions | `~/.dora/sessions` |
 
-XDG 环境变量必须是绝对路径。显式 `--config` 不依赖默认配置路径，可以完全覆盖它。
+`DORA_HOME` 环境变量可以覆盖主目录，且必须是绝对路径。显式 `--config` 不依赖默认配置路径，可以完全覆盖它。
 
 ## 扩展方式
 
