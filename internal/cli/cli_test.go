@@ -104,6 +104,44 @@ func TestRunCallsDeepSeekPreset(t *testing.T) {
 	}
 }
 
+func TestRunCallsTrustPreset(t *testing.T) {
+	t.Setenv("TRUST_API_KEY", "trust-secret")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://api.trustoken.cn/v1/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer trust-secret" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "auto" || body["stream"] != true {
+			t.Fatalf("body = %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"trust answer"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model:\n  provider: trust\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "trust answer\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestRunUsesDefaultsWhenDefaultConfigIsMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")

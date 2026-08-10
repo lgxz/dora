@@ -111,7 +111,7 @@ func (cfg *Config) resolveAndValidate() error {
 	model := &cfg.Model
 	preset, ok := modelPresets[model.Provider]
 	if !ok {
-		return errors.New(`model.provider must be "openai" or "deepseek"`)
+		return errors.New(`model.provider must be "openai", "deepseek", or "trust"`)
 	}
 	if model.API == "" {
 		model.API = "chat_completions"
@@ -176,5 +176,10 @@ var modelPresets = map[string]modelPreset{
 		name:      "deepseek-v4-flash",
 		baseURL:   "https://api.deepseek.com",
 		apiKeyEnv: "DEEPSEEK_API_KEY",
+	},
+	"trust": {
+		name:      "auto",
+		baseURL:   "https://api.trustoken.cn/v1",
+		apiKeyEnv: "TRUST_API_KEY",
 	},
 }

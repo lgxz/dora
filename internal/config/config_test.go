@@ -199,6 +199,20 @@ func TestLoadAppliesDeepSeekDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesTrustDefaults(t *testing.T) {
+	t.Setenv("TRUST_API_KEY", "trust-secret")
+	path := writeConfig(t, "model:\n  provider: trust\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.API != "chat_completions" || cfg.Model.Name != "auto" ||
+		cfg.Model.BaseURL != "https://api.trustoken.cn/v1" || cfg.Model.APIKey != "trust-secret" {
+		t.Fatalf("model = %#v", cfg.Model)
+	}
+}
+
 func TestLoadAppliesOpenAIDefaults(t *testing.T) {
 	path := writeConfig(t, "model:\n  provider: openai\n")
 
@@ -234,7 +248,7 @@ func TestLoadRejectsLegacyProvider(t *testing.T) {
 	path := writeConfig(t, "model:\n  provider: openai-compatible\n")
 
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), `must be "openai" or "deepseek"`) {
+	if err == nil || !strings.Contains(err.Error(), `must be "openai", "deepseek", or "trust"`) {
 		t.Fatalf("error = %v", err)
 	}
 }

@@ -126,10 +126,12 @@ model:
 The `deepseek` preset defaults to the `chat_completions` API,
 `deepseek-v4-flash`, `https://api.deepseek.com`, and `DEEPSEEK_API_KEY`. The
 `openai` preset defaults to `chat_completions`, `gpt-5`,
-`https://api.openai.com/v1`, and `OPENAI_API_KEY`. Override any preset field
-when needed, and set `api: responses` to use the Responses API. Both APIs
-always use SSE streaming. Responses tool loops replay typed output items
-locally and do not depend on server-side response storage.
+`https://api.openai.com/v1`, and `OPENAI_API_KEY`. The `trust` preset defaults
+to `chat_completions`, `auto`, `https://api.trustoken.cn/v1`, and
+`TRUST_API_KEY`. Override any preset field when needed, and set
+`api: responses` to use the Responses API. Both APIs always use SSE streaming.
+Responses tool loops replay typed output items locally and do not depend on
+server-side response storage.
 
 Literal `api_key` is also supported, but an environment variable keeps secrets
 out of the configuration file. A non-empty literal key takes precedence over
