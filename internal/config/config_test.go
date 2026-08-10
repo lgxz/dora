@@ -19,8 +19,8 @@ func TestDefaultUsesDeepSeek(t *testing.T) {
 		cfg.Model.APIKey != "deepseek-secret" {
 		t.Fatalf("model = %#v", cfg.Model)
 	}
-	if !cfg.Tools.Bash.Enabled || !cfg.Tools.PowerShell.Enabled {
-		t.Fatalf("tools = %#v", cfg.Tools)
+	if cfg.Tools.Bash.Enabled != nil || cfg.Tools.PowerShell.Enabled != nil {
+		t.Fatalf("tool defaults are not automatic: %#v", cfg.Tools)
 	}
 }
 
@@ -37,7 +37,7 @@ func TestLoadUsesDeepSeekWhenProviderIsOmitted(t *testing.T) {
 	}
 }
 
-func TestLoadEnablesBashByDefault(t *testing.T) {
+func TestLoadLeavesCommandToolDefaultsAutomatic(t *testing.T) {
 	path := writeConfig(t, `
 model:
   provider: openai
@@ -49,8 +49,8 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Tools.Bash.Enabled {
-		t.Fatal("bash is disabled, want default enabled")
+	if cfg.Tools.Bash.Enabled != nil || cfg.Tools.PowerShell.Enabled != nil {
+		t.Fatalf("tools = %#v, want automatic enablement", cfg.Tools)
 	}
 }
 
@@ -69,25 +69,28 @@ tools:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Tools.Bash.Enabled {
-		t.Fatal("bash is enabled after explicit disable")
+	if cfg.Tools.Bash.Enabled == nil || *cfg.Tools.Bash.Enabled {
+		t.Fatalf("bash enabled = %v, want explicit false", cfg.Tools.Bash.Enabled)
 	}
 }
 
-func TestLoadEnablesPowerShellByDefault(t *testing.T) {
+func TestLoadAllowsBashToBeEnabled(t *testing.T) {
 	path := writeConfig(t, `
 model:
   provider: openai
   name: test-model
   base_url: http://localhost
+tools:
+  bash:
+    enabled: true
 `)
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Tools.PowerShell.Enabled {
-		t.Fatal("powershell is disabled, want default enabled")
+	if cfg.Tools.Bash.Enabled == nil || !*cfg.Tools.Bash.Enabled {
+		t.Fatalf("bash enabled = %v, want explicit true", cfg.Tools.Bash.Enabled)
 	}
 }
 
@@ -106,8 +109,8 @@ tools:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Tools.PowerShell.Enabled {
-		t.Fatal("powershell is enabled after explicit disable")
+	if cfg.Tools.PowerShell.Enabled == nil || *cfg.Tools.PowerShell.Enabled {
+		t.Fatalf("powershell enabled = %v, want explicit false", cfg.Tools.PowerShell.Enabled)
 	}
 }
 

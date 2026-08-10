@@ -241,7 +241,7 @@ Skill 是一个工具，而不是启动时直接拼入 prompt 的文本。这样
 
 ## Bash 工具
 
-Bash 默认启用；如果系统找不到 `bash` 可执行文件，CLI 会跳过该工具而不阻止 Dora 启动。用户可以通过配置显式禁用。工具可用时，每次调用通过 `bash -lc` 在 Dora 当前目录中执行；模型需要切换目录时在命令内使用 `cd`。工具具备以下边界：
+Bash 在 Linux 和 macOS 上自动启用，在其他平台上自动禁用。自动启用但找不到 `bash` 可执行文件时，CLI 会跳过该工具；`enabled: true` 可以在任意平台显式启用，此时找不到可执行文件会使启动失败。发现过程当前只检查 `PATH`，不启动 shell 探测运行环境。工具可用时，每次调用通过 `bash -lc` 在 Dora 当前目录中执行；模型需要切换目录时在命令内使用 `cd`。工具具备以下边界：
 
 - 默认超时 30 秒；
 - 每次工具调用可用 `timeout_seconds` 覆盖配置默认值，范围为 1 至 3600 秒；
@@ -254,13 +254,13 @@ Bash 不是安全沙箱。启用它等于允许模型以 Dora 进程的系统权
 
 ## PowerShell 工具
 
-PowerShell 是与 Bash 分离的 `powershell` 工具，输入 Schema 同样只接受 `command`，避免模型把两种 shell 的语法混在一次调用中。它默认启用并依次寻找 `pwsh`、`powershell.exe`；两者都不存在时，CLI 跳过该工具。若 Bash 与 PowerShell 都存在，两个工具会同时暴露。
+PowerShell 是与 Bash 分离的 `powershell` 工具，输入 Schema 同样只接受 `command`，避免模型把两种 shell 的语法混在一次调用中。它在 Windows 上自动启用，在其他平台上自动禁用，并依次寻找 `pwsh`、`powershell.exe`。自动模式下两者都不存在时 CLI 跳过该工具；显式启用时则报错。只有用户显式覆盖平台策略时，Bash 与 PowerShell 才可能同时暴露。
 
 PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前目录执行命令，切换目录时由模型在命令内使用 `Set-Location`。它与 Bash 使用相同的 30 秒配置默认超时、1 至 3600 秒的单次调用覆盖范围、输出限制和结构化结果，同样不是安全沙箱。
 
 ## 配置与路径
 
-`internal/config` 提供内置 DeepSeek 配置，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。`openai` 与 `deepseek` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
+`internal/config` 提供内置 DeepSeek 配置，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。命令工具的 `enabled` 是三态配置：缺省时由 CLI 应用平台策略，显式 `true` 或 `false` 完全覆盖。`openai` 与 `deepseek` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
 
 `internal/paths` 在所有操作系统上使用统一 XDG 布局：
 

@@ -16,6 +16,7 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/session"
 	"github.com/lgxz/dora/internal/update"
+	bashtool "github.com/lgxz/dora/tool/bash"
 )
 
 func TestMain(m *testing.M) {
@@ -408,6 +409,31 @@ model:
 	}
 }
 
+func TestRunReportsExplicitlyEnabledBashWhenUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+tools:
+  bash:
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := Run(context.Background(), []string{"--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if !errors.Is(err, bashtool.ErrUnavailable) {
+		t.Fatalf("error = %v, want Bash unavailable", err)
+	}
+}
+
 func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 	bin := t.TempDir()
 	for _, name := range []string{"bash", "pwsh", "pwsh.exe"} {
@@ -442,6 +468,11 @@ model:
   provider: openai
   name: test-model
   base_url: https://example.test/v1
+tools:
+  bash:
+    enabled: true
+  powershell:
+    enabled: true
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}

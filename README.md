@@ -282,35 +282,36 @@ syntax fail before publishing.
 
 ### Command tools
 
-The Bash tool is enabled by default when a `bash` executable is available. If
-Dora cannot find Bash, it starts without the tool. Disable it explicitly when
-the model should not be allowed to execute commands:
+Command tools use platform-aware automatic defaults: Bash is enabled on Linux
+and macOS, while PowerShell is enabled on Windows. The other command tool is
+disabled even if its executable is on `PATH`. Omit `enabled` to use that policy,
+or set it explicitly to override the platform default:
 
 ```yaml
 tools:
   bash:
     enabled: false
     timeout_seconds: 30
+  powershell:
+    enabled: true
+    timeout_seconds: 30
 ```
 
-The tool runs `bash -lc` in Dora's current directory. The model can use `cd`
-inside a command when it needs another directory. The tool returns exit code,
-stdout, stderr, timeout, and truncation information to the model as JSON.
+Automatic tools whose executable is absent are skipped. A tool explicitly
+enabled with `enabled: true` must exist on `PATH`, otherwise Dora reports an
+error. Discovery currently checks executable presence only; it does not launch
+the shell to probe its runtime environment.
+
+The Bash tool runs `bash -lc` in Dora's current directory. The model can use
+`cd` inside a command when it needs another directory. The tool returns exit
+code, stdout, stderr, timeout, and truncation information to the model as JSON.
 Output is limited to 1 MiB per stream. This tool grants the model the same
 filesystem and process permissions as the `dora` process, so disable it unless
 you trust the environment in which Dora runs.
 
-The independent `powershell` tool follows the same defaults. Dora prefers
-PowerShell Core (`pwsh`) and falls back to Windows PowerShell
-(`powershell.exe`). If Bash and PowerShell are both installed, both tools are
-available to the model, so their command syntaxes remain distinct.
-
-```yaml
-tools:
-  powershell:
-    enabled: false
-    timeout_seconds: 30
-```
+The independent `powershell` tool prefers PowerShell Core (`pwsh`) and falls
+back to Windows PowerShell (`powershell.exe`). If both tools are explicitly
+enabled, they are exposed separately so their command syntaxes remain distinct.
 
 PowerShell also starts in Dora's current directory and can use `Set-Location`
 inside a command when needed.

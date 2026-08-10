@@ -40,18 +40,17 @@ type Tools struct {
 	PowerShell PowerShell `yaml:"powershell,omitempty"`
 }
 
-// Bash configures the Bash command tool. Load defaults Enabled to true; YAML
-// can disable it explicitly.
+// Bash configures the Bash command tool. Nil Enabled uses the platform default.
 type Bash struct {
-	Enabled        bool `yaml:"enabled"`
-	TimeoutSeconds int  `yaml:"timeout_seconds,omitempty"`
+	Enabled        *bool `yaml:"enabled,omitempty"`
+	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`
 }
 
-// PowerShell configures the PowerShell command tool. Load defaults Enabled to
-// true; YAML can disable it explicitly.
+// PowerShell configures the PowerShell command tool. Nil Enabled uses the
+// platform default.
 type PowerShell struct {
-	Enabled        bool `yaml:"enabled"`
-	TimeoutSeconds int  `yaml:"timeout_seconds,omitempty"`
+	Enabled        *bool `yaml:"enabled,omitempty"`
+	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`
 }
 
 // Skills configures local directories containing SKILL.md packages. Skills
@@ -105,10 +104,6 @@ func Load(path string) (Config, error) {
 func defaultConfig() Config {
 	return Config{
 		Model: Model{Provider: "deepseek"},
-		Tools: Tools{
-			Bash:       Bash{Enabled: true},
-			PowerShell: PowerShell{Enabled: true},
-		},
 	}
 }
 

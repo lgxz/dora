@@ -17,10 +17,12 @@ agent:
 
 tools:
   bash:
-    # Bash is enabled by default. Uncomment to disable it.
-    # enabled: false
+    # Automatic default: enabled on Linux/macOS, disabled elsewhere.
+    # Set true or false to override the platform default.
+    # enabled: true
     timeout_seconds: 30
   powershell:
-    # PowerShell is enabled by default. Uncomment to disable it.
-    # enabled: false
+    # Automatic default: enabled on Windows, disabled elsewhere.
+    # Set true or false to override the platform default.
+    # enabled: true
     timeout_seconds: 30
