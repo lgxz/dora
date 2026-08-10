@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/lgxz/dora"
@@ -50,6 +52,17 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	var maxRounds int
+	var maxRoundsSet bool
+	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			return errors.New("must be a positive integer")
+		}
+		maxRounds = parsed
+		maxRoundsSet = true
+		return nil
+	})
 	showVersion := flags.Bool("version", false, "print version information")
 	performUpdate := flags.Bool("update", false, "update a standalone installation")
 	var commandSkillDirectories stringListFlag
@@ -136,6 +149,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if *baseURL != "" {
 		cfg.Model.BaseURL = *baseURL
+	}
+	if maxRoundsSet {
+		cfg.Agent.MaxRounds = maxRounds
 	}
 	backend := session.Backend{
 		Provider: cfg.Model.Provider,
@@ -231,7 +247,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	tools = append(tools, commandTools...)
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
-		MaxModelCalls: cfg.Agent.MaxModelCalls,
+		MaxRounds: cfg.Agent.MaxRounds,
 	}, tools...)
 	if err != nil {
 		return err
@@ -245,9 +261,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
 	state := dora.State{Messages: messages, Continuation: continuation}
 	var result dora.Result
-	if quiet {
-		result, err = agent.RunState(ctx, state)
-	} else {
+	var observer dora.Observer
+	if !quiet {
 		renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
 		if sessionName != "" {
 			if *fresh && snapshot.Revision > 0 {
@@ -256,10 +271,28 @@ func Run(ctx context.Context, args []string, streams IO) error {
 				renderer.Session(sessionName, snapshot.Revision > 0)
 			}
 		}
-		result, err = agent.RunStateObserved(ctx, state, renderer)
+		observer = renderer
 	}
-	if err != nil {
-		return err
+	input := bufio.NewReader(streams.Stdin)
+	completed := false
+	for {
+		result, err = agent.RunStateObserved(ctx, state, observer)
+		if err == nil {
+			completed = true
+			break
+		}
+		if !errors.Is(err, dora.ErrMaxRounds) ||
+			!streams.StdinIsTerminal || !streams.TerminalProgress {
+			return err
+		}
+		state = dora.State{Messages: result.Messages, Continuation: result.Continuation}
+		keepGoing, promptErr := confirmContinue(input, streams.Stderr)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !keepGoing {
+			break
+		}
 	}
 
 	var saveErr error
@@ -270,11 +303,38 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			Continuation: result.Continuation,
 		})
 	}
-	_, outputErr := fmt.Fprintln(streams.Stdout, result.Content)
+	var outputErr error
+	if completed {
+		_, outputErr = fmt.Fprintln(streams.Stdout, result.Content)
+	}
 	if saveErr != nil {
 		return saveErr
 	}
 	return outputErr
+}
+
+func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {
+	for {
+		if _, err := fmt.Fprint(output, "dora: maximum rounds reached; continue? [y/N] "); err != nil {
+			return false, err
+		}
+		answer, err := input.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("read continuation response: %w", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+			return true, nil
+		case "", "n", "no":
+			return false, nil
+		}
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		if _, err := fmt.Fprintln(output, "Please answer yes or no."); err != nil {
+			return false, err
+		}
+	}
 }
 
 type stringListFlag []string

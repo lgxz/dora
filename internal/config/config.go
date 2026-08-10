@@ -23,7 +23,7 @@ type Config struct {
 
 // Agent configures model-tool loop safeguards.
 type Agent struct {
-	MaxModelCalls int `yaml:"max_model_calls,omitempty"`
+	MaxRounds int `yaml:"max_rounds,omitempty"`
 }
 
 // Model describes one configured model endpoint.
@@ -152,8 +152,8 @@ func (cfg *Config) resolveAndValidate() error {
 	if cfg.Tools.PowerShell.TimeoutSeconds > maxToolTimeoutSeconds {
 		return fmt.Errorf("tools.powershell.timeout_seconds cannot exceed %d", maxToolTimeoutSeconds)
 	}
-	if cfg.Agent.MaxModelCalls < 0 {
-		return errors.New("agent.max_model_calls cannot be negative")
+	if cfg.Agent.MaxRounds < 0 {
+		return errors.New("agent.max_rounds cannot be negative")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

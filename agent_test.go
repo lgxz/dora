@@ -284,7 +284,7 @@ func TestRunWrapsToolError(t *testing.T) {
 	}
 }
 
-func TestRunStopsAfterMaximumModelCalls(t *testing.T) {
+func TestRunStopsAfterMaximumRounds(t *testing.T) {
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		return Response{ToolCalls: []ToolCall{{Name: "again"}}}, nil
 	})
@@ -300,12 +300,12 @@ func TestRunStopsAfterMaximumModelCalls(t *testing.T) {
 	}
 
 	_, err = agent.Run(context.Background(), nil)
-	if !errors.Is(err, ErrMaxModelCalls) {
-		t.Fatalf("error = %v, want %v", err, ErrMaxModelCalls)
+	if !errors.Is(err, ErrMaxRounds) {
+		t.Fatalf("error = %v, want %v", err, ErrMaxRounds)
 	}
 }
 
-func TestRunHonorsConfiguredMaximumModelCalls(t *testing.T) {
+func TestRunHonorsConfiguredMaximumRounds(t *testing.T) {
 	var calls int
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
@@ -317,12 +317,15 @@ func TestRunHonorsConfiguredMaximumModelCalls(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	agent, err := NewWithConfig(model, AgentConfig{MaxModelCalls: 2}, tool)
+	agent, err := NewWithConfig(model, AgentConfig{MaxRounds: 2}, tool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.Run(context.Background(), nil)
-	if !errors.Is(err, ErrMaxModelCalls) || !strings.Contains(err.Error(), "limit 2") || calls != 2 {
+	result, err := agent.Run(context.Background(), nil)
+	if !errors.Is(err, ErrMaxRounds) || !strings.Contains(err.Error(), "limit 2") || calls != 2 {
 		t.Fatalf("error = %v, calls = %d", err, calls)
+	}
+	if len(result.Messages) != 4 {
+		t.Fatalf("messages = %#v, want resumable state", result.Messages)
 	}
 }

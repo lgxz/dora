@@ -448,6 +448,157 @@ tools:
 	}
 }
 
+func TestRunContinuesAfterMaximumRounds(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		switch calls {
+		case 1:
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf continued\"}"}}]}}]}`), nil
+		case 2:
+			messages := body["messages"].([]any)
+			if len(messages) != 3 || messages[2].(map[string]any)["role"] != "tool" {
+				t.Fatalf("resumed messages = %#v", messages)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"finished"}}]}`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+agent:
+  max_rounds: 5
+tools:
+  bash:
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"-q", "--max-rounds", "1", "--config", configPath, "run it"}, IO{
+		Stdin:            strings.NewReader("yes\n"),
+		Stdout:           &stdout,
+		Stderr:           &stderr,
+		StdinIsTerminal:  true,
+		TerminalProgress: true,
+		HTTPClient:       httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || stdout.String() != "finished\n" ||
+		!strings.Contains(stderr.String(), "maximum rounds reached") {
+		t.Fatalf("calls = %d, stdout = %q, stderr = %q", calls, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunDeclinesMaximumRoundsAndSavesSession(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf saved\"}"}}]}}]}`), nil
+	})}
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+agent:
+  max_rounds: 1
+tools:
+  bash:
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, "sessions")
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "-s", "limited", "--config", configPath, "run it"}, IO{
+		Stdin:            strings.NewReader("no\n"),
+		Stdout:           &stdout,
+		Stderr:           io.Discard,
+		StdinIsTerminal:  true,
+		TerminalProgress: true,
+		HTTPClient:       httpClient,
+		SessionDir:       sessionDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := session.New(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("limited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || stdout.Len() != 0 || snapshot.Revision != 1 || len(snapshot.Messages) != 3 {
+		t.Fatalf("calls = %d, stdout = %q, snapshot = %#v", calls, stdout.String(), snapshot)
+	}
+}
+
+func TestRunDoesNotPromptAfterMaximumRoundsWithoutTerminalInput(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf limited\"}"}}]}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+agent:
+  max_rounds: 1
+tools:
+  bash:
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"-q", "--config", configPath, "run it"}, IO{
+		Stdin:            strings.NewReader(""),
+		Stdout:           io.Discard,
+		Stderr:           &stderr,
+		StdinIsTerminal:  false,
+		TerminalProgress: false,
+		HTTPClient:       httpClient,
+	})
+	if !errors.Is(err, dora.ErrMaxRounds) {
+		t.Fatalf("error = %v, want %v", err, dora.ErrMaxRounds)
+	}
+	if strings.Contains(stderr.String(), "continue?") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunRejectsNonPositiveMaximumRoundsFlag(t *testing.T) {
+	err := Run(context.Background(), []string{"--max-rounds", "0", "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "positive integer") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

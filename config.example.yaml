@@ -10,7 +10,7 @@ model:
   # Other presets: openai, trust
 
 agent:
-  max_model_calls: 64
+  max_rounds: 64
 
 # Dora automatically discovers a skills directory beside this file.
 # Add other directories only when needed:

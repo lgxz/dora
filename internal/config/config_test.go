@@ -33,13 +33,13 @@ func TestDefaultUsesDeepSeek(t *testing.T) {
 func TestLoadUsesDeepSeekWhenProviderIsOmitted(t *testing.T) {
 	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
-	path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+	path := writeConfig(t, "agent:\n  max_rounds: 32\n")
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" || cfg.Agent.MaxModelCalls != 32 {
+	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" || cfg.Agent.MaxRounds != 32 {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
@@ -73,7 +73,7 @@ func TestLoadSelectsProviderFromEnvironment(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			clearPresetAPIKeys(t)
 			t.Setenv(test.env, test.key)
-			path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+			path := writeConfig(t, "agent:\n  max_rounds: 32\n")
 
 			cfg, err := Load(path)
 			if err != nil {
@@ -91,7 +91,7 @@ func TestLoadRejectsAmbiguousProviderEnvironment(t *testing.T) {
 	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 	t.Setenv("TRUST_API_KEY", "trust-secret")
-	path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+	path := writeConfig(t, "agent:\n  max_rounds: 32\n")
 
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "model.provider is ambiguous") ||
@@ -383,29 +383,43 @@ model:
   name: test-model
   base_url: http://localhost
 agent:
-  max_model_calls: 96
+  max_rounds: 96
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agent.MaxModelCalls != 96 {
-		t.Fatalf("max model calls = %d", cfg.Agent.MaxModelCalls)
+	if cfg.Agent.MaxRounds != 96 {
+		t.Fatalf("max rounds = %d", cfg.Agent.MaxRounds)
 	}
 }
 
-func TestLoadRejectsNegativeAgentModelCallLimit(t *testing.T) {
+func TestLoadRejectsNegativeAgentRoundLimit(t *testing.T) {
 	path := writeConfig(t, `
 model:
   provider: openai
   name: test-model
   base_url: http://localhost
 agent:
-  max_model_calls: -1
+  max_rounds: -1
 `)
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "cannot be negative") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadRejectsRemovedMaxModelCalls(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai
+agent:
+  max_model_calls: 64
+`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "max_model_calls") {
+		t.Fatalf("error = %v, want unknown max_model_calls", err)
 	}
 }
 

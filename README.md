@@ -146,13 +146,25 @@ out of the configuration file. A non-empty literal key takes precedence over
 `api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
 not require authentication.
 
-Dora allows up to 64 model turns per task by default. Keep the safeguard but
-adjust it for unusually long tool workflows when needed:
+Dora runs up to 64 model-tool rounds per segment by default. Keep the safeguard
+but adjust it for unusually long tool workflows when needed:
 
 ```yaml
 agent:
-  max_model_calls: 96
+  max_rounds: 96
 ```
+
+Override it for one invocation with `--max-rounds`:
+
+```sh
+./dora --max-rounds 96 "Complete a long task"
+```
+
+When the limit is reached with both stdin and stderr attached to a terminal,
+Dora asks whether to continue for another segment. Confirming resumes from the
+completed tool output without replaying work. Declining stops normally and
+saves the partial state of a named session. With piped or redirected I/O, Dora
+does not prompt and returns `dora: maximum rounds exceeded` instead.
 
 Run a one-shot prompt or combine an instruction with piped input:
 
@@ -200,8 +212,8 @@ system. Omit `--session`/`-s` to keep the existing stateless behavior. Session
 files can contain commands and tool output, so treat them as sensitive. Do not
 run two Dora processes against the same session name concurrently.
 
-Use `--config`, `--model`, `--base-url`, `--skills-dir`, or `--no-skills` to
-override the corresponding configuration for one invocation.
+Use `--config`, `--model`, `--base-url`, `--max-rounds`, `--skills-dir`, or
+`--no-skills` to override the corresponding configuration for one invocation.
 
 ### Skills
 

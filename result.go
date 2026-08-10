@@ -7,8 +7,10 @@ type State struct {
 	Continuation string
 }
 
-// Result contains the final assistant text and the complete conversation. The
+// Result contains the assistant text and the complete conversation. The
 // returned state can be passed to a later RunState call to resume it exactly.
+// When a run returns ErrMaxRounds, Result contains the partial state accumulated
+// through the final completed round and Content is empty.
 type Result struct {
 	Content      string
 	Messages     []Message

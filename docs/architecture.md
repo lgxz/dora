@@ -136,7 +136,7 @@ sequenceDiagram
     participant O as Observer
 
     C->>A: RunState(state)
-    loop 最多 MaxModelCalls 次
+    loop 最多 MaxRounds 轮
         A->>O: thinking
         A->>M: Request(messages, tools, continuation)
         M-->>O: content delta（可选）
@@ -162,7 +162,7 @@ sequenceDiagram
 - 模型返回多个工具调用时，按返回顺序串行执行。
 - 两种 API 的内容都可以边接收边显示，但工具必须等整次模型响应完成后才开始执行。
 - 工具执行错误会终止本次任务；工具自身可以选择把命令失败编码成正常结果。例如 Bash 将非零退出码返回给模型，而不是直接终止 Agent。
-- 如果模型持续调用工具，达到 `MaxModelCalls` 后返回明确错误；默认上限为 64。
+- 如果模型持续调用工具，达到 `MaxRounds` 后同时返回 `ErrMaxRounds` 和包含已完成工具输出的可恢复 `Result`；默认上限为 64。CLI 在 stdin 与 stderr 都连接终端时询问是否从该状态继续下一段；用户拒绝时保存命名 session 的部分状态并正常停止。非交互运行保持直接报错，避免管道或自动化任务等待输入。
 - 当前 CLI 不注入系统提示词。`Message` 和两个 API adapter 都支持 `system` role，库调用者可以自行传入。
 
 ## CLI 运行流程
@@ -172,7 +172,7 @@ sequenceDiagram
 1. 解析参数；`--version` 和 `-update` 在读取配置或 prompt 前完成并退出。
 2. 对普通 Agent 运行，从命令参数和标准输入组合用户 prompt。
 3. 解析默认或显式配置路径；默认文件不存在时使用内置 DeepSeek 配置，存在时严格加载 YAML。显式配置文件不存在仍报错。
-4. 应用 `--model`、`--base-url` 等单次覆盖项。
+4. 应用 `--model`、`--base-url`、`--max-rounds` 等单次覆盖项。
 5. 若指定 session，读取快照并校验 provider、API、model 和 base URL。
 6. 根据 `model.api` 创建具体模型适配器；provider 负责提供服务商默认值。
 7. 发现 skills，并按配置创建可用工具。

@@ -6,27 +6,27 @@ import (
 	"fmt"
 )
 
-const defaultMaxModelCalls = 64
+const defaultMaxRounds = 64
 
 var (
-	// ErrMaxModelCalls indicates that a model kept requesting tools without
+	// ErrMaxRounds indicates that a model kept requesting tools without
 	// producing a final response.
-	ErrMaxModelCalls = errors.New("dora: maximum model calls exceeded")
+	ErrMaxRounds = errors.New("dora: maximum rounds exceeded")
 )
 
 // Agent runs the model-tool loop. It is immutable after construction and does
 // not retain conversation state between Run calls.
 type Agent struct {
-	model         Model
-	tools         map[string]Tool
-	specs         []ToolSpec
-	maxModelCalls int
+	model     Model
+	tools     map[string]Tool
+	specs     []ToolSpec
+	maxRounds int
 }
 
 // AgentConfig controls safeguards for the model-tool loop. A zero
-// MaxModelCalls uses the default limit.
+// MaxRounds uses the default limit.
 type AgentConfig struct {
-	MaxModelCalls int
+	MaxRounds int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -39,19 +39,19 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if model == nil {
 		return nil, errors.New("dora: model is nil")
 	}
-	if cfg.MaxModelCalls < 0 {
-		return nil, errors.New("dora: MaxModelCalls cannot be negative")
+	if cfg.MaxRounds < 0 {
+		return nil, errors.New("dora: MaxRounds cannot be negative")
 	}
-	maxModelCalls := cfg.MaxModelCalls
-	if maxModelCalls == 0 {
-		maxModelCalls = defaultMaxModelCalls
+	maxRounds := cfg.MaxRounds
+	if maxRounds == 0 {
+		maxRounds = defaultMaxRounds
 	}
 
 	a := &Agent{
-		model:         model,
-		tools:         make(map[string]Tool, len(tools)),
-		specs:         make([]ToolSpec, 0, len(tools)),
-		maxModelCalls: maxModelCalls,
+		model:     model,
+		tools:     make(map[string]Tool, len(tools)),
+		specs:     make([]ToolSpec, 0, len(tools)),
+		maxRounds: maxRounds,
 	}
 
 	for _, tool := range tools {
@@ -100,7 +100,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 	history := cloneMessages(state.Messages)
 	continuation := state.Continuation
 
-	for range a.maxModelCalls {
+	for range a.maxRounds {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
@@ -169,7 +169,10 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		}
 	}
 
-	return Result{}, fmt.Errorf("%w (limit %d)", ErrMaxModelCalls, a.maxModelCalls)
+	return Result{
+		Messages:     cloneMessages(history),
+		Continuation: continuation,
+	}, fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
 }
 
 func notify(observer Observer, update Update) {
