@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/lgxz/dora/internal/cli"
+	"github.com/muesli/termenv"
+	"golang.org/x/term"
 )
 
 var (
@@ -25,16 +27,32 @@ func main() {
 		report(err)
 		os.Exit(1)
 	}
+	stdoutInfo, err := os.Stdout.Stat()
+	if err != nil {
+		report(err)
+		os.Exit(1)
+	}
 	stderrInfo, err := os.Stderr.Stat()
 	if err != nil {
 		report(err)
 		os.Exit(1)
 	}
 
+	stdoutIsTerminal := stdoutInfo.Mode()&os.ModeCharDevice != 0
+	terminalWidth := 0
+	if stdoutIsTerminal {
+		terminalWidth, _, _ = term.GetSize(int(os.Stdout.Fd()))
+	}
+	colorOutput := stdoutIsTerminal && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+	darkBackground := colorOutput && termenv.HasDarkBackground()
 	err = cli.Run(ctx, os.Args[1:], cli.IO{
 		Stdin:            os.Stdin,
 		Stdout:           os.Stdout,
 		Stderr:           os.Stderr,
+		StdoutIsTerminal: stdoutIsTerminal,
+		TerminalWidth:    terminalWidth,
+		ColorOutput:      colorOutput,
+		DarkBackground:   darkBackground,
 		Version:          versionString(),
 		BuildVersion:     version,
 		StdinIsTerminal:  info.Mode()&os.ModeCharDevice != 0,

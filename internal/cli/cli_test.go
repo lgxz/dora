@@ -1058,6 +1058,62 @@ model:
 	}
 }
 
+func TestRunFormatsMarkdownOnlyForInteractiveOutput(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		terminal  bool
+		raw       bool
+		formatted bool
+	}{
+		{name: "terminal", terminal: true, formatted: true},
+		{name: "raw flag", terminal: true, raw: true},
+		{name: "redirected", terminal: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"# Result\n\nA **useful** answer."}}]}`), nil
+			})}
+			args := []string{"-q", "--config", configPath}
+			if test.raw {
+				args = append(args, "--raw")
+			}
+			args = append(args, "hello")
+			var stdout bytes.Buffer
+			if err := Run(context.Background(), args, IO{
+				Stdin:            strings.NewReader(""),
+				Stdout:           &stdout,
+				Stderr:           io.Discard,
+				StdoutIsTerminal: test.terminal,
+				TerminalWidth:    60,
+				StdinIsTerminal:  true,
+				HTTPClient:       httpClient,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if test.formatted {
+				if !strings.Contains(stdout.String(), "Result") || !strings.Contains(stdout.String(), "useful") ||
+					strings.Contains(stdout.String(), "# Result") || strings.Contains(stdout.String(), "**") {
+					t.Fatalf("formatted stdout = %q", stdout.String())
+				}
+				return
+			}
+			if stdout.String() != "# Result\n\nA **useful** answer.\n" {
+				t.Fatalf("raw stdout = %q", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunContinuesNamedSession(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
