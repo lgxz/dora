@@ -168,7 +168,7 @@ sequenceDiagram
 `internal/cli.Run` 负责一次命令的完整生命周期：
 
 1. 解析参数，从命令参数和标准输入组合用户 prompt。
-2. 解析默认或显式配置路径，严格加载 YAML。
+2. 解析默认或显式配置路径；默认文件不存在时使用内置 DeepSeek 配置，存在时严格加载 YAML。显式配置文件不存在仍报错。
 3. 应用 `--model`、`--base-url` 等单次覆盖项。
 4. 若指定 session，读取快照并校验 provider、API、model 和 base URL。
 5. 根据 `model.api` 创建具体模型适配器；provider 负责提供服务商默认值。
@@ -255,13 +255,13 @@ PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前�
 
 ## 配置与路径
 
-`internal/config` 使用严格 YAML 解码：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。`openai` 与 `deepseek` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。
+`internal/config` 提供内置 DeepSeek 配置，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。`openai` 与 `deepseek` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
 
 `internal/paths` 在所有操作系统上使用统一 XDG 布局：
 
 | 内容 | 默认路径 |
 | --- | --- |
-| 配置 | `${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml` |
+| 可选配置 | `${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml` |
 | Skills | 活动配置文件同级的 `skills/` |
 | Sessions | `${XDG_STATE_HOME:-$HOME/.local/state}/dora/sessions` |
 

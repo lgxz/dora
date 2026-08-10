@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestDefaultUsesDeepSeek(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "deepseek" || cfg.Model.API != "chat_completions" ||
+		cfg.Model.Name != "deepseek-v4-flash" || cfg.Model.BaseURL != "https://api.deepseek.com" ||
+		cfg.Model.APIKey != "deepseek-secret" {
+		t.Fatalf("model = %#v", cfg.Model)
+	}
+	if !cfg.Tools.Bash.Enabled || !cfg.Tools.PowerShell.Enabled {
+		t.Fatalf("tools = %#v", cfg.Tools)
+	}
+}
+
+func TestLoadUsesDeepSeekWhenProviderIsOmitted(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" || cfg.Agent.MaxModelCalls != 32 {
+		t.Fatalf("config = %#v", cfg)
+	}
+}
+
 func TestLoadEnablesBashByDefault(t *testing.T) {
 	path := writeConfig(t, `
 model:

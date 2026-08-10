@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,6 +99,47 @@ func TestRunCallsDeepSeekPreset(t *testing.T) {
 	}
 	if stdout.String() != "deepseek answer\n" {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunUsesDefaultsWhenDefaultConfigIsMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://api.deepseek.com/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer deepseek-secret" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"default answer"}}]}`), nil
+	})}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "default answer\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunRejectsMissingExplicitConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+	err := Run(context.Background(), []string{"-q", "--config", path, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

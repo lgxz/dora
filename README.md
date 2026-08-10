@@ -55,11 +55,14 @@ The release target is equivalent to
 same Go command can be run directly with `build/dora.exe` as the output path
 when `make` is unavailable.
 
-Create the configuration file at
-`${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
-on every operating system, including macOS.
+With `DEEPSEEK_API_KEY` set, Dora runs without a configuration file. It uses
+the built-in `deepseek` provider defaults described below.
 
-You can also place it anywhere and pass `--config path/to/config.yaml`.
+To customize the defaults, create
+`${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
+on every operating system, including macOS. You can also place the file
+anywhere and pass `--config path/to/config.yaml`; an explicitly requested file
+must exist.
 
 ```yaml
 model:

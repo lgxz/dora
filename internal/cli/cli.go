@@ -63,6 +63,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		return err
 	}
+	configExplicit := *configPath != ""
 	if *configPath == "" {
 		defaultConfig, err := paths.ConfigFile()
 		if err != nil {
@@ -81,6 +82,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 
 	cfg, err := config.Load(*configPath)
+	if !configExplicit && errors.Is(err, os.ErrNotExist) {
+		cfg, err = config.Default()
+	}
 	if err != nil {
 		return err
 	}

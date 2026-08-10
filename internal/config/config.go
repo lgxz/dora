@@ -60,8 +60,19 @@ type Skills struct {
 	Directories []string `yaml:"directories,omitempty"`
 }
 
-// Load strictly decodes and validates a YAML configuration file. Environment
-// variable references are resolved before the configuration is returned.
+// Default returns the validated built-in configuration. Environment variable
+// references are resolved before the configuration is returned.
+func Default() (Config, error) {
+	cfg := defaultConfig()
+	if err := cfg.resolveAndValidate(); err != nil {
+		return Config{}, fmt.Errorf("validate default config: %w", err)
+	}
+	return cfg, nil
+}
+
+// Load strictly decodes and validates a YAML configuration file over the
+// built-in defaults. Environment variable references are resolved before the
+// configuration is returned.
 func Load(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -72,10 +83,7 @@ func Load(path string) (Config, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 
-	cfg := Config{Tools: Tools{
-		Bash:       Bash{Enabled: true},
-		PowerShell: PowerShell{Enabled: true},
-	}}
+	cfg := defaultConfig()
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
@@ -92,6 +100,16 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
 	}
 	return cfg, nil
+}
+
+func defaultConfig() Config {
+	return Config{
+		Model: Model{Provider: "deepseek"},
+		Tools: Tools{
+			Bash:       Bash{Enabled: true},
+			PowerShell: PowerShell{Enabled: true},
+		},
+	}
 }
 
 func (cfg *Config) resolveAndValidate() error {
