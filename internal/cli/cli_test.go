@@ -708,6 +708,22 @@ func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	}
 }
 
+func TestRunVersionDoesNotRequireConfigOrPrompt(t *testing.T) {
+	var output bytes.Buffer
+	err := Run(context.Background(), []string{"--version"}, IO{
+		Stdin:   strings.NewReader(""),
+		Stdout:  &output,
+		Stderr:  io.Discard,
+		Version: "dora 1.2.3 (commit abc123, built today)",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "dora 1.2.3 (commit abc123, built today)\n" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRunQuietHidesProgress(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"quiet answer"}}]}`), nil

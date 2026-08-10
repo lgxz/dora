@@ -10,6 +10,12 @@ import (
 	"github.com/lgxz/dora/internal/cli"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -29,6 +35,7 @@ func main() {
 		Stdin:            os.Stdin,
 		Stdout:           os.Stdout,
 		Stderr:           os.Stderr,
+		Version:          versionString(),
 		StdinIsTerminal:  info.Mode()&os.ModeCharDevice != 0,
 		TerminalProgress: stderrInfo.Mode()&os.ModeCharDevice != 0,
 		ColorProgress: stderrInfo.Mode()&os.ModeCharDevice != 0 &&
@@ -38,6 +45,10 @@ func main() {
 		report(err)
 		os.Exit(1)
 	}
+}
+
+func versionString() string {
+	return fmt.Sprintf("dora %s (commit %s, built %s)", version, commit, date)
 }
 
 func report(err error) {

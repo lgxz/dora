@@ -37,6 +37,50 @@ built-in memory, policy engine, middleware, or provider SDK.
 
 ## CLI
 
+### Install
+
+On macOS or Linux, install the latest release with curl:
+
+```sh
+curl -LsSf https://github.com/lgxz/dora/releases/latest/download/dora-installer.sh | sh
+```
+
+Use wget when curl is unavailable:
+
+```sh
+wget -qO- https://github.com/lgxz/dora/releases/latest/download/dora-installer.sh | sh
+```
+
+On Windows, use PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/lgxz/dora/releases/latest/download/dora-installer.ps1 | iex"
+```
+
+The installers download the archive for the current OS and architecture,
+verify it against the release SHA-256 checksums, and install `dora` into
+`$HOME/.local/bin` by default. Set `DORA_INSTALL_DIR` to choose another
+directory:
+
+```sh
+curl -LsSf https://github.com/lgxz/dora/releases/latest/download/dora-installer.sh \
+  | env DORA_INSTALL_DIR=/usr/local/bin sh
+```
+
+Install a specific release by using its tagged installer URL. Each installer
+is pinned to the release that contains it:
+
+```sh
+curl -LsSf https://github.com/lgxz/dora/releases/download/v0.1.0/dora-installer.sh | sh
+```
+
+Run `dora --version` to inspect the installed version, source commit, and build
+date. Re-run the latest installer to upgrade. Release archives and checksums
+remain available on the GitHub Releases page for manual installation and
+verification.
+
+### Build from source
+
 Build the command with debug information:
 
 ```sh
@@ -50,10 +94,10 @@ smaller distribution binary without symbol and DWARF debug data, use:
 make release
 ```
 
-The release target is equivalent to
-`go build -trimpath -ldflags="-s -w" -o build/dora ./cmd/dora`. On Windows the
-same Go command can be run directly with `build/dora.exe` as the output path
-when `make` is unavailable.
+The release target uses `-trimpath`, strips debug data, and embeds the version,
+commit, and build date. Override `VERSION`, `COMMIT`, or `BUILD_DATE` when
+needed. On Windows the equivalent Go command can be run directly with
+`build/dora.exe` as the output path when `make` is unavailable.
 
 With `DEEPSEEK_API_KEY` set, Dora runs without a configuration file. It uses
 the built-in `deepseek` provider defaults described below.
@@ -210,6 +254,21 @@ mv "$HOME/Library/Application Support/dora/sessions" "$HOME/.local/state/dora/se
 Skip any `mv` command whose source does not exist. If an XDG environment
 variable is set, use its directory instead of the fallback destination shown
 above.
+
+## Releasing
+
+Pushing a semantic version tag runs the release workflow:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow runs the full validation, renders installers pinned to the tag,
+and uses GoReleaser to publish static archives for Linux, macOS, and Windows on
+amd64 and arm64. It also publishes `checksums.txt`; public repositories receive
+GitHub build provenance attestations. Tags that do not match semantic version
+syntax fail before publishing.
 
 ### Command tools
 

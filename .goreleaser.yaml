@@ -1,0 +1,57 @@
+version: 2
+
+project_name: dora
+
+builds:
+  - id: dora
+    main: ./cmd/dora
+    binary: dora
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - ids:
+      - dora
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: dora-{{ .Os }}-{{ .Arch }}
+    files:
+      - none*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  extra_files:
+    - glob: ./.release/dora-installer.sh
+    - glob: ./.release/dora-installer.ps1
+
+release:
+  extra_files:
+    - glob: ./.release/dora-installer.sh
+    - glob: ./.release/dora-installer.ps1
+
+changelog:
+  use: git
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'

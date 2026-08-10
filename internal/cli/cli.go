@@ -31,6 +31,7 @@ type IO struct {
 	Stdin            io.Reader
 	Stdout           io.Writer
 	Stderr           io.Writer
+	Version          string
 	StdinIsTerminal  bool
 	TerminalProgress bool
 	ColorProgress    bool
@@ -45,6 +46,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	showVersion := flags.Bool("version", false, "print version information")
 	var commandSkillDirectories stringListFlag
 	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
@@ -64,6 +66,14 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+		return err
+	}
+	if *showVersion {
+		version := streams.Version
+		if version == "" {
+			version = "dora dev (commit none, built unknown)"
+		}
+		_, err := fmt.Fprintln(streams.Stdout, version)
 		return err
 	}
 	configExplicit := *configPath != ""
