@@ -228,7 +228,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if !*noSkills {
 		additionalSkillDirectories := append([]string(nil), cfg.Skills.Directories...)
 		additionalSkillDirectories = append(additionalSkillDirectories, commandSkillDirectories...)
-		skillDirectories, err := configuredSkillDirectories(*configPath, additionalSkillDirectories)
+		skillDirectories, err := configuredSkillDirectories(additionalSkillDirectories)
 		if err != nil {
 			return err
 		}
@@ -375,8 +375,8 @@ func (values *stringListFlag) String() string {
 	return strings.Join(*values, ",")
 }
 
-func configuredSkillDirectories(configPath string, additional []string) ([]string, error) {
-	defaultDirectory, err := paths.SkillsDir(configPath)
+func configuredSkillDirectories(additional []string) ([]string, error) {
+	defaultDirectory, err := paths.SkillsDir()
 	if err != nil {
 		return nil, err
 	}

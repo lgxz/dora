@@ -144,6 +144,7 @@ func TestRunCallsTrustPreset(t *testing.T) {
 
 func TestRunUsesDefaultsWhenDefaultConfigIsMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("DORA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("TRUST_API_KEY", "")
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
@@ -174,6 +175,7 @@ func TestRunUsesDefaultsWhenDefaultConfigIsMissing(t *testing.T) {
 
 func TestRunSelectsTrustFromEnvironmentWhenDefaultConfigIsMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("DORA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("TRUST_API_KEY", "trust-secret")
@@ -309,6 +311,7 @@ func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 	})}
 
 	root := t.TempDir()
+	t.Setenv("DORA_HOME", root)
 	skillDir := filepath.Join(root, "skills", "winuse")
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -390,6 +393,7 @@ func TestReadPromptCombinesInstructionAndPipe(t *testing.T) {
 }
 
 func TestRunExecutesEnabledBashTool(t *testing.T) {
+	t.Setenv("DORA_HOME", t.TempDir())
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
@@ -601,6 +605,7 @@ func TestRunRejectsNonPositiveMaximumRoundsFlag(t *testing.T) {
 
 func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("DORA_HOME", t.TempDir())
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -663,6 +668,7 @@ tools:
 }
 
 func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
+	t.Setenv("DORA_HOME", t.TempDir())
 	bin := t.TempDir()
 	for _, name := range []string{"bash", "pwsh", "pwsh.exe"} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("placeholder"), 0o755); err != nil {
@@ -715,7 +721,7 @@ tools:
 	}
 }
 
-func TestRunLoadsSkillBesideConfig(t *testing.T) {
+func TestRunLoadsSkillFromDoraHome(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
@@ -745,6 +751,7 @@ func TestRunLoadsSkillBesideConfig(t *testing.T) {
 	})}
 
 	root := t.TempDir()
+	t.Setenv("DORA_HOME", root)
 	skillRoot := filepath.Join(root, "skills")
 	skillDir := filepath.Join(skillRoot, "system-status")
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
@@ -797,6 +804,7 @@ func TestRunIgnoresEmptyDefaultSkillDirectory(t *testing.T) {
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"no skills"}}]}`), nil
 	})}
 	root := t.TempDir()
+	t.Setenv("DORA_HOME", root)
 	if err := os.Mkdir(filepath.Join(root, "skills"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -905,6 +913,7 @@ tools:
 
 func TestRunNoSkillsDisablesEverySkillSource(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("DORA_HOME", root)
 	writeCLITestSkill(t, filepath.Join(root, "skills"), "default-skill")
 	missing := filepath.Join(root, "missing")
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

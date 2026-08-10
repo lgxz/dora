@@ -27,14 +27,14 @@ func SessionsDir() (string, error) {
 	return filepath.Join(home, "sessions"), nil
 }
 
-// SkillsDir returns the default skills directory beside the active
-// configuration file.
-func SkillsDir(configFile string) (string, error) {
-	absolute, err := filepath.Abs(configFile)
+// SkillsDir returns Dora's default directory for skills. It lives at
+// <doraHome>/skills.
+func SkillsDir() (string, error) {
+	home, err := doraHome()
 	if err != nil {
-		return "", fmt.Errorf("resolve config path for skills: %w", err)
+		return "", err
 	}
-	return filepath.Join(filepath.Dir(absolute), "skills"), nil
+	return filepath.Join(home, "skills"), nil
 }
 
 // doraHome returns Dora's home directory. It uses the DORA_HOME environment

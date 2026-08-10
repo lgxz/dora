@@ -302,8 +302,8 @@ description: Analyze CPU, memory, disk, and busy processes.
 Inspect the machine methodically and summarize actionable findings.
 ```
 
-By default, Dora discovers the `skills` directory beside the active
-`config.yaml`. With the default config path, that is `~/.dora/skills`. No
+By default, Dora discovers the `skills` directory at `~/.dora/skills` (or
+`DORA_HOME/skills`), independent of the active `config.yaml` path. No
 configuration is needed.
 
 Use `skills.directories` only to add more parent directories:

@@ -73,15 +73,31 @@ func TestRejectsRelativeDoraHome(t *testing.T) {
 	}
 }
 
-func TestSkillsDirIsBesideActiveConfig(t *testing.T) {
-	config := filepath.Join(t.TempDir(), "profile", "dora.yaml")
+func TestSkillsDirUsesDoraHome(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DORA_HOME", root)
 
-	dir, err := SkillsDir(config)
+	path, err := SkillsDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(filepath.Dir(config), "skills")
-	if dir != want {
-		t.Fatalf("directory = %q, want %q", dir, want)
+	want := filepath.Join(root, "skills")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+}
+
+func TestSkillsDirFallsBackToHomeDotDora(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DORA_HOME", "")
+
+	path, err := SkillsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".dora", "skills")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
 	}
 }

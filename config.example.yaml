@@ -12,7 +12,8 @@ model:
 agent:
   max_rounds: 64
 
-# Dora automatically discovers a skills directory beside this file.
+# Dora automatically discovers a skills directory at ~/.dora/skills
+# (or DORA_HOME/skills), independent of this file's location.
 # Add other directories only when needed:
 # skills:
 #   directories:

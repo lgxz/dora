@@ -234,7 +234,7 @@ CLI 的标准输出只承载最终结果；运行过程和错误写到标准错�
 
 Skill 是一个工具，而不是启动时直接拼入 prompt 的文本。这样模型最初只看到 skill 名称和描述，判断相关后才调用 `skill` 工具加载完整内容。
 
-默认发现活动配置文件旁边的 `skills/`，配置和可重复的 `--skills-dir` 参数还可以添加其他父目录。所有来源转为绝对路径后去重；`--no-skills` 优先于所有来源并完全禁用 skill。每个直接子目录必须包含合法的 `SKILL.md`：
+默认发现 `~/.dora/skills`（或 `DORA_HOME/skills`），配置和可重复的 `--skills-dir` 参数还可以添加其他父目录。所有来源转为绝对路径后去重；`--no-skills` 优先于所有来源并完全禁用 skill。每个直接子目录必须包含合法的 `SKILL.md`：
 
 - YAML front matter 只允许 `name` 和 `description`；
 - skill 名称必须与目录名一致并全局唯一；
@@ -274,7 +274,7 @@ Bash 与 PowerShell 保持独立的公开工具及 shell 启动策略，并共�
 | 内容 | 默认路径 |
 | --- | --- |
 | 可选配置 | `~/.dora/config.yaml` |
-| Skills | 活动配置文件同级的 `skills/` |
+| Skills | `~/.dora/skills` |
 | Sessions | `~/.dora/sessions` |
 
 `DORA_HOME` 环境变量可以覆盖主目录，且必须是绝对路径。显式 `--config` 不依赖默认配置路径，可以完全覆盖它。
