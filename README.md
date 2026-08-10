@@ -91,6 +91,10 @@ available on the GitHub Releases page for manual installation and verification.
 
 ### Build from source
 
+Building Dora requires Go 1.25 or newer. CI checks both the minimum supported
+Go 1.25 line and the current Go 1.26 line; release binaries use the latest Go
+1.26 patch release.
+
 Build the command with debug information:
 
 ```sh
