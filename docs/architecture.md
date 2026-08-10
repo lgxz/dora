@@ -30,11 +30,15 @@ flowchart TD
     CLI --> Bash["tool/bash<br/>Bash 工具"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell 工具"]
 
+    Bash --> CommandExec["tool/internal/commandexec<br/>命令执行内核"]
+    PowerShell --> CommandExec
+
     OpenAI -->|"StreamingModel"| Core
     Responses -->|"StreamingModel"| Core
     Skill -->|"Tool"| Core
     Bash -->|"Tool"| Core
     PowerShell -->|"Tool"| Core
+    CommandExec -->|"Tool"| Core
     Progress -->|"Observer"| Core
     Session -->|"Message / State"| Core
 ```
@@ -63,6 +67,7 @@ flowchart TD
 | `skill` | 发现并校验本地 `SKILL.md`，按需向模型返回完整指令 | `New`，返回 `dora.Tool` |
 | `tool/bash` | 在当前目录及超时和输出上限约束内执行 Bash | `New`、`Tool.Spec`、`Tool.Execute` |
 | `tool/powershell` | 使用 `pwsh` 或 `powershell.exe` 执行 PowerShell | `New`、`Tool.Spec`、`Tool.Execute` |
+| `tool/internal/commandexec` | 为命令工具实现输入校验、超时、取消、输出限制和结构化结果 | `New`、`Tool.Spec`、`Tool.Execute` |
 
 ## 核心接口
 
@@ -257,6 +262,8 @@ Bash 不是安全沙箱。启用它等于允许模型以 Dora 进程的系统权
 PowerShell 是与 Bash 分离的 `powershell` 工具，输入 Schema 同样只接受 `command`，避免模型把两种 shell 的语法混在一次调用中。它在 Windows 上自动启用，在其他平台上自动禁用，并依次寻找 `pwsh`、`powershell.exe`。自动模式下两者都不存在时 CLI 跳过该工具；显式启用时则报错。只有用户显式覆盖平台策略时，Bash 与 PowerShell 才可能同时暴露。
 
 PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前目录执行命令，切换目录时由模型在命令内使用 `Set-Location`。它与 Bash 使用相同的 30 秒配置默认超时、1 至 3600 秒的单次调用覆盖范围、输出限制和结构化结果，同样不是安全沙箱。
+
+Bash 与 PowerShell 保持独立的公开工具及 shell 启动策略，并共同委托 `tool/internal/commandexec` 执行输入校验、超时和取消、进程运行、输出截断以及结果编码。该内部包不能被模块外部导入。
 
 ## 配置与路径
 
