@@ -15,6 +15,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/session"
+	"github.com/lgxz/dora/internal/update"
 )
 
 func TestMain(m *testing.M) {
@@ -289,6 +290,12 @@ model:
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+type updaterFunc func(context.Context) (update.Result, error)
+
+func (function updaterFunc) Update(ctx context.Context) (update.Result, error) {
+	return function(ctx)
+}
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
@@ -720,6 +727,42 @@ func TestRunVersionDoesNotRequireConfigOrPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if output.String() != "dora 1.2.3 (commit abc123, built today)\n" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRunUpdateDoesNotRequireConfigOrPrompt(t *testing.T) {
+	var output bytes.Buffer
+	err := Run(context.Background(), []string{"-update"}, IO{
+		Stdin:  strings.NewReader(""),
+		Stdout: &output,
+		Stderr: io.Discard,
+		Updater: updaterFunc(func(context.Context) (update.Result, error) {
+			return update.Result{Current: "1.0.0", Latest: "1.1.0", Updated: true}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "Updated dora 1.0.0 -> 1.1.0\n" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRunUpdateReportsCurrentVersion(t *testing.T) {
+	var output bytes.Buffer
+	err := Run(context.Background(), []string{"--update"}, IO{
+		Stdin:  strings.NewReader(""),
+		Stdout: &output,
+		Stderr: io.Discard,
+		Updater: updaterFunc(func(context.Context) (update.Result, error) {
+			return update.Result{Current: "1.1.0", Latest: "1.1.0"}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "dora 1.1.0 is already up to date\n" {
 		t.Fatalf("output = %q", output.String())
 	}
 }

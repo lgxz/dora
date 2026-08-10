@@ -17,6 +17,7 @@ import (
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/internal/session"
+	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/model/openai"
 	"github.com/lgxz/dora/model/openairesponses"
 	"github.com/lgxz/dora/skill"
@@ -26,17 +27,23 @@ import (
 
 const maxStdinBytes = 16 << 20
 
+type updater interface {
+	Update(context.Context) (update.Result, error)
+}
+
 // IO contains the command's input and output streams.
 type IO struct {
 	Stdin            io.Reader
 	Stdout           io.Writer
 	Stderr           io.Writer
 	Version          string
+	BuildVersion     string
 	StdinIsTerminal  bool
 	TerminalProgress bool
 	ColorProgress    bool
 	HTTPClient       *http.Client
 	SessionDir       string
+	Updater          updater
 }
 
 // Run executes the dora command.
@@ -47,6 +54,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
 	showVersion := flags.Bool("version", false, "print version information")
+	performUpdate := flags.Bool("update", false, "update a standalone installation")
 	var commandSkillDirectories stringListFlag
 	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
@@ -74,6 +82,31 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			version = "dora dev (commit none, built unknown)"
 		}
 		_, err := fmt.Fprintln(streams.Stdout, version)
+		return err
+	}
+	if *performUpdate {
+		if len(flags.Args()) != 0 {
+			return errors.New("-update does not accept a prompt")
+		}
+		updater := streams.Updater
+		if updater == nil {
+			updater = update.New(update.Config{
+				CurrentVersion: streams.BuildVersion,
+				HTTPClient:     streams.HTTPClient,
+			})
+		}
+		if _, err := fmt.Fprintln(streams.Stderr, "dora: checking for updates"); err != nil {
+			return err
+		}
+		result, err := updater.Update(ctx)
+		if err != nil {
+			return err
+		}
+		if result.Updated {
+			_, err = fmt.Fprintf(streams.Stdout, "Updated dora %s -> %s\n", result.Current, result.Latest)
+		} else {
+			_, err = fmt.Fprintf(streams.Stdout, "dora %s is already up to date\n", result.Current)
+		}
 		return err
 	}
 	configExplicit := *configPath != ""

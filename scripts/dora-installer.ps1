@@ -37,6 +37,7 @@ $ReleaseBase = if ($env:DORA_RELEASE_BASE_URL) {
 $ReleaseUrl = "$ReleaseBase/$Version"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("dora-installer-" + [guid]::NewGuid())
 $TempTarget = $null
+$TempMarker = $null
 
 try {
     New-Item -ItemType Directory -Path $TempDir | Out-Null
@@ -68,9 +69,17 @@ try {
     $InstallDir = (Resolve-Path $InstallDir).Path
     $Destination = Join-Path $InstallDir "dora.exe"
     $TempTarget = Join-Path $InstallDir ".dora-installer-$PID.exe"
+    $TempMarker = Join-Path $InstallDir ".dora-install-$PID"
     Copy-Item $Binary $TempTarget -Force
+    [System.IO.File]::WriteAllText(
+        $TempMarker,
+        '{"schema":1,"repository":"lgxz/dora"}',
+        [System.Text.UTF8Encoding]::new($false)
+    )
     Move-Item $TempTarget $Destination -Force
     $TempTarget = $null
+    Move-Item $TempMarker (Join-Path $InstallDir ".dora-install.json") -Force
+    $TempMarker = $null
 
     Write-InstallerMessage "installed $Destination"
     & $Destination --version
@@ -82,6 +91,9 @@ try {
 } finally {
     if ($TempTarget -and (Test-Path $TempTarget)) {
         Remove-Item $TempTarget -Force
+    }
+    if ($TempMarker -and (Test-Path $TempMarker)) {
+        Remove-Item $TempMarker -Force
     }
     if (Test-Path $TempDir) {
         Remove-Item $TempDir -Recurse -Force

@@ -75,9 +75,19 @@ curl -LsSf https://github.com/lgxz/dora/releases/download/v0.1.0/dora-installer.
 ```
 
 Run `dora --version` to inspect the installed version, source commit, and build
-date. Re-run the latest installer to upgrade. Release archives and checksums
-remain available on the GitHub Releases page for manual installation and
-verification.
+date. Standalone releases that include self-update support can update themselves:
+
+```sh
+dora -update
+```
+
+The updater checks the latest stable GitHub Release, verifies its archive
+against `checksums.txt`, validates the downloaded executable, and replaces the
+current binary with rollback on failure. Go builds, manual archive installs,
+and package-manager installs remain unmanaged; upgrade those through
+their original installation method. Re-run the latest installer once to enable
+self-update on an older installation. Release archives and checksums remain
+available on the GitHub Releases page for manual installation and verification.
 
 ### Build from source
 

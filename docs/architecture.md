@@ -21,6 +21,7 @@ flowchart TD
     CLI --> Config["internal/config<br/>YAML 配置"]
     CLI --> Paths["internal/paths<br/>XDG 路径"]
     CLI --> Session["internal/session<br/>会话快照"]
+    CLI --> Update["internal/update<br/>standalone 自更新"]
     CLI --> Progress["internal/progress<br/>终端进度"]
     CLI --> Core["dora<br/>Agent 核心"]
     CLI --> OpenAI["model/openai<br/>Chat Completions"]
@@ -55,6 +56,7 @@ flowchart TD
 | `internal/config` | 严格读取、解析和校验 YAML 配置 | `Load(string)` |
 | `internal/paths` | 在所有平台解析统一的 XDG 默认路径 | `ConfigFile`、`SessionsDir`、`SkillsDir` |
 | `internal/session` | 持久化具名会话，校验版本和并发 revision | `New`、`Store.Load`、`Store.Revision`、`Store.Save` |
+| `internal/update` | 查询稳定 Release、验证归档并可回滚地替换 standalone 二进制 | `New`、`Service.Update` |
 | `internal/progress` | 将语义化运行事件渲染成终端输出 | `New`、`Renderer.Observe` |
 | `model/openai` | OpenAI-compatible Chat Completions SSE 协议适配 | `New`、`Client.GenerateStream` |
 | `model/openairesponses` | Responses API、SSE 流和 provider continuation 适配 | `New`、`Client.GenerateStream` |
@@ -167,19 +169,22 @@ sequenceDiagram
 
 `internal/cli.Run` 负责一次命令的完整生命周期：
 
-1. 解析参数，从命令参数和标准输入组合用户 prompt。
-2. 解析默认或显式配置路径；默认文件不存在时使用内置 DeepSeek 配置，存在时严格加载 YAML。显式配置文件不存在仍报错。
-3. 应用 `--model`、`--base-url` 等单次覆盖项。
-4. 若指定 session，读取快照并校验 provider、API、model 和 base URL。
-5. 根据 `model.api` 创建具体模型适配器；provider 负责提供服务商默认值。
-6. 发现 skills，并按配置创建可用工具。
-7. 构造无状态的 `dora.Agent`。
-8. 将历史消息和本次用户消息组成 `State`，执行 Agent。
-9. 成功后原子保存 session，并将最终文本写到标准输出。
+1. 解析参数；`--version` 和 `-update` 在读取配置或 prompt 前完成并退出。
+2. 对普通 Agent 运行，从命令参数和标准输入组合用户 prompt。
+3. 解析默认或显式配置路径；默认文件不存在时使用内置 DeepSeek 配置，存在时严格加载 YAML。显式配置文件不存在仍报错。
+4. 应用 `--model`、`--base-url` 等单次覆盖项。
+5. 若指定 session，读取快照并校验 provider、API、model 和 base URL。
+6. 根据 `model.api` 创建具体模型适配器；provider 负责提供服务商默认值。
+7. 发现 skills，并按配置创建可用工具。
+8. 构造无状态的 `dora.Agent`。
+9. 将历史消息和本次用户消息组成 `State`，执行 Agent。
+10. 成功后原子保存 session，并将最终文本写到标准输出。
 
 CLI 的标准输出只承载最终结果；运行过程和错误写到标准错误，因此结果可以安全地用于管道。
 
-`cli.IO` 将标准流、终端能力、HTTP client 和测试 session 目录作为依赖注入，使 CLI 无需依赖进程全局状态即可测试。
+`cli.IO` 将标准流、构建版本、终端能力、HTTP client、测试 updater 和 session 目录作为依赖注入，使 CLI 无需依赖进程全局状态即可测试。
+
+`internal/update` 只更新由 standalone installer 写入同目录标记的二进制。它从 GitHub 获取最新稳定 Release，按运行平台选择归档，使用 `checksums.txt` 验证 SHA-256，并在同目录暂存和运行新版 `--version`。验证成功后通过同目录 rename 切换二进制；安装失败时尝试回滚，并用排他标记拒绝并发更新。开发构建、手工复制和包管理器安装不会被修改。
 
 ## 模型适配器
 

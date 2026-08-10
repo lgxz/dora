@@ -77,6 +77,10 @@ cp "$DORA_TEST_RELEASE_DIR/${url##*/}" "$output"
 		!strings.Contains(string(powerShellInstaller), `"v1.2.3"`) {
 		t.Fatalf("PowerShell installer was not pinned: %s", powerShellInstaller)
 	}
+	if !strings.Contains(string(powerShellInstaller), `.dora-install.json`) ||
+		!strings.Contains(string(powerShellInstaller), `"repository":"lgxz/dora"`) {
+		t.Fatalf("PowerShell installer does not write the standalone marker: %s", powerShellInstaller)
+	}
 	invalidRender := exec.Command("sh", "scripts/render-installers.sh", "v1", filepath.Join(root, "invalid"))
 	if err := invalidRender.Run(); err == nil {
 		t.Fatal("invalid release version was accepted")
@@ -104,6 +108,13 @@ cp "$DORA_TEST_RELEASE_DIR/${url##*/}" "$output"
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("installed mode = %v", info.Mode())
+	}
+	marker, err := os.ReadFile(filepath.Join(home, ".local", "bin", ".dora-install.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(marker) != "{\"schema\":1,\"repository\":\"lgxz/dora\"}\n" {
+		t.Fatalf("install marker = %q", marker)
 	}
 }
 

@@ -36,6 +36,7 @@ func main() {
 		Stdout:           os.Stdout,
 		Stderr:           os.Stderr,
 		Version:          versionString(),
+		BuildVersion:     version,
 		StdinIsTerminal:  info.Mode()&os.ModeCharDevice != 0,
 		TerminalProgress: stderrInfo.Mode()&os.ModeCharDevice != 0,
 		ColorProgress: stderrInfo.Mode()&os.ModeCharDevice != 0 &&

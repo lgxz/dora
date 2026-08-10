@@ -57,6 +57,8 @@ Both packages translate their wire protocol to and from the types in the root
 - `internal/paths/`: cross-platform XDG configuration, skill, and session paths.
 - `internal/session/`: versioned JSON session snapshots, atomic replacement,
   and revision conflict detection.
+- `internal/update/`: standalone-install provenance checks, GitHub release
+  discovery, checksum validation, and rollback-capable executable replacement.
 - `internal/progress/`: concise terminal rendering of `dora.Observer` updates.
 
 ### Documentation and examples

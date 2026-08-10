@@ -57,10 +57,14 @@ release_url=$release_base/$version
 
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dora-installer.XXXXXX")
 temp_target=
+temp_marker=
 cleanup() {
     rm -rf "$temp_dir"
     if [ -n "$temp_target" ]; then
         rm -f "$temp_target"
+    fi
+    if [ -n "$temp_marker" ]; then
+        rm -f "$temp_marker"
     fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -90,10 +94,15 @@ tar -xzf "$temp_dir/$archive" -C "$temp_dir"
 mkdir -p "$install_dir"
 install_dir=$(cd "$install_dir" && pwd -P)
 temp_target=$install_dir/.dora-installer.$$
+temp_marker=$install_dir/.dora-install.$$
 cp "$temp_dir/dora" "$temp_target"
 chmod 0755 "$temp_target"
+printf '%s\n' '{"schema":1,"repository":"lgxz/dora"}' >"$temp_marker"
+chmod 0644 "$temp_marker"
 mv -f "$temp_target" "$install_dir/dora"
 temp_target=
+mv -f "$temp_marker" "$install_dir/.dora-install.json"
+temp_marker=
 
 say "installed $install_dir/dora"
 "$install_dir/dora" --version
