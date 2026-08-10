@@ -260,7 +260,7 @@ PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command` 在 Dora 当前�
 
 ## 配置与路径
 
-`internal/config` 提供内置 DeepSeek 配置，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。命令工具的 `enabled` 是三态配置：缺省时由 CLI 应用平台策略，显式 `true` 或 `false` 完全覆盖。`openai`、`deepseek` 与 `trust` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
+`internal/config` 提供内置 provider preset，并使用严格 YAML 解码覆盖默认值：未知字段、多文档、非法 provider、非法 API 类型和负数限制都会报错。provider 缺省时，配置层直接复用 preset 中的 API key 环境变量映射：仅一个环境变量非空则选择对应 provider，多个非空则要求显式选择，全部为空则回退 DeepSeek。命令工具的 `enabled` 是三态配置：缺省时由 CLI 应用平台策略，显式 `true` 或 `false` 完全覆盖。`openai`、`deepseek` 与 `trust` provider 提供各自的 endpoint、model 和 API key 环境变量默认值；显式字段覆盖默认值。API key 可以直接配置，也可以运行时从指定环境变量读取，非空的直接配置优先。默认配置路径不存在时 CLI 直接使用内置配置；显式 `--config` 不会静默回退。
 
 `internal/paths` 在所有操作系统上使用统一 XDG 布局：
 

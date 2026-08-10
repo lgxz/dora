@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -102,13 +104,14 @@ func Load(path string) (Config, error) {
 }
 
 func defaultConfig() Config {
-	return Config{
-		Model: Model{Provider: "deepseek"},
-	}
+	return Config{}
 }
 
 func (cfg *Config) resolveAndValidate() error {
 	model := &cfg.Model
+	if err := model.selectProvider(); err != nil {
+		return err
+	}
 	preset, ok := modelPresets[model.Provider]
 	if !ok {
 		return errors.New(`model.provider must be "openai", "deepseek", or "trust"`)
@@ -156,6 +159,33 @@ func (cfg *Config) resolveAndValidate() error {
 		if directory == "" {
 			return fmt.Errorf("skills.directories[%d] cannot be empty", index)
 		}
+	}
+	return nil
+}
+
+func (model *Model) selectProvider() error {
+	if model.Provider != "" {
+		return nil
+	}
+
+	var detected []string
+	for provider, preset := range modelPresets {
+		if value, ok := os.LookupEnv(preset.apiKeyEnv); ok && value != "" {
+			detected = append(detected, provider)
+		}
+	}
+	sort.Strings(detected)
+
+	switch len(detected) {
+	case 0:
+		model.Provider = "deepseek"
+	case 1:
+		model.Provider = detected[0]
+	default:
+		return fmt.Errorf(
+			"model.provider is ambiguous: API key environment variables for %s are set; configure model.provider explicitly",
+			strings.Join(detected, ", "),
+		)
 	}
 	return nil
 }

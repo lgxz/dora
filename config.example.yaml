@@ -1,4 +1,6 @@
 model:
+  # Omit provider to select the sole provider whose API key environment
+  # variable is set. Multiple detected providers require an explicit choice.
   provider: deepseek
   # Defaults shown for reference:
   # api: chat_completions

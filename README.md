@@ -109,8 +109,12 @@ commit, and build date. Override `VERSION`, `COMMIT`, or `BUILD_DATE` when
 needed. On Windows the equivalent Go command can be run directly with
 `build/dora.exe` as the output path when `make` is unavailable.
 
-With `DEEPSEEK_API_KEY` set, Dora runs without a configuration file. It uses
-the built-in `deepseek` provider defaults described below.
+With exactly one supported provider API key set, Dora runs without a
+configuration file and selects that provider automatically. For example,
+`DEEPSEEK_API_KEY` selects `deepseek`, `OPENAI_API_KEY` selects `openai`, and
+`TRUST_API_KEY` selects `trust`. If multiple provider keys are set, configure
+`model.provider` explicitly. If none are set, Dora retains `deepseek` as the
+fallback and reports that `DEEPSEEK_API_KEY` is missing.
 
 To customize the defaults, create
 `${XDG_CONFIG_HOME:-$HOME/.config}/dora/config.yaml`. Dora uses this XDG layout
@@ -122,6 +126,10 @@ must exist.
 model:
   provider: deepseek
 ```
+
+An explicit provider always takes precedence over environment-based selection.
+The same automatic selection applies when a configuration file exists but
+omits `model.provider`.
 
 The `deepseek` preset defaults to the `chat_completions` API,
 `deepseek-v4-flash`, `https://api.deepseek.com`, and `DEEPSEEK_API_KEY`. The

@@ -7,7 +7,13 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	_ = os.Setenv("OPENAI_API_KEY", "test-secret")
+	os.Exit(m.Run())
+}
+
 func TestDefaultUsesDeepSeek(t *testing.T) {
+	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 
 	cfg, err := Default()
@@ -25,6 +31,7 @@ func TestDefaultUsesDeepSeek(t *testing.T) {
 }
 
 func TestLoadUsesDeepSeekWhenProviderIsOmitted(t *testing.T) {
+	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 	path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
 
@@ -34,6 +41,76 @@ func TestLoadUsesDeepSeekWhenProviderIsOmitted(t *testing.T) {
 	}
 	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" || cfg.Agent.MaxModelCalls != 32 {
 		t.Fatalf("config = %#v", cfg)
+	}
+}
+
+func TestLoadSelectsProviderFromEnvironment(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		env      string
+		key      string
+		provider string
+		model    string
+		baseURL  string
+	}{
+		{
+			name:     "openai",
+			env:      "OPENAI_API_KEY",
+			key:      "openai-secret",
+			provider: "openai",
+			model:    "gpt-5",
+			baseURL:  "https://api.openai.com/v1",
+		},
+		{
+			name:     "trust",
+			env:      "TRUST_API_KEY",
+			key:      "trust-secret",
+			provider: "trust",
+			model:    "auto",
+			baseURL:  "https://api.trustoken.cn/v1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv(test.env, test.key)
+			path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model.Provider != test.provider || cfg.Model.Name != test.model ||
+				cfg.Model.BaseURL != test.baseURL || cfg.Model.APIKey != test.key {
+				t.Fatalf("model = %#v", cfg.Model)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAmbiguousProviderEnvironment(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("TRUST_API_KEY", "trust-secret")
+	path := writeConfig(t, "agent:\n  max_model_calls: 32\n")
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "model.provider is ambiguous") ||
+		!strings.Contains(err.Error(), "deepseek, trust") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadFallsBackToDeepSeekWithoutProviderEnvironment(t *testing.T) {
+	clearPresetAPIKeys(t)
+	path := writeConfig(t, "model:\n  api_key: literal-secret\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" ||
+		cfg.Model.APIKey != "literal-secret" {
+		t.Fatalf("model = %#v", cfg.Model)
 	}
 }
 
@@ -391,10 +468,16 @@ model:
 
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
-	t.Setenv("OPENAI_API_KEY", "test-secret")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func clearPresetAPIKeys(t *testing.T) {
+	t.Helper()
+	for _, preset := range modelPresets {
+		t.Setenv(preset.apiKeyEnv, "")
+	}
 }
