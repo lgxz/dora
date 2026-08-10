@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 const maxEventBytes = 4 << 20

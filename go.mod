@@ -1,4 +1,4 @@
-module dora
+module github.com/lgxz/dora
 
 go 1.22
 

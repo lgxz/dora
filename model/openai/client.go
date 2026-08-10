@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 const maxResponseBytes = 4 << 20

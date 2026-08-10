@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 func TestGenerateStreamMapsRequestAndEvents(t *testing.T) {

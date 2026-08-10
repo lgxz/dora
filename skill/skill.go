@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dora"
+	"github.com/lgxz/dora"
 	"gopkg.in/yaml.v3"
 )
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 func TestStoreRoundTrip(t *testing.T) {

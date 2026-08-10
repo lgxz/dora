@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 const (

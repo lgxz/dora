@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
-	"dora"
-	"dora/internal/config"
-	"dora/internal/paths"
-	"dora/internal/progress"
-	"dora/internal/session"
-	"dora/model/openai"
-	"dora/model/openairesponses"
-	"dora/skill"
-	bashtool "dora/tool/bash"
-	powershelltool "dora/tool/powershell"
+	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/paths"
+	"github.com/lgxz/dora/internal/progress"
+	"github.com/lgxz/dora/internal/session"
+	"github.com/lgxz/dora/model/openai"
+	"github.com/lgxz/dora/model/openairesponses"
+	"github.com/lgxz/dora/skill"
+	bashtool "github.com/lgxz/dora/tool/bash"
+	powershelltool "github.com/lgxz/dora/tool/powershell"
 )
 
 const maxStdinBytes = 16 << 20

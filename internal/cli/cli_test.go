@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"dora"
-	"dora/internal/session"
+	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/session"
 )
 
 func TestMain(m *testing.M) {

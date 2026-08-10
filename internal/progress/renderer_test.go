@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 func TestRendererShowsDoraProgress(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"time"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 const (

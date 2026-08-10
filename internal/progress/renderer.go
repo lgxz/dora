@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"dora"
+	"github.com/lgxz/dora"
 )
 
 const maxSummaryRunes = 72

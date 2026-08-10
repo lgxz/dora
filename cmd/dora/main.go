@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"strings"
 
-	"dora/internal/cli"
+	"github.com/lgxz/dora/internal/cli"
 )
 
 func main() {
