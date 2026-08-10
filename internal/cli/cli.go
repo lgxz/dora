@@ -45,6 +45,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	var commandSkillDirectories stringListFlag
+	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
+	noSkills := flags.Bool("no-skills", false, "disable all skills")
 	var quiet bool
 	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
 	flags.BoolVar(&quiet, "q", false, "hide run progress (shorthand)")
@@ -160,21 +163,25 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	var tools []dora.Tool
-	skillDirectories, err := configuredSkillDirectories(*configPath, cfg.Skills.Directories)
-	if err != nil {
-		return err
-	}
-	if len(skillDirectories) > 0 {
-		skills, err := skill.New(skill.Config{Directories: skillDirectories})
-		if errors.Is(err, skill.ErrNoSkills) {
-			skills = nil
-			err = nil
-		}
+	if !*noSkills {
+		additionalSkillDirectories := append([]string(nil), cfg.Skills.Directories...)
+		additionalSkillDirectories = append(additionalSkillDirectories, commandSkillDirectories...)
+		skillDirectories, err := configuredSkillDirectories(*configPath, additionalSkillDirectories)
 		if err != nil {
 			return err
 		}
-		if skills != nil {
-			tools = append(tools, skills)
+		if len(skillDirectories) > 0 {
+			skills, err := skill.New(skill.Config{Directories: skillDirectories})
+			if errors.Is(err, skill.ErrNoSkills) {
+				skills = nil
+				err = nil
+			}
+			if err != nil {
+				return err
+			}
+			if skills != nil {
+				tools = append(tools, skills)
+			}
 		}
 	}
 	if cfg.Tools.Bash.Enabled {
@@ -253,6 +260,17 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return saveErr
 	}
 	return outputErr
+}
+
+type stringListFlag []string
+
+func (values *stringListFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func (values *stringListFlag) String() string {
+	return strings.Join(*values, ",")
 }
 
 func configuredSkillDirectories(configPath string, additional []string) ([]string, error) {

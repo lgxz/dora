@@ -584,6 +584,114 @@ skills:
 	}
 }
 
+func TestRunAddsRepeatedCommandSkillDirectories(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	writeCLITestSkill(t, first, "alpha")
+	writeCLITestSkill(t, second, "beta")
+
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		tools := body["tools"].([]any)
+		if len(tools) != 1 {
+			t.Fatalf("tools = %#v", tools)
+		}
+		function := tools[0].(map[string]any)["function"].(map[string]any)
+		description := function["description"].(string)
+		if !strings.Contains(description, "alpha") || !strings.Contains(description, "beta") {
+			t.Fatalf("description = %q", description)
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
+	})}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+tools:
+  bash:
+    enabled: false
+  powershell:
+    enabled: false
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), []string{
+		"-q", "--config", configPath,
+		"--skills-dir", first,
+		"--skills-dir", first,
+		"--skills-dir", second,
+		"hello",
+	}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunNoSkillsDisablesEverySkillSource(t *testing.T) {
+	root := t.TempDir()
+	writeCLITestSkill(t, filepath.Join(root, "skills"), "default-skill")
+	missing := filepath.Join(root, "missing")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["tools"]; exists {
+			t.Fatalf("unexpected tools = %#v", body["tools"])
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
+	})}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+model:
+  provider: openai
+skills:
+  directories:
+    - %s
+tools:
+  bash:
+    enabled: false
+  powershell:
+    enabled: false
+`, missing)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), []string{
+		"-q", "--config", configPath, "--skills-dir", missing, "--no-skills", "hello",
+	}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeCLITestSkill(t *testing.T, root, name string) {
+	t.Helper()
+	directory := filepath.Join(root, name)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf("---\nname: %s\ndescription: Test skill %s.\n---\n\nUse this skill.\n", name, name)
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	var output bytes.Buffer
 	err := Run(context.Background(), []string{"--help"}, IO{

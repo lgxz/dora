@@ -136,8 +136,8 @@ system. Omit `--session`/`-s` to keep the existing stateless behavior. Session
 files can contain commands and tool output, so treat them as sensitive. Do not
 run two Dora processes against the same session name concurrently.
 
-Use `--config`, `--model`, or `--base-url` to override the corresponding
-configuration for one invocation.
+Use `--config`, `--model`, `--base-url`, `--skills-dir`, or `--no-skills` to
+override the corresponding configuration for one invocation.
 
 ### Skills
 
@@ -174,6 +174,17 @@ skills:
     - /absolute/path/to/additional-skills
 ```
 
+For a one-off run, add one or more parent directories on the command line:
+
+```sh
+dora --skills-dir ./project-skills --skills-dir ~/shared-skills "Run checks"
+```
+
+Command-line directories are merged with the default and configured
+directories, converted to absolute paths, and deduplicated. Use `--no-skills`
+to disable every skill source for one invocation; it takes precedence over
+both `--skills-dir` and `skills.directories`.
+
 Dora advertises only skill names and descriptions in the `skill` tool schema.
 The absolute skill directory and complete `SKILL.md` are returned when the
 model calls that tool, allowing instructions to reference files such as
@@ -181,8 +192,8 @@ model calls that tool, allowing instructions to reference files such as
 requires an enabled tool such as Bash. Names must contain lowercase letters,
 numbers, and hyphens, and must match their directory name. Duplicate names are
 rejected. A missing or empty default directory simply leaves the tool disabled;
-malformed discovered skills and missing explicitly configured directories are
-errors.
+malformed discovered skills and missing explicitly configured or command-line
+directories are errors.
 
 ### Migrating macOS paths
 
