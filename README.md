@@ -113,6 +113,56 @@ commit, and build date. Override `VERSION`, `COMMIT`, or `BUILD_DATE` when
 needed. On Windows the equivalent Go command can be run directly with
 `build/dora.exe` as the output path when `make` is unavailable.
 
+### API keys
+
+Dora reads each provider's API key from a dedicated environment variable. The
+following table lists the supported providers, their environment variables,
+and their default models:
+
+| Provider | Environment variable | Default model |
+| --- | --- | --- |
+| openai | `OPENAI_API_KEY` | `gpt-5` |
+| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` |
+| trust | `TRUST_API_KEY` | `auto` |
+
+Set the environment variable for the provider you want to use. The commands
+differ by operating system.
+
+macOS / Linux, temporary (current terminal only):
+
+```sh
+export OPENAI_API_KEY="sk-..."
+```
+
+macOS / Linux, permanent: append the `export` line above to `~/.zshrc` (zsh)
+or `~/.bashrc` (bash), then reload it:
+
+```sh
+source ~/.zshrc
+```
+
+Windows PowerShell, temporary (current session only):
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+```
+
+Windows PowerShell, permanent (persists for the current user):
+
+```powershell
+[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-...", "User")
+```
+
+Windows CMD, temporary (current session only):
+
+```cmd
+set OPENAI_API_KEY=sk-...
+```
+
+When you set keys for more than one provider, specify `model.provider`
+explicitly in `~/.dora/config.yaml`; otherwise Dora reports an ambiguity
+error. Setting exactly one key lets Dora select that provider automatically.
+
 With exactly one supported provider API key set, Dora runs without a
 configuration file and selects that provider automatically. For example,
 `DEEPSEEK_API_KEY` selects `deepseek`, `OPENAI_API_KEY` selects `openai`, and
