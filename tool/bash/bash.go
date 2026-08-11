@@ -39,7 +39,7 @@ func New(cfg Config) (*Tool, error) {
 
 	core, err := commandexec.New(commandexec.Config{
 		Name:           "bash",
-		Description:    fmt.Sprintf("Execute a Bash command on %s/%s", runtime.GOOS, runtime.GOARCH),
+		Description:    fmt.Sprintf("Execute Bash command on %s/%s", runtime.GOOS, runtime.GOARCH),
 		Binary:         binary,
 		CommandArgs:    commandArgs,
 		Timeout:        cfg.Timeout,
