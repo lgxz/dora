@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/lgxz/dora"
@@ -38,7 +39,7 @@ func New(cfg Config) (*Tool, error) {
 
 	core, err := commandexec.New(commandexec.Config{
 		Name:           "bash",
-		Description:    "Execute a Bash command",
+		Description:    fmt.Sprintf("Execute a Bash command on %s/%s", runtime.GOOS, runtime.GOARCH),
 		Binary:         binary,
 		CommandArgs:    commandArgs,
 		Timeout:        cfg.Timeout,
