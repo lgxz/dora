@@ -1181,7 +1181,7 @@ model:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(firstProgress.String(), "开始任务「system」") {
+	if !strings.Contains(firstProgress.String(), "Starting task \"system\"") {
 		t.Fatalf("first progress = %q", firstProgress.String())
 	}
 
@@ -1197,7 +1197,7 @@ model:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if secondOutput.String() != "second answer\n" || !strings.Contains(secondProgress.String(), "继续任务「system」") {
+	if secondOutput.String() != "second answer\n" || !strings.Contains(secondProgress.String(), "Resuming task \"system\"") {
 		t.Fatalf("second output = %q, progress = %q", secondOutput.String(), secondProgress.String())
 	}
 
@@ -1404,7 +1404,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(progress, "重新开始任务「replaceable」") {
+	if !strings.Contains(progress, "Restarting task \"replaceable\"") {
 		t.Fatalf("progress = %q", progress)
 	}
 

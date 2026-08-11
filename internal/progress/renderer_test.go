@@ -105,8 +105,8 @@ func TestRendererShowsSessionState(t *testing.T) {
 	renderer := New(&output, false, false)
 	renderer.Session("system-status", false)
 	renderer.Session("system-status", true)
-	if !strings.Contains(output.String(), "开始任务「system-status」") ||
-		!strings.Contains(output.String(), "继续任务「system-status」") {
+	if !strings.Contains(output.String(), "Starting task \"system-status\"") ||
+		!strings.Contains(output.String(), "Resuming task \"system-status\"") {
 		t.Fatalf("output = %q", output.String())
 	}
 }
@@ -114,7 +114,7 @@ func TestRendererShowsSessionState(t *testing.T) {
 func TestRendererShowsFreshSession(t *testing.T) {
 	var output bytes.Buffer
 	New(&output, false, false).FreshSession("system-status")
-	if !strings.Contains(output.String(), "重新开始任务「system-status」") {
+	if !strings.Contains(output.String(), "Restarting task \"system-status\"") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

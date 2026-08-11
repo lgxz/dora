@@ -48,11 +48,11 @@ func (r *Renderer) Session(name string, resumed bool) {
 	if r == nil || r.output == nil {
 		return
 	}
-	action := "开始任务"
+	action := "Starting task"
 	if resumed {
-		action = "继续任务"
+		action = "Resuming task"
 	}
-	fmt.Fprintf(r.output, "%s %s「%s」\n", r.paint(blue, "⌁"), action, name)
+	fmt.Fprintf(r.output, "%s %s \"%s\"\n", r.paint(blue, "⌁"), action, name)
 }
 
 // FreshSession reports that an existing name is starting without its history.
@@ -60,7 +60,7 @@ func (r *Renderer) FreshSession(name string) {
 	if r == nil || r.output == nil {
 		return
 	}
-	fmt.Fprintf(r.output, "%s 重新开始任务「%s」\n", r.paint(blue, "⌁"), name)
+	fmt.Fprintf(r.output, "%s Restarting task \"%s\"\n", r.paint(blue, "⌁"), name)
 }
 
 // Observe implements dora.Observer.
@@ -88,7 +88,7 @@ func (r *Renderer) Observe(update dora.Update) {
 
 func (r *Renderer) renderThinking() {
 	if r.terminal {
-		fmt.Fprintf(r.output, "%s 正在想办法…\n", r.paint(blue, "●"))
+		fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
 	} else {
 		fmt.Fprintln(r.output, "dora: thinking...")
 	}
@@ -138,7 +138,6 @@ func (r *Renderer) startTool(call dora.ToolCall) {
 func (r *Renderer) renderToolResult(id string) {
 	run, ok := r.tools[id]
 	if !ok {
-		fmt.Fprintf(r.output, "%s 道具带回了结果\n", r.paint(green, "╰"))
 		return
 	}
 	delete(r.tools, id)
@@ -151,7 +150,7 @@ func (r *Renderer) renderToolFailure(call dora.ToolCall) {
 	if !ok {
 		run = toolRun{call: call}
 	}
-	r.renderToolLine(run, red, "遇到了一点状况")
+	r.renderToolLine(run, red, "Hit a snag")
 }
 
 func (r *Renderer) renderToolLine(run toolRun, statusColor, status string) {
@@ -192,7 +191,7 @@ func toolSummary(call dora.ToolCall) string {
 	if json.Compact(&compact, call.Input) == nil && compact.Len() > 0 {
 		return truncate(compact.String(), maxSummaryRunes)
 	}
-	return "参数已准备"
+	return "arguments ready"
 }
 
 func truncate(value string, limit int) string {
