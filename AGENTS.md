@@ -86,3 +86,37 @@ make release
 If package boundaries, interfaces, runtime flow, persistence, or paths change,
 check whether `docs/architecture.md`, `README.md`, or `config.example.yaml` also
 needs an update.
+
+## Releasing
+
+Releases are published from GitHub Actions. Pushing a semantic version tag
+(`v*`) triggers the `Release` workflow, which runs `make check`, renders the
+versioned installers, and uses GoReleaser to build and publish archives for
+Linux, macOS, and Windows.
+
+Before tagging, always run the full validation locally and confirm it is green:
+
+```sh
+make check
+```
+
+Release steps:
+
+1. Ensure `main` is up to date with `origin/main` and the working tree is clean.
+2. Tag the release commit: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`.
+3. Push the tag: `git push origin vX.Y.Z`. This triggers the release workflow.
+4. Confirm the workflow completes successfully and the release assets appear on
+   the GitHub Releases page.
+
+If a release fails after the tag was already pushed:
+
+1. Fix the underlying issue and commit it on `main`.
+2. Push `main`, then delete and recreate the tag on the fixed commit:
+   `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`
+   `git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z`.
+
+Common pitfall: when changing tool descriptions or other observable behavior,
+update the corresponding `*_test.go` assertions in the same change. A stale
+test that passes locally on one platform can still fail `make check` on the CI
+runner (for example, a description that embeds `runtime.GOOS`/`runtime.GOARCH`
+differs between macOS and Linux).
