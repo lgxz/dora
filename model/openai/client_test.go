@@ -3,10 +3,13 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgxz/dora"
 )
@@ -136,6 +139,86 @@ func TestGenerateRejectsInvalidToolArguments(t *testing.T) {
 	_, err = client.Generate(context.Background(), dora.Request{})
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGenerateClassifiesRetryableStatus(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		status     int
+		retryAfter string
+		wantRetry  bool
+		wantDelay  time.Duration
+	}{
+		{name: "rate limited", status: http.StatusTooManyRequests, retryAfter: "5", wantRetry: true, wantDelay: 5 * time.Second},
+		{name: "server error", status: http.StatusInternalServerError, wantRetry: true},
+		{name: "bad gateway", status: http.StatusBadGateway, wantRetry: true},
+		{name: "bad request", status: http.StatusBadRequest, wantRetry: false},
+		{name: "unauthorized", status: http.StatusUnauthorized, wantRetry: false},
+		{name: "forbidden", status: http.StatusForbidden, wantRetry: false},
+		{name: "unprocessable", status: http.StatusUnprocessableEntity, wantRetry: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				header := make(http.Header)
+				if test.retryAfter != "" {
+					header.Set("Retry-After", test.retryAfter)
+				}
+				return &http.Response{
+					StatusCode: test.status,
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"boom"}}`)),
+					Header:     header,
+				}, nil
+			})}
+			client, err := New(Config{BaseURL: "https://example.test", Model: "test-model", HTTPClient: httpClient})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Generate(context.Background(), dora.Request{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var retryable *dora.RetryableError
+			gotRetry := errors.As(err, &retryable)
+			if gotRetry != test.wantRetry {
+				t.Fatalf("retryable = %v, want %v (error %v)", gotRetry, test.wantRetry, err)
+			}
+			if gotRetry && retryable.RetryAfter != test.wantDelay {
+				t.Fatalf("retry after = %v, want %v", retryable.RetryAfter, test.wantDelay)
+			}
+		})
+	}
+}
+
+func TestGenerateStreamIdleTimeout(t *testing.T) {
+	// A stream that stalls before emitting any content should fail with a
+	// retryable error once the idle timeout elapses.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// Flush headers and then stall without sending any events.
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client, err := New(Config{
+		BaseURL:           server.URL,
+		Model:             "test-model",
+		StreamIdleTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.GenerateStream(context.Background(), dora.Request{}, nil)
+	if err == nil {
+		t.Fatal("expected idle timeout error")
+	}
+	var retryable *dora.RetryableError
+	if !errors.As(err, &retryable) {
+		t.Fatalf("error = %v, want retryable", err)
 	}
 }
 

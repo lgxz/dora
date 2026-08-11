@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,14 +29,27 @@ type Config struct {
 	APIKey     string
 	Model      string
 	HTTPClient *http.Client
+	// ConnectTimeout bounds TCP connection setup. Zero uses a 10 second
+	// default.
+	ConnectTimeout time.Duration
+	// StreamIdleTimeout bounds the idle time between streaming events. Zero
+	// disables the idle timeout and leaves the stream governed by the caller's
+	// context.
+	StreamIdleTimeout time.Duration
+	// Timeout bounds a non-streaming generation request. Zero uses a 120
+	// second default.
+	Timeout time.Duration
 }
 
 // Client is an OpenAI-compatible dora.Model.
 type Client struct {
-	endpoint   string
-	apiKey     string
-	model      string
-	httpClient *http.Client
+	endpoint          string
+	apiKey            string
+	model             string
+	httpClient        *http.Client
+	connectTimeout    time.Duration
+	streamIdleTimeout time.Duration
+	timeout           time.Duration
 }
 
 // New creates an OpenAI-compatible model client.
@@ -56,22 +71,42 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("openai: model is required")
 	}
 
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout == 0 {
+		connectTimeout = 10 * time.Second
+	}
+	timeout := cfg.Timeout
+	if timeout == 0 {
+		timeout = 120 * time.Second
+	}
+
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 2 * time.Minute}
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{Timeout: connectTimeout}).DialContext,
+			},
+		}
 	}
 
 	return &Client{
-		endpoint:   strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions",
-		apiKey:     cfg.APIKey,
-		model:      cfg.Model,
-		httpClient: httpClient,
+		endpoint:          strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions",
+		apiKey:            cfg.APIKey,
+		model:             cfg.Model,
+		httpClient:        httpClient,
+		connectTimeout:    connectTimeout,
+		streamIdleTimeout: cfg.StreamIdleTimeout,
+		timeout:           timeout,
 	}, nil
 }
 
 // Generate implements dora.Model. The response is received as a stream even
 // when the caller does not consume incremental events.
 func (c *Client) Generate(ctx context.Context, request dora.Request) (dora.Response, error) {
+	// Apply the overall timeout to non-streaming requests. Streaming requests
+	// are governed by the caller's context plus an optional idle timeout.
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	return c.GenerateStream(ctx, request, nil)
 }
 
@@ -86,6 +121,13 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 		return dora.Response{}, fmt.Errorf("openai: encode request: %w", err)
 	}
 
+	// Wrap the caller context with an idle/stall timeout that is reset on each
+	// streaming event, so a slow-but-progressing stream is not killed.
+	var onActivity func()
+	if c.streamIdleTimeout > 0 {
+		ctx, onActivity = withIdleTimeout(ctx, c.streamIdleTimeout)
+	}
+
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai: create request: %w", err)
@@ -98,18 +140,18 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 
 	httpResponse, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		return dora.Response{}, fmt.Errorf("openai: send request: %w", err)
+		return dora.Response{}, retryable(fmt.Errorf("openai: send request: %w", err))
 	}
 	defer httpResponse.Body.Close()
 
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		responseBody, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxResponseBytes+1))
 		if err != nil {
-			return dora.Response{}, fmt.Errorf("openai: read error response: %w", err)
+			return dora.Response{}, retryable(fmt.Errorf("openai: read error response: %w", err))
 		}
-		return dora.Response{}, apiError(httpResponse.StatusCode, responseBody)
+		return dora.Response{}, apiError(httpResponse.StatusCode, httpResponse.Header, responseBody)
 	}
-	response, err := readStream(httpResponse.Body, emit)
+	response, err := readStream(httpResponse.Body, emit, onActivity)
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai: %w", err)
 	}
@@ -167,13 +209,16 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	return body, nil
 }
 
-func readStream(reader io.Reader, emit func(dora.ModelEvent)) (dora.Response, error) {
+func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func()) (dora.Response, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxResponseBytes)
 	var result dora.Response
 	calls := make(map[int]*streamedToolCall)
 	done := false
 	for scanner.Scan() {
+		if onActivity != nil {
+			onActivity()
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue
@@ -217,7 +262,7 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent)) (dora.Response, er
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return dora.Response{}, fmt.Errorf("read stream: %w", err)
+		return dora.Response{}, retryable(fmt.Errorf("read stream: %w", err))
 	}
 	if !done {
 		return dora.Response{}, errors.New("stream ended before [DONE]")
@@ -251,23 +296,91 @@ type streamedToolCall struct {
 	arguments strings.Builder
 }
 
-func apiError(status int, body []byte) error {
+func apiError(status int, header http.Header, body []byte) error {
 	var decoded struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
+	message := ""
 	if json.Unmarshal(body, &decoded) == nil && decoded.Error.Message != "" {
-		return fmt.Errorf("openai: API returned HTTP %d: %s", status, decoded.Error.Message)
-	}
-	message := strings.TrimSpace(string(body))
-	if len(message) > 512 {
-		message = message[:512] + "..."
+		message = decoded.Error.Message
+	} else {
+		message = strings.TrimSpace(string(body))
+		if len(message) > 512 {
+			message = message[:512] + "..."
+		}
 	}
 	if message == "" {
-		return fmt.Errorf("openai: API returned HTTP %d", status)
+		message = fmt.Sprintf("openai: API returned HTTP %d", status)
+	} else {
+		message = fmt.Sprintf("openai: API returned HTTP %d: %s", status, message)
 	}
-	return fmt.Errorf("openai: API returned HTTP %d: %s", status, message)
+	err := errors.New(message)
+	if isRetryableStatus(status) {
+		return retryableWithDelay(err, parseRetryAfter(header))
+	}
+	return err
+}
+
+// isRetryableStatus reports whether an HTTP status is likely to succeed on a
+// later attempt: rate limits and transient server errors.
+func isRetryableStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
+// retryable wraps err as a dora.RetryableError with no suggested delay.
+func retryable(err error) error {
+	return &dora.RetryableError{Err: err}
+}
+
+// retryableWithDelay wraps err as a dora.RetryableError with a suggested delay.
+func retryableWithDelay(err error, retryAfter time.Duration) error {
+	return &dora.RetryableError{Err: err, RetryAfter: retryAfter}
+}
+
+// parseRetryAfter reads the Retry-After header, which may be a delay in
+// seconds or an HTTP-date. It returns zero when the header is absent or
+// unparseable.
+func parseRetryAfter(header http.Header) time.Duration {
+	value := header.Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+// withIdleTimeout returns a context that is cancelled when no activity is
+// reported within idle for the given duration. The returned reset function
+// must be called on each unit of activity to postpone the deadline.
+func withIdleTimeout(ctx context.Context, idle time.Duration) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	timer := time.NewTimer(idle)
+	reset := func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(idle)
+	}
+	go func() {
+		select {
+		case <-timer.C:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, reset
 }
 
 type chatRequest struct {

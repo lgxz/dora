@@ -1299,7 +1299,7 @@ model:
 		requests++
 		if requests == 1 {
 			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
+				StatusCode: http.StatusBadRequest,
 				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
 				Header:     make(http.Header),
 			}, nil
@@ -1364,7 +1364,7 @@ func TestRunFreshReplacesSessionOnlyOnSuccess(t *testing.T) {
 				t.Fatalf("failing messages = %#v", messages)
 			}
 			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
+				StatusCode: http.StatusBadRequest,
 				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
 				Header:     make(http.Header),
 			}, nil

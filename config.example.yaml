@@ -9,6 +9,16 @@ model:
   # api_key_env: DEEPSEEK_API_KEY
   # Other presets: openai, trust
 
+  # Overall timeout (seconds) for a non-streaming generation request.
+  # Default: 120.
+  # timeout_seconds: 120
+  # Timeout (seconds) for establishing the TCP connection. Default: 10.
+  # connect_timeout_seconds: 10
+  # Maximum idle time (seconds) between streaming events before the stream is
+  # considered stalled. 0 disables the idle timeout and leaves the stream
+  # governed by the caller's context. Default: 0.
+  # stream_idle_timeout_seconds: 0
+
 agent:
   max_rounds: 256
 

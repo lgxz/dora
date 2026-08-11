@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -208,17 +209,23 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	switch cfg.Model.API {
 	case "chat_completions":
 		model, err = openai.New(openai.Config{
-			BaseURL:    cfg.Model.BaseURL,
-			APIKey:     cfg.Model.APIKey,
-			Model:      cfg.Model.Name,
-			HTTPClient: streams.HTTPClient,
+			BaseURL:           cfg.Model.BaseURL,
+			APIKey:            cfg.Model.APIKey,
+			Model:             cfg.Model.Name,
+			HTTPClient:        streams.HTTPClient,
+			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
+			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
+			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
 		})
 	case "responses":
 		model, err = openairesponses.New(openairesponses.Config{
-			BaseURL:    cfg.Model.BaseURL,
-			APIKey:     cfg.Model.APIKey,
-			Model:      cfg.Model.Name,
-			HTTPClient: streams.HTTPClient,
+			BaseURL:           cfg.Model.BaseURL,
+			APIKey:            cfg.Model.APIKey,
+			Model:             cfg.Model.Name,
+			HTTPClient:        streams.HTTPClient,
+			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
+			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
+			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
 		})
 	}
 	if err != nil {

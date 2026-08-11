@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"time"
 )
 
 const defaultMaxRounds = 256
+
+// maxModelAttempts bounds the number of times a single model call is retried
+// after a retryable failure.
+const maxModelAttempts = 3
 
 var (
 	// ErrMaxRounds indicates that a model kept requesting tools without
@@ -113,14 +119,14 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		}
 		var response Response
 		var err error
-		if streaming, ok := a.model.(StreamingModel); ok {
-			response, err = streaming.GenerateStream(ctx, request, func(event ModelEvent) {
+		if _, ok := a.model.(StreamingModel); ok {
+			response, err = a.generateWithRetry(ctx, request, func(event ModelEvent) {
 				if event.Kind == ModelEventContentDelta {
 					notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
 				}
 			})
 		} else {
-			response, err = a.model.Generate(ctx, request)
+			response, err = a.generateWithRetry(ctx, request, nil)
 		}
 		if err != nil {
 			return Result{}, fmt.Errorf("dora: generate response: %w", err)
@@ -173,6 +179,54 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		Messages:     cloneMessages(history),
 		Continuation: continuation,
 	}, fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
+}
+
+// generateWithRetry invokes the model, retrying retryable failures with
+// exponential backoff and jitter. A stream is only retried when it failed
+// before emitting any content; once partial content has been emitted the
+// error is surfaced directly to avoid duplicate or partial output.
+func (a *Agent) generateWithRetry(ctx context.Context, request Request, emit func(ModelEvent)) (Response, error) {
+	var emitted bool
+	wrapped := func(event ModelEvent) {
+		emitted = true
+		if emit != nil {
+			emit(event)
+		}
+	}
+
+	for attempt := 0; ; attempt++ {
+		var response Response
+		var err error
+		if streaming, ok := a.model.(StreamingModel); ok {
+			response, err = streaming.GenerateStream(ctx, request, wrapped)
+		} else {
+			response, err = a.model.Generate(ctx, request)
+		}
+		if err == nil || attempt >= maxModelAttempts-1 || emitted {
+			return response, err
+		}
+		var retryable *RetryableError
+		if !errors.As(err, &retryable) {
+			return response, err
+		}
+		wait := retryBackoff(attempt, retryable.RetryAfter)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return response, ctx.Err()
+		}
+	}
+}
+
+// retryBackoff computes the delay before the next attempt: the server's
+// RetryAfter when provided, otherwise exponential backoff with jitter.
+func retryBackoff(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return retryAfter
+	}
+	base := time.Duration(1<<uint(attempt)) * time.Second
+	jitter := time.Duration(rand.Int63n(int64(base) / 2))
+	return base + jitter
 }
 
 func notify(observer Observer, update Update) {

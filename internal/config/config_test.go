@@ -409,6 +409,47 @@ agent:
 	}
 }
 
+func TestDefaultModelTimeouts(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.TimeoutSeconds != 120 || cfg.Model.ConnectTimeoutSeconds != 10 || cfg.Model.StreamIdleTimeoutSeconds != 0 {
+		t.Fatalf("model timeouts = %#v", cfg.Model)
+	}
+}
+
+func TestLoadAcceptsModelTimeouts(t *testing.T) {
+	path := writeConfig(t, `
+model:
+  provider: openai
+  name: test-model
+  base_url: http://localhost
+  timeout_seconds: 60
+  connect_timeout_seconds: 5
+  stream_idle_timeout_seconds: 30
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.TimeoutSeconds != 60 || cfg.Model.ConnectTimeoutSeconds != 5 || cfg.Model.StreamIdleTimeoutSeconds != 30 {
+		t.Fatalf("model timeouts = %#v", cfg.Model)
+	}
+}
+
+func TestLoadRejectsNegativeModelTimeouts(t *testing.T) {
+	for _, field := range []string{"timeout_seconds", "connect_timeout_seconds", "stream_idle_timeout_seconds"} {
+		t.Run(field, func(t *testing.T) {
+			path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  "+field+": -1\n")
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsRemovedMaxModelCalls(t *testing.T) {
 	path := writeConfig(t, `
 model:

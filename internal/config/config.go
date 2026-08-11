@@ -34,6 +34,17 @@ type Model struct {
 	BaseURL   string  `yaml:"base_url"`
 	APIKey    string  `yaml:"api_key,omitempty"`
 	APIKeyEnv *string `yaml:"api_key_env,omitempty"`
+
+	// TimeoutSeconds bounds a non-streaming generation request. Zero uses the
+	// default of 120 seconds.
+	TimeoutSeconds int `yaml:"timeout_seconds,omitempty"`
+	// ConnectTimeoutSeconds bounds the TCP connection setup. Zero uses the
+	// default of 10 seconds.
+	ConnectTimeoutSeconds int `yaml:"connect_timeout_seconds,omitempty"`
+	// StreamIdleTimeoutSeconds bounds the idle time between streaming events.
+	// Zero disables the idle timeout and leaves the stream governed by the
+	// caller's context.
+	StreamIdleTimeoutSeconds int `yaml:"stream_idle_timeout_seconds,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.
@@ -104,7 +115,12 @@ func Load(path string) (Config, error) {
 }
 
 func defaultConfig() Config {
-	return Config{}
+	return Config{
+		Model: Model{
+			TimeoutSeconds:        120,
+			ConnectTimeoutSeconds: 10,
+		},
+	}
 }
 
 func (cfg *Config) resolveAndValidate() error {
@@ -154,6 +170,15 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")
+	}
+	if model.TimeoutSeconds < 0 {
+		return errors.New("model.timeout_seconds cannot be negative")
+	}
+	if model.ConnectTimeoutSeconds < 0 {
+		return errors.New("model.connect_timeout_seconds cannot be negative")
+	}
+	if model.StreamIdleTimeoutSeconds < 0 {
+		return errors.New("model.stream_idle_timeout_seconds cannot be negative")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {
