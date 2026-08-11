@@ -3,6 +3,14 @@
 `dora` is a tiny, modular LLM agent kernel for Go. Its core is one loop and
 two interfaces: `Model` and `Tool`.
 
+By default the CLI exposes only the Bash tool on macOS/Linux or the PowerShell
+tool on Windows; when skill directories are present, the skill tool is
+activated automatically, and there are no other tools. The CLI never injects a
+system prompt, sending only the user's prompt as a user message. No
+configuration file is required: setting a single provider API key environment
+variable (OpenAI, DeepSeek, or Trustoken) lets dora auto-select that provider
+and run immediately.
+
 See [`docs/architecture.md`](docs/architecture.md) for module boundaries,
 dependencies, interfaces, and runtime flows.
 
