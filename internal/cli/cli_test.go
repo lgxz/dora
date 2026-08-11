@@ -1035,6 +1035,24 @@ func TestRunUpdateReportsCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestRunUpdateAcceptsForceFlag(t *testing.T) {
+	var output bytes.Buffer
+	err := Run(context.Background(), []string{"-update", "-force"}, IO{
+		Stdin:  strings.NewReader(""),
+		Stdout: &output,
+		Stderr: io.Discard,
+		Updater: updaterFunc(func(context.Context) (update.Result, error) {
+			return update.Result{Current: "dev", Latest: "1.1.0", Updated: true}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "Updated dora dev -> 1.1.0\n" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRunQuietHidesProgress(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"quiet answer"}}]}`), nil

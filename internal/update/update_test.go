@@ -139,6 +139,65 @@ func TestUpdateRejectsUnmanagedAndDevelopmentBuildsBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestUpdateForceReplacesDevelopmentBuildWithoutMarker(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("test fixture is a Unix shell executable")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skip("release artifacts do not support this architecture")
+	}
+
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "dora")
+	writeTestExecutable(t, executable, "dev")
+	archiveName := fmt.Sprintf("dora-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archive := testTarGzip(t, "dora", testExecutable("1.1.0"))
+	digest := sha256.Sum256(archive)
+	manifest := fmt.Sprintf("%x  %s\n", digest, archiveName)
+
+	client := &http.Client{Transport: updateRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/repos/lgxz/dora/releases/latest":
+			var body bytes.Buffer
+			_ = json.NewEncoder(&body).Encode(map[string]any{
+				"tag_name": "v1.1.0",
+				"assets": []map[string]string{
+					{"name": archiveName, "browser_download_url": "https://api.test/" + archiveName},
+					{"name": "checksums.txt", "browser_download_url": "https://api.test/checksums.txt"},
+				},
+			})
+			return updateResponse(body.Bytes()), nil
+		case "/" + archiveName:
+			return updateResponse(archive), nil
+		case "/checksums.txt":
+			return updateResponse([]byte(manifest)), nil
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("not found"))}, nil
+		}
+	})}
+
+	result, err := New(Config{
+		CurrentVersion: "dev",
+		HTTPClient:     client,
+		APIBaseURL:     "https://api.test",
+		ExecutablePath: func() (string, error) { return executable, nil },
+		Force:          true,
+	}).Update(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != (Result{Current: "dev", Latest: "1.1.0", Updated: true}) {
+		t.Fatalf("result = %#v", result)
+	}
+	output, err := exec.Command(executable, "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("run updated executable: %v\n%s", err, output)
+	}
+	if !strings.HasPrefix(string(output), "dora 1.1.0 ") {
+		t.Fatalf("version output = %q", output)
+	}
+}
+
 func TestUpdateChecksumFailurePreservesExecutable(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("test fixture uses a Unix release artifact")

@@ -89,6 +89,14 @@ their original installation method. Re-run the latest installer once to enable
 self-update on an older installation. Release archives and checksums remain
 available on the GitHub Releases page for manual installation and verification.
 
+To replace an unmanaged or development build (for example, one installed with
+`make install`) with the latest release, bypassing the standalone-install
+marker and version checks:
+
+```sh
+dora -update --force
+```
+
 ### Build from source
 
 Building Dora requires Go 1.25 or newer. CI checks both the minimum supported

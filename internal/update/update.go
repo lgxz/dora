@@ -52,6 +52,9 @@ type Config struct {
 	OS             string
 	Arch           string
 	AllowInsecure  bool
+	// Force bypasses the standalone-install marker and version checks so an
+	// unmanaged or development build can be replaced with the latest release.
+	Force bool
 }
 
 // Service updates a standalone Dora executable from GitHub Releases.
@@ -97,8 +100,8 @@ type installMarker struct {
 
 // Update installs the latest stable release when it is newer than the running version.
 func (s *Service) Update(ctx context.Context) (Result, error) {
-	current, err := normalizeVersion(s.config.CurrentVersion)
-	if err != nil {
+	current, currentErr := normalizeVersion(s.config.CurrentVersion)
+	if currentErr != nil && !s.config.Force {
 		return Result{}, fmt.Errorf("self-update is unavailable for build %q", s.config.CurrentVersion)
 	}
 
@@ -110,8 +113,10 @@ func (s *Service) Update(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve executable: %w", err)
 	}
-	if err := validateInstallMarker(filepath.Dir(executable), s.config.Repository); err != nil {
-		return Result{}, err
+	if !s.config.Force {
+		if err := validateInstallMarker(filepath.Dir(executable), s.config.Repository); err != nil {
+			return Result{}, err
+		}
 	}
 
 	rel, err := s.latestRelease(ctx)
@@ -122,8 +127,8 @@ func (s *Service) Update(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("latest release has invalid version %q", rel.TagName)
 	}
-	result := Result{Current: strings.TrimPrefix(current, "v"), Latest: strings.TrimPrefix(latest, "v")}
-	if semver.Compare(current, latest) >= 0 {
+	result := Result{Current: strings.TrimPrefix(s.config.CurrentVersion, "v"), Latest: strings.TrimPrefix(latest, "v")}
+	if currentErr == nil && semver.Compare(current, latest) >= 0 {
 		return result, nil
 	}
 

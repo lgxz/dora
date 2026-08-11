@@ -69,6 +69,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	})
 	showVersion := flags.Bool("version", false, "print version information")
 	performUpdate := flags.Bool("update", false, "update a standalone installation")
+	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
 	var commandSkillDirectories stringListFlag
 	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
@@ -107,6 +108,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			updater = update.New(update.Config{
 				CurrentVersion: streams.BuildVersion,
 				HTTPClient:     streams.HTTPClient,
+				Force:          *forceUpdate,
 			})
 		}
 		if _, err := fmt.Fprintln(streams.Stderr, "dora: checking for updates"); err != nil {
