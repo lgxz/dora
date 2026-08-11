@@ -7,14 +7,19 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 RELEASE_LDFLAGS ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(BUILD_DATE)
+PREFIX ?= $(HOME)/.local
 
-.PHONY: build release test check
+.PHONY: build release install test check
 
 build: | $(BUILD_DIR)/
 	$(GO) build -o $(BINARY) ./cmd/dora
 
 release: | $(BUILD_DIR)/
 	$(GO) build -trimpath -ldflags="$(RELEASE_LDFLAGS)" -o $(BINARY) ./cmd/dora
+
+install: release
+	mkdir -p $(PREFIX)/bin
+	install -m 0755 $(BINARY) $(PREFIX)/bin/dora
 
 test:
 	$(GO) test ./...

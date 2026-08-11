@@ -113,6 +113,16 @@ commit, and build date. Override `VERSION`, `COMMIT`, or `BUILD_DATE` when
 needed. On Windows the equivalent Go command can be run directly with
 `build/dora.exe` as the output path when `make` is unavailable.
 
+To build a release binary and install it into `$(PREFIX)/bin/dora` (default
+`$HOME/.local/bin/dora`), use:
+
+```sh
+make install
+```
+
+`install` depends on `release` and creates `$(PREFIX)/bin` if needed. Override
+`PREFIX` to choose another location, for example `make install PREFIX=/usr/local`.
+
 ### API keys
 
 Dora reads each provider's API key from a dedicated environment variable. The
