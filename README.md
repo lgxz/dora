@@ -273,7 +273,7 @@ out of the configuration file. A non-empty literal key takes precedence over
 `api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
 not require authentication.
 
-Dora runs up to 64 model-tool rounds per segment by default. Keep the safeguard
+Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:
 
 ```yaml

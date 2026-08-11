@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const defaultMaxRounds = 64
+const defaultMaxRounds = 256
 
 var (
 	// ErrMaxRounds indicates that a model kept requesting tools without

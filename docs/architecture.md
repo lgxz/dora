@@ -167,7 +167,7 @@ Current execution semantics:
 - When the model returns multiple tool calls, they are executed serially in the returned order.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error terminates the current task; a tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
-- If the model keeps calling tools, after reaching `MaxRounds` it returns both `ErrMaxRounds` and a resumable `Result` containing the completed tool output; the default limit is 64. When both stdin and stderr are connected to a terminal, the CLI asks whether to continue the next segment from that state; when the user declines, it saves the partial state of the named session and stops normally. Non-interactive runs keep reporting the error directly, avoiding waiting for input in pipelines or automated tasks.
+- If the model keeps calling tools, after reaching `MaxRounds` it returns both `ErrMaxRounds` and a resumable `Result` containing the completed tool output; the default limit is 256. When both stdin and stderr are connected to a terminal, the CLI asks whether to continue the next segment from that state; when the user declines, it saves the partial state of the named session and stops normally. Non-interactive runs keep reporting the error directly, avoiding waiting for input in pipelines or automated tasks.
 - The current CLI does not inject a system prompt. `Message` and both API adapters support the `system` role, so library callers can pass one in themselves.
 
 ## CLI Run Flow

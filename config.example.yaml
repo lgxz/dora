@@ -10,7 +10,7 @@ model:
   # Other presets: openai, trust
 
 agent:
-  max_rounds: 64
+  max_rounds: 256
 
 # Dora automatically discovers a skills directory at ~/.dora/skills
 # (or DORA_HOME/skills), independent of this file's location.
