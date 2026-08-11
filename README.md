@@ -109,6 +109,12 @@ marker and version checks:
 dora -update --force
 ```
 
+Usage:
+
+```sh
+cat AGENTS.md | dora Summarize the following content | mdcat 
+```
+
 ### Build from source
 
 Building Dora requires Go 1.25 or newer. CI checks both the minimum supported
