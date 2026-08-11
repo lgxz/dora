@@ -28,6 +28,10 @@ fmt.Println(result.Content)
 The agent is stateless. Keep `result.Messages` and pass them to a later call to
 continue a conversation.
 
+[DoraBar](https://github.com/lgxz/DoraBar) is a companion macOS tray/menu-bar
+app for dora, written in Swift. It provides a lightweight menu-bar interface
+for interacting with the dora CLI.
+
 ## Scope
 
 The kernel supports optional model streaming events while keeping its baseline
@@ -387,21 +391,6 @@ numbers, and hyphens, and must match their directory name. Duplicate names are
 rejected. A missing or empty default directory simply leaves the tool disabled;
 malformed discovered skills and missing explicitly configured or command-line
 directories are errors.
-
-### Migrating macOS paths
-
-Dora does not automatically read or migrate the previous macOS directory.
-Move existing files manually before running the new version:
-
-```sh
-mkdir -p "$HOME/.dora"
-mv "$HOME/Library/Application Support/dora/config.yaml" "$HOME/.dora/config.yaml"
-mv "$HOME/Library/Application Support/dora/skills" "$HOME/.dora/skills"
-mv "$HOME/Library/Application Support/dora/sessions" "$HOME/.dora/sessions"
-```
-
-Skip any `mv` command whose source does not exist. If `DORA_HOME` is set, use
-its directory instead of the fallback destination shown above.
 
 ## Releasing
 
