@@ -15,7 +15,6 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
-	markdownrenderer "github.com/lgxz/dora/internal/markdown"
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/internal/session"
@@ -57,7 +56,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
-	rawOutput := flags.Bool("raw", false, "print the final answer as raw Markdown")
 	var maxRounds int
 	var maxRoundsSet bool
 	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
@@ -311,7 +309,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	var outputErr error
 	if completed {
-		outputErr = writeAnswer(streams, result.Content, *rawOutput)
+		outputErr = writeAnswer(streams, result.Content)
 	}
 	if saveErr != nil {
 		return saveErr
@@ -319,24 +317,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	return outputErr
 }
 
-func writeAnswer(streams IO, content string, raw bool) error {
-	if raw || !streams.StdoutIsTerminal {
-		_, err := fmt.Fprintln(streams.Stdout, content)
-		return err
-	}
-	rendered, err := markdownrenderer.Render(content, markdownrenderer.Options{
-		Width:          streams.TerminalWidth,
-		Color:          streams.ColorOutput,
-		DarkBackground: streams.DarkBackground,
-	})
-	if err != nil {
-		if _, warningErr := fmt.Fprintf(streams.Stderr, "dora: render Markdown: %v; showing raw output\n", err); warningErr != nil {
-			return warningErr
-		}
-		_, writeErr := fmt.Fprintln(streams.Stdout, content)
-		return writeErr
-	}
-	_, err = io.WriteString(streams.Stdout, rendered)
+func writeAnswer(streams IO, content string) error {
+	_, err := fmt.Fprintln(streams.Stdout, content)
 	return err
 }
 

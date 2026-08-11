@@ -235,18 +235,16 @@ answer remains on stdout. Use `--quiet` or `-q` when only the answer is wanted:
 ./dora --quiet "Explain this repository"
 ```
 
-When stdout is a terminal, Dora renders the final answer as styled Markdown,
-wraps it to the detected terminal width (up to 120 columns), and chooses a
-light or dark style automatically. Use `--raw` to print the original Markdown.
-Redirected or piped stdout is always raw, preserving stable output for scripts:
+When stdout is a terminal, Dora prints the final answer as plain text.
+Redirected or piped stdout is identical, preserving stable output for scripts:
 
 ```sh
-./dora --raw "Write release notes"
+./dora "Write release notes"
 ./dora "Write release notes" > release-notes.md
 ```
 
 Colors are enabled automatically for terminal output. Set `NO_COLOR=1` to keep
-the formatted layout without ANSI colors; progress remains visible on stderr.
+the layout without ANSI colors; progress remains visible on stderr.
 
 ### Sessions
 

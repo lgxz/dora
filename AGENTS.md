@@ -54,7 +54,6 @@ Both packages translate their wire protocol to and from the types in the root
 ### Internal services
 
 - `internal/config/`: strict YAML decoding, environment lookup, and validation.
-- `internal/markdown/`: complete-answer terminal Markdown rendering and width normalization.
 - `internal/paths/`: cross-platform XDG configuration, skill, and session paths.
 - `internal/session/`: versioned JSON session snapshots, atomic replacement,
   and revision conflict detection.

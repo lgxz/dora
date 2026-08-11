@@ -183,9 +183,9 @@ sequenceDiagram
 7. 发现 skills，并按配置创建可用工具。
 8. 构造无状态的 `dora.Agent`。
 9. 将历史消息和本次用户消息组成 `State`，执行 Agent。
-10. 成功后原子保存 session；stdout 是终端且未指定 `--raw` 时，通过 `internal/markdown` 使用 Glamour 渲染完整 Markdown，并按终端宽度换行，否则原样写出最终文本。
+10. 成功后原子保存 session；stdout 原样写出最终文本。
 
-CLI 的标准输出只承载最终结果；运行过程和错误写到标准错误。TTY 输出可自动美化，管道和重定向始终保留原始 Markdown，因此结果仍可安全地用于脚本。
+CLI 的标准输出只承载最终结果；运行过程和错误写到标准错误。TTY 输出与管道、重定向输出一致，因此结果仍可安全地用于脚本。
 
 `cli.IO` 将标准流、构建版本、stdin/stdout/stderr 终端能力、stdout 宽度与颜色、HTTP client、测试 updater 和 session 目录作为依赖注入，使 CLI 无需依赖进程全局状态即可测试。
 
