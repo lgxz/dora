@@ -213,6 +213,43 @@ to `chat_completions`, `auto`, `https://api.trustoken.cn/v1`, and
 Responses tool loops replay typed output items locally and do not depend on
 server-side response storage.
 
+### Third-party OpenAI-compatible providers
+
+To use any third-party provider that speaks the OpenAI Chat Completions
+protocol (for example Ollama, LM Studio, vLLM, Groq, Together, OpenRouter, or
+a self-hosted endpoint), keep `model.provider: openai` and override `base_url`,
+`name`, and `api_key_env` (or `api_key`). The Chat Completions endpoint is
+`base_url + "/chat/completions"`, so `base_url` should be the provider's `/v1`
+(or equivalent) root.
+
+For a self-hosted Ollama endpoint that requires no authentication, set
+`api_key_env: ""` to disable the API key:
+
+```yaml
+model:
+  provider: openai
+  name: llama3.1
+  base_url: http://localhost:11434/v1
+  api_key_env: ""
+```
+
+For a hosted OpenAI-compatible service that requires a key, such as OpenRouter
+or Groq, point `api_key_env` at a custom environment variable:
+
+```yaml
+model:
+  provider: openai
+  name: openrouter/auto
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+```
+
+For a one-off invocation, override the model and base URL on the command line:
+
+```sh
+./dora --model llama3.1 --base-url http://localhost:11434/v1 "prompt"
+```
+
 Literal `api_key` is also supported, but an environment variable keeps secrets
 out of the configuration file. A non-empty literal key takes precedence over
 `api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
