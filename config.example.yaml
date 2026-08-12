@@ -34,9 +34,9 @@ tools:
     # Automatic default: enabled on Linux/macOS, disabled elsewhere.
     # Set true or false to override the platform default.
     # enabled: true
-    timeout_seconds: 30
+    timeout_seconds: 120
   powershell:
     # Automatic default: enabled on Windows, disabled elsewhere.
     # Set true or false to override the platform default.
     # enabled: true
-    timeout_seconds: 30
+    timeout_seconds: 120

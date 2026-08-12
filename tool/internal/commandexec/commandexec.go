@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultTimeout        = 30 * time.Second
+	defaultTimeout        = 120 * time.Second
 	maxTimeout            = time.Hour
 	maxTimeoutSeconds     = int(maxTimeout / time.Second)
 	defaultMaxOutputBytes = 1 << 20

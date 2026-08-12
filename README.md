@@ -432,10 +432,10 @@ or set it explicitly to override the platform default:
 tools:
   bash:
     enabled: false
-    timeout_seconds: 30
+    timeout_seconds: 120
   powershell:
     enabled: true
-    timeout_seconds: 30
+    timeout_seconds: 120
 ```
 
 Automatic tools whose executable is absent are skipped. A tool explicitly
@@ -468,4 +468,4 @@ configured default for that call and cannot exceed 3600 seconds:
 ```
 
 When omitted, `timeout_seconds` comes from the corresponding YAML tool setting,
-or defaults to 30 seconds when that setting is zero or absent.
+or defaults to 120 seconds when that setting is zero or absent.
