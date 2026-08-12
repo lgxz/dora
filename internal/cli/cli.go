@@ -272,7 +272,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	tools = append(tools, commandTools...)
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
-		MaxRounds: cfg.Agent.MaxRounds,
+		MaxRounds:        cfg.Agent.MaxRounds,
+		MaxHistoryRounds: cfg.Agent.MaxHistoryRounds,
 	}, tools...)
 	if err != nil {
 		return err

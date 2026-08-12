@@ -32,12 +32,18 @@ type Agent struct {
 	tools     map[string]Tool
 	specs     []ToolSpec
 	maxRounds int
+	// maxHistoryRounds bounds the number of recent rounds sent to the model
+	// each iteration. Zero disables compaction and sends the full history.
+	maxHistoryRounds int
 }
 
 // AgentConfig controls safeguards for the model-tool loop. A zero
 // MaxRounds uses the default limit.
 type AgentConfig struct {
 	MaxRounds int
+	// MaxHistoryRounds bounds the number of recent rounds sent to the model
+	// each iteration. Zero disables compaction and sends the full history.
+	MaxHistoryRounds int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -53,16 +59,20 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if cfg.MaxRounds < 0 {
 		return nil, errors.New("dora: MaxRounds cannot be negative")
 	}
+	if cfg.MaxHistoryRounds < 0 {
+		return nil, errors.New("dora: MaxHistoryRounds cannot be negative")
+	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
 	}
 
 	a := &Agent{
-		model:     model,
-		tools:     make(map[string]Tool, len(tools)),
-		specs:     make([]ToolSpec, 0, len(tools)),
-		maxRounds: maxRounds,
+		model:            model,
+		tools:            make(map[string]Tool, len(tools)),
+		specs:            make([]ToolSpec, 0, len(tools)),
+		maxRounds:        maxRounds,
+		maxHistoryRounds: cfg.MaxHistoryRounds,
 	}
 
 	for _, tool := range tools {
@@ -118,7 +128,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		notify(observer, Update{Kind: UpdateThinking})
 
 		request := Request{
-			Messages:     cloneMessages(history),
+			Messages:     cloneMessages(a.requestMessages(history)),
 			Tools:        a.specs,
 			Continuation: continuation,
 		}

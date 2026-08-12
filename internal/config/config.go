@@ -24,6 +24,9 @@ type Config struct {
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
+	// MaxHistoryRounds bounds the number of recent rounds sent to the model
+	// each iteration. Zero disables compaction and sends the full history.
+	MaxHistoryRounds int `yaml:"max_history_rounds,omitempty"`
 }
 
 // Model describes one configured model endpoint.
@@ -174,6 +177,9 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")
+	}
+	if cfg.Agent.MaxHistoryRounds < 0 {
+		return errors.New("agent.max_history_rounds cannot be negative")
 	}
 	if model.TimeoutSeconds < 0 {
 		return errors.New("model.timeout_seconds cannot be negative")
