@@ -80,7 +80,7 @@ func (r *Renderer) Observe(update dora.Update) {
 			r.renderToolResult(update.Message.ToolCallID)
 		}
 	case dora.UpdateToolStarted:
-		r.startTool(update.ToolCall)
+		r.startTool(update)
 	case dora.UpdateToolFailed:
 		r.renderToolFailure(update.ToolCall)
 	}
@@ -125,13 +125,19 @@ func (r *Renderer) replaceThinking(message dora.Message) {
 	}
 }
 
-func (r *Renderer) startTool(call dora.ToolCall) {
+func (r *Renderer) startTool(update dora.Update) {
+	call := update.ToolCall
 	run, ok := r.tools[call.ID]
 	if !ok {
 		run = toolRun{call: call}
 	}
 	run.call = call
-	run.started = time.Now()
+	// Prefer the real start time carried by the event; fall back to now for
+	// callers that do not populate StartedAt.
+	run.started = update.StartedAt
+	if run.started.IsZero() {
+		run.started = time.Now()
+	}
 	r.tools[call.ID] = run
 }
 

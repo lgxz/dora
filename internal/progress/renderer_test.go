@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgxz/dora"
 )
@@ -162,5 +163,64 @@ func TestToolSummaryShowsSkillName(t *testing.T) {
 	summary := toolSummary(dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)})
 	if summary != "system-status" {
 		t.Fatalf("summary = %q", summary)
+	}
+}
+
+func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
+	// The UpdateToolStarted event carries the real start time. The renderer
+	// must use it to compute the duration instead of time.Now(), which would
+	// otherwise report ~1ms when the event is delivered after the tool finishes.
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"sleep 1"}`)}
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我会等待一秒。",
+			ToolCalls: []dora.ToolCall{call},
+		},
+	})
+
+	startedAt := time.Now().Add(-2 * time.Second)
+	renderer.Observe(dora.Update{
+		Kind:      dora.UpdateToolStarted,
+		ToolCall:  call,
+		StartedAt: startedAt,
+	})
+	renderer.Observe(dora.Update{
+		Kind:    dora.UpdateMessageAdded,
+		Message: dora.Message{Role: dora.RoleTool, ToolCallID: call.ID},
+	})
+
+	if !strings.Contains(output.String(), "2.0s") {
+		t.Fatalf("output %q does not report the ~2s duration from StartedAt", output.String())
+	}
+	if strings.Contains(output.String(), "1ms") {
+		t.Fatalf("output %q reports ~1ms instead of the StartedAt-based duration", output.String())
+	}
+}
+
+func TestRendererFallsBackToNowWhenStartedAtZero(t *testing.T) {
+	// Backward compatibility: callers that do not populate StartedAt must still
+	// render a duration based on the event delivery time.
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我会查看目录。",
+			ToolCalls: []dora.ToolCall{call},
+		},
+	})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
+	renderer.Observe(dora.Update{
+		Kind:    dora.UpdateMessageAdded,
+		Message: dora.Message{Role: dora.RoleTool, ToolCallID: call.ID},
+	})
+	if !strings.Contains(output.String(), "ms") {
+		t.Fatalf("output %q does not report a duration when StartedAt is zero", output.String())
 	}
 }

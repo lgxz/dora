@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -115,7 +116,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 
 		request := Request{
 			Messages:     cloneMessages(history),
-			Tools:        cloneToolSpecs(a.specs),
+			Tools:        a.specs,
 			Continuation: continuation,
 		}
 		var response Response
@@ -150,39 +151,72 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 			}, nil
 		}
 
-		for _, call := range response.ToolCalls {
-			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call})
+		// Execute all tool calls in parallel, but preserve the model's call
+		// order for results and Observer events. Each goroutine performs the
+		// unknown-tool check, JSON validation, and Execute; the results are
+		// collected by index. Observer events are emitted serially by the main
+		// goroutine after all goroutines finish, so the progress renderer's
+		// non-concurrent map is never written concurrently.
+		type toolResult struct {
+			output string
+			err    error
+			// startedAt records the real time the tool began executing, so the
+			// progress renderer can report an accurate duration even though the
+			// UpdateToolStarted event is emitted after all goroutines finish.
+			startedAt time.Time
+			// invalidJSON marks a call whose arguments were not valid JSON, so
+			// the main goroutine can emit the dedicated recovery message.
+			invalidJSON bool
+		}
+		results := make([]toolResult, len(response.ToolCalls))
+		var wg sync.WaitGroup
+		for i, call := range response.ToolCalls {
+			wg.Add(1)
+			go func(i int, call ToolCall) {
+				defer wg.Done()
+				tool, ok := a.tools[call.Name]
+				if !ok {
+					results[i].err = fmt.Errorf("tool %q not found", call.Name)
+					return
+				}
+				if !json.Valid(call.Input) {
+					results[i].err = fmt.Errorf("arguments are not valid JSON: %s", call.Input)
+					results[i].invalidJSON = true
+					return
+				}
+				results[i].startedAt = time.Now()
+				output, err := tool.Execute(ctx, cloneBytes(call.Input))
+				if err != nil {
+					results[i].err = fmt.Errorf("execute tool %q: %w", call.Name, err)
+					return
+				}
+				results[i].output = output
+			}(i, call)
+		}
+		wg.Wait()
 
-			tool, ok := a.tools[call.Name]
-			if !ok {
-				err := fmt.Errorf("tool %q not found", call.Name)
-				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
-				feedToolError(&history, call, err)
-				continue
-			}
+		for i, call := range response.ToolCalls {
+			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: results[i].startedAt})
 
-			if !json.Valid(call.Input) {
-				err := fmt.Errorf("arguments are not valid JSON: %s", call.Input)
-				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
-				history = append(history, Message{
-					Role:       RoleTool,
-					ToolCallID: call.ID,
-					Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
-				})
-				continue
-			}
-
-			output, err := tool.Execute(ctx, cloneBytes(call.Input))
-			if err != nil {
-				err = fmt.Errorf("execute tool %q: %w", call.Name, err)
-				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
-				feedToolError(&history, call, err)
+			result := results[i]
+			if result.err != nil {
+				if result.invalidJSON {
+					notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
+					history = append(history, Message{
+						Role:       RoleTool,
+						ToolCallID: call.ID,
+						Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
+					})
+					continue
+				}
+				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
+				feedToolError(&history, call, result.err)
 				continue
 			}
 
 			toolMessage := Message{
 				Role:       RoleTool,
-				Content:    output,
+				Content:    result.output,
 				ToolCallID: call.ID,
 			}
 			history = append(history, toolMessage)
@@ -294,17 +328,6 @@ func cloneToolCalls(calls []ToolCall) []ToolCall {
 	for i, call := range calls {
 		cloned[i] = call
 		cloned[i].Input = cloneBytes(call.Input)
-	}
-	return cloned
-}
-
-func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
-	if specs == nil {
-		return nil
-	}
-	cloned := make([]ToolSpec, len(specs))
-	for i, spec := range specs {
-		cloned[i] = cloneToolSpec(spec)
 	}
 	return cloned
 }

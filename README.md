@@ -44,8 +44,9 @@ for interacting with the dora CLI.
 
 The kernel supports optional model streaming events while keeping its baseline
 `Model` interface synchronous. Tool calls are deliberately executed only after
-the current model response completes, and are still sequential. There is no
-built-in memory, policy engine, middleware, or provider SDK.
+the current model response completes, and multiple tool calls in one response
+are executed concurrently (results are emitted in the returned order). There is
+no built-in memory, policy engine, middleware, or provider SDK.
 
 ## CLI
 

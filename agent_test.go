@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -375,6 +376,176 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 	}
 	if result.Content != "corrected" || calls != 2 {
 		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
+	// The first tool sleeps briefly while the second returns immediately. If
+	// the calls run in parallel, total elapsed time is close to the slowest
+	// call; if serial, it is the sum of both.
+	const slowDelay = 300 * time.Millisecond
+
+	var startedMu sync.Mutex
+	var started []string
+	markStarted := func(name string) {
+		startedMu.Lock()
+		started = append(started, name)
+		startedMu.Unlock()
+	}
+
+	slow := stubTool{
+		spec: ToolSpec{Name: "slow"},
+		execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			markStarted("slow")
+			select {
+			case <-time.After(slowDelay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "slow-done", nil
+		},
+	}
+	fast := stubTool{
+		spec: ToolSpec{Name: "fast"},
+		execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			markStarted("fast")
+			return "fast-done", nil
+		},
+	}
+
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{
+				{ID: "call-slow", Name: "slow", Input: json.RawMessage(`{}`)},
+				{ID: "call-fast", Name: "fast", Input: json.RawMessage(`{}`)},
+			}}, nil
+		case 2:
+			if len(request.Messages) != 3 {
+				t.Fatalf("message count = %d, want 3", len(request.Messages))
+			}
+			// Tool results must appear in the model's call order.
+			if request.Messages[1].ToolCallID != "call-slow" || request.Messages[1].Content != "slow-done" {
+				t.Fatalf("unexpected first tool result: %#v", request.Messages[1])
+			}
+			if request.Messages[2].ToolCallID != "call-fast" || request.Messages[2].Content != "fast-done" {
+				t.Fatalf("unexpected second tool result: %#v", request.Messages[2])
+			}
+			return Response{Content: "done"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+
+	agent, err := New(model, slow, fast)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Record the order of Observer events for the tool calls.
+	var events []string
+	start := time.Now()
+	result, err := agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+		switch update.Kind {
+		case UpdateToolStarted:
+			events = append(events, "start:"+update.ToolCall.Name)
+		case UpdateMessageAdded:
+			if update.Message.Role == RoleTool {
+				events = append(events, "added:"+update.Message.ToolCallID)
+			}
+		}
+	}))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "done" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+
+	// Both tools must have started before the slow one finished, proving the
+	// calls ran concurrently.
+	startedMu.Lock()
+	startedSnapshot := append([]string(nil), started...)
+	startedMu.Unlock()
+	if len(startedSnapshot) != 2 {
+		t.Fatalf("started tools = %v, want both started", startedSnapshot)
+	}
+
+	// Parallel execution should take roughly the slowest call, not the sum.
+	if elapsed >= 2*slowDelay {
+		t.Fatalf("elapsed = %v, want < %v (calls appear serial)", elapsed, 2*slowDelay)
+	}
+
+	// Observer events must be emitted in the model's call order.
+	wantEvents := []string{
+		"start:slow", "added:call-slow",
+		"start:fast", "added:call-fast",
+	}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("observer events = %#v, want %#v", events, wantEvents)
+	}
+}
+
+func TestRunToolStartedCarriesRealStartTime(t *testing.T) {
+	// The UpdateToolStarted event is emitted after all goroutines finish, so
+	// its StartedAt must reflect the real time the tool began executing rather
+	// than the event delivery time. Otherwise the renderer would report ~1ms.
+	const slowDelay = 300 * time.Millisecond
+
+	slow := stubTool{
+		spec: ToolSpec{Name: "slow"},
+		execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			select {
+			case <-time.After(slowDelay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "slow-done", nil
+		},
+	}
+
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-slow", Name: "slow", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			return Response{Content: "done"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+
+	agent, err := New(model, slow)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var startedAt time.Time
+	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+		if update.Kind == UpdateToolStarted {
+			startedAt = update.StartedAt
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The event is delivered after the tool finishes, so StartedAt must be
+	// earlier than the delivery time by roughly the tool's sleep duration.
+	delivered := time.Now()
+	if startedAt.IsZero() {
+		t.Fatal("UpdateToolStarted did not carry a StartedAt")
+	}
+	elapsed := delivered.Sub(startedAt)
+	if elapsed < slowDelay/2 {
+		t.Fatalf("StartedAt-based elapsed = %v, want >= ~%v (event delivered after tool finished)", elapsed, slowDelay)
 	}
 }
 

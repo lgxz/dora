@@ -164,7 +164,7 @@ Current execution semantics:
 
 - The Agent is immutable; run history is kept in local variables.
 - Input messages, tool calls, and output state are all defensively copied.
-- When the model returns multiple tool calls, they are executed serially in the returned order.
+- When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, after reaching `MaxRounds` it returns both `ErrMaxRounds` and a resumable `Result` containing the completed tool output; the default limit is 256. When both stdin and stderr are connected to a terminal, the CLI asks whether to continue the next segment from that state; when the user declines, it saves the partial state of the named session and stops normally. Non-interactive runs keep reporting the error directly, avoiding waiting for input in pipelines or automated tasks.
@@ -307,7 +307,7 @@ A new UI can call the root-package Agent directly and implement its own `Observe
 
 ## Current Boundaries
 
-- The Agent and tool calls are currently single-goroutine and serial.
+- The Agent loop is single-goroutine, but the tool calls within one model response are executed concurrently (results are collected by index and emitted in order).
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
 - Sessions are complete JSON snapshots rather than append-only logs, with a maximum of 64 MiB.

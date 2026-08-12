@@ -1,5 +1,7 @@
 package dora
 
+import "time"
+
 // UpdateKind identifies a semantic change during an Agent run.
 type UpdateKind string
 
@@ -12,13 +14,16 @@ const (
 )
 
 // Update describes transient run progress. Message is populated for
-// UpdateMessageAdded. ToolCall is populated for tool updates.
+// UpdateMessageAdded. ToolCall is populated for tool updates. StartedAt is
+// populated for UpdateToolStarted and carries the real time the tool began
+// executing, which may differ from when the event is delivered.
 type Update struct {
-	Kind     UpdateKind
-	Delta    string
-	Message  Message
-	ToolCall ToolCall
-	Err      error
+	Kind      UpdateKind
+	Delta     string
+	Message   Message
+	ToolCall  ToolCall
+	StartedAt time.Time
+	Err       error
 }
 
 // Observer receives synchronous progress updates from an Agent run.
