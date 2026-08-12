@@ -27,7 +27,9 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
 	tool := newTestTool(t, Config{Timeout: 45 * time.Second})
 	spec := tool.Spec()
-	if spec.Name != "test-command" || spec.Description != "Execute a test command" ||
+	if spec.Name != "test-command" ||
+		!strings.Contains(spec.Description, "Execute a test command") ||
+		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "default of 45s") {
 		t.Fatalf("spec = %#v", spec)
 	}

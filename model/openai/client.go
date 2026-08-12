@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/model/internal/imageutil"
 )
 
 const maxResponseBytes = 4 << 20
@@ -161,9 +162,13 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	body := chatRequest{Model: c.model, Stream: true}
 	for _, message := range request.Messages {
+		content, err := encodeContent(message)
+		if err != nil {
+			return chatRequest{}, err
+		}
 		converted := chatMessage{
 			Role:       string(message.Role),
-			Content:    message.Content,
+			Content:    content,
 			ToolCallID: message.ToolCallID,
 		}
 		switch message.Role {
@@ -207,6 +212,50 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 		})
 	}
 	return body, nil
+}
+
+// encodeContent renders a message's text and images into the Chat Completions
+// content field. Without images the content stays a plain string for
+// compatibility; with images it becomes an array of text and image_url parts.
+func encodeContent(message dora.Message) (json.RawMessage, error) {
+	if len(message.Images) == 0 {
+		encoded, err := json.Marshal(message.Content)
+		if err != nil {
+			return nil, fmt.Errorf("openai: encode content: %w", err)
+		}
+		return encoded, nil
+	}
+	parts := make([]chatContentPart, 0, len(message.Images)+1)
+	if message.Content != "" {
+		parts = append(parts, chatContentPart{Type: "text", Text: message.Content})
+	}
+	for _, image := range message.Images {
+		url, err := imageutil.DataURL(image)
+		if err != nil {
+			return nil, fmt.Errorf("openai: %w", err)
+		}
+		parts = append(parts, chatContentPart{
+			Type: "image_url",
+			ImageURL: chatImageURL{
+				URL: url,
+			},
+		})
+	}
+	encoded, err := json.Marshal(parts)
+	if err != nil {
+		return nil, fmt.Errorf("openai: encode content: %w", err)
+	}
+	return encoded, nil
+}
+
+type chatContentPart struct {
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL chatImageURL `json:"image_url,omitempty"`
+}
+
+type chatImageURL struct {
+	URL string `json:"url"`
 }
 
 func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func()) (dora.Response, error) {
@@ -388,10 +437,10 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content,omitempty"`
+	ToolCalls  []chatToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 }
 
 type chatTool struct {

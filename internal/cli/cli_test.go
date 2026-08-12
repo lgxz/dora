@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +64,62 @@ model:
 	}
 	if !strings.Contains(stderr.String(), "dora: thinking") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunAttachesImageFlagToUserMessage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	imagePath := filepath.Join(t.TempDir(), "shot.png")
+	data := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
+	if err := os.WriteFile(imagePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		if len(messages) != 1 {
+			t.Fatalf("messages = %#v", messages)
+		}
+		content := messages[0].(map[string]any)["content"].([]any)
+		if len(content) != 2 {
+			t.Fatalf("content = %#v", content)
+		}
+		imageURL := content[1].(map[string]any)["image_url"].(map[string]any)
+		want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+		if imageURL["url"] != want {
+			t.Fatalf("image url = %v, want %q", imageURL["url"], want)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"described"}}]}`), nil
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configContents := fmt.Sprintf(`
+model:
+  provider: openai
+  name: test-model
+  base_url: %s
+  api_key: secret
+`, "https://example.test/v1")
+	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"-q", "--config", configPath, "--image", imagePath, "describe"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "described\n" {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 

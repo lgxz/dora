@@ -118,7 +118,7 @@ func (r *Renderer) replaceThinking(message dora.Message) {
 	if message.Content == "" || len(message.ToolCalls) == 0 {
 		return
 	}
-	lines := strings.Split(message.Content, "\n")
+	lines := strings.Split(strings.TrimRight(message.Content, "\n"), "\n")
 	fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "●"), lines[0])
 	for _, line := range lines[1:] {
 		fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "│"), line)

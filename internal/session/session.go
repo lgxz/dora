@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	fileVersion = 3
+	fileVersion = 4
 	maxFileSize = 64 << 20
 )
 
@@ -272,8 +272,14 @@ func validateBackend(backend Backend) error {
 type messageRecord struct {
 	Role       dora.Role        `json:"role"`
 	Content    string           `json:"content,omitempty"`
+	Images     []imageRecord    `json:"images,omitempty"`
 	ToolCalls  []toolCallRecord `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type imageRecord struct {
+	Path string `json:"path,omitempty"`
+	URL  string `json:"url,omitempty"`
 }
 
 type toolCallRecord struct {
@@ -290,6 +296,12 @@ func newMessageRecord(message dora.Message) (messageRecord, error) {
 		Role:       message.Role,
 		Content:    message.Content,
 		ToolCallID: message.ToolCallID,
+	}
+	if message.Images != nil {
+		record.Images = make([]imageRecord, len(message.Images))
+	}
+	for index, image := range message.Images {
+		record.Images[index] = imageRecord{Path: image.Path, URL: image.URL}
 	}
 	if message.ToolCalls != nil {
 		record.ToolCalls = make([]toolCallRecord, len(message.ToolCalls))
@@ -315,6 +327,12 @@ func (record messageRecord) message() (dora.Message, error) {
 		Role:       record.Role,
 		Content:    record.Content,
 		ToolCallID: record.ToolCallID,
+	}
+	if record.Images != nil {
+		message.Images = make([]dora.Image, len(record.Images))
+	}
+	for index, image := range record.Images {
+		message.Images[index] = dora.Image{Path: image.Path, URL: image.URL}
 	}
 	if record.ToolCalls != nil {
 		message.ToolCalls = make([]dora.ToolCall, len(record.ToolCalls))

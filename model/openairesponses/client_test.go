@@ -2,11 +2,14 @@ package openairesponses
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -303,6 +306,98 @@ func TestGenerateStreamIdleTimeout(t *testing.T) {
 	var retryable *dora.RetryableError
 	if !errors.As(err, &retryable) {
 		t.Fatalf("error = %v, want retryable", err)
+	}
+}
+
+func TestEncodeContentWithoutImagesIsPlainString(t *testing.T) {
+	encoded, err := encodeContent(dora.Message{Role: dora.RoleUser, Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `"hello"` {
+		t.Fatalf("content = %s", encoded)
+	}
+}
+
+func TestEncodeContentWithImageURL(t *testing.T) {
+	encoded, err := encodeContent(dora.Message{
+		Role:    dora.RoleUser,
+		Content: "look",
+		Images:  []dora.Image{{URL: "https://example.test/a.png"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(encoded, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[0]["type"] != "input_text" || parts[0]["text"] != "look" {
+		t.Fatalf("text part = %#v", parts[0])
+	}
+	if parts[1]["type"] != "input_image" || parts[1]["image_url"] != "https://example.test/a.png" {
+		t.Fatalf("image part = %#v", parts[1])
+	}
+}
+
+func TestEncodeContentWithImagePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shot.png")
+	data := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := encodeContent(dora.Message{
+		Role:    dora.RoleUser,
+		Content: "look",
+		Images:  []dora.Image{{Path: path}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(encoded, &parts); err != nil {
+		t.Fatal(err)
+	}
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+	if parts[1]["image_url"] != want {
+		t.Fatalf("url = %v, want %q", parts[1]["image_url"], want)
+	}
+}
+
+func TestContinuationCarriesImages(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input := body["input"].([]any)
+		// The continuation replays the base message (with image) plus the
+		// continuation item and the appended tool result.
+		if len(input) != 3 {
+			t.Fatalf("input = %#v", input)
+		}
+		content := input[0].(map[string]any)["content"].([]any)
+		if len(content) != 2 || content[1].(map[string]any)["type"] != "input_image" {
+			t.Fatalf("content = %#v", content)
+		}
+		return eventStream("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-2\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\n"), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Generate(context.Background(), dora.Request{
+		Continuation: `{"base_message_count":1,"message_count":1,"items":[{"type":"function_call","call_id":"call-1","name":"weather","arguments":"{}"}]}`,
+		Messages: []dora.Message{
+			{Role: dora.RoleUser, Content: "look", Images: []dora.Image{{URL: "https://example.test/a.png"}}},
+			{Role: dora.RoleTool, ToolCallID: "call-1", Content: "sunny"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

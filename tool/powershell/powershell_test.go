@@ -54,7 +54,9 @@ func TestSpecIdentifiesPowerShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := tool.Spec()
-	if spec.Name != "powershell" || spec.Description != "Execute PowerShell command." ||
+	if spec.Name != "powershell" ||
+		!strings.Contains(spec.Description, "Execute PowerShell command.") ||
+		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "default of 2m0s") {
 		t.Fatalf("spec = %#v", spec)
 	}

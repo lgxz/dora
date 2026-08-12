@@ -77,9 +77,14 @@ func (t *Tool) Spec() dora.ToolSpec {
 		"Maximum execution time for this command. Omit to use the default of %s.",
 		t.timeout,
 	)
+	description := t.description
+	if description != "" {
+		description += " "
+	}
+	description += "To load an image file for viewing, use `echo @@path@@`"
 	return dora.ToolSpec{
 		Name:        t.name,
-		Description: t.description,
+		Description: description,
 		InputSchema: json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {

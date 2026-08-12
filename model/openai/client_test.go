@@ -2,11 +2,14 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +226,76 @@ func TestGenerateStreamIdleTimeout(t *testing.T) {
 	var retryable *dora.RetryableError
 	if !errors.As(err, &retryable) {
 		t.Fatalf("error = %v, want retryable", err)
+	}
+}
+
+func TestEncodeContentWithoutImagesIsPlainString(t *testing.T) {
+	encoded, err := encodeContent(dora.Message{Role: dora.RoleUser, Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `"hello"` {
+		t.Fatalf("content = %s", encoded)
+	}
+}
+
+func TestEncodeContentWithImageURL(t *testing.T) {
+	encoded, err := encodeContent(dora.Message{
+		Role:    dora.RoleUser,
+		Content: "look",
+		Images:  []dora.Image{{URL: "https://example.test/a.png"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(encoded, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[0]["type"] != "text" || parts[0]["text"] != "look" {
+		t.Fatalf("text part = %#v", parts[0])
+	}
+	imageURL := parts[1]["image_url"].(map[string]any)
+	if parts[1]["type"] != "image_url" || imageURL["url"] != "https://example.test/a.png" {
+		t.Fatalf("image part = %#v", parts[1])
+	}
+}
+
+func TestEncodeContentWithImagePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shot.png")
+	data := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := encodeContent(dora.Message{
+		Role:    dora.RoleUser,
+		Content: "look",
+		Images:  []dora.Image{{Path: path}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(encoded, &parts); err != nil {
+		t.Fatal(err)
+	}
+	imageURL := parts[1]["image_url"].(map[string]any)
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+	if imageURL["url"] != want {
+		t.Fatalf("url = %v, want %q", imageURL["url"], want)
+	}
+}
+
+func TestEncodeContentRejectsImageWithoutSource(t *testing.T) {
+	_, err := encodeContent(dora.Message{
+		Role:   dora.RoleUser,
+		Images: []dora.Image{{}},
+	})
+	if err == nil {
+		t.Fatal("expected error for image without Path or URL")
 	}
 }
 

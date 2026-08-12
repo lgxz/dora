@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -218,6 +220,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 				Role:       RoleTool,
 				Content:    result.output,
 				ToolCallID: call.ID,
+				Images:     parseImageTags(result.output),
 			}
 			history = append(history, toolMessage)
 			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
@@ -300,6 +303,7 @@ func feedToolError(history *[]Message, call ToolCall, err error) {
 
 func cloneMessage(message Message) Message {
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
+	message.Images = cloneImages(message.Images)
 	return message
 }
 
@@ -316,7 +320,17 @@ func cloneMessages(messages []Message) []Message {
 	for i, message := range messages {
 		cloned[i] = message
 		cloned[i].ToolCalls = cloneToolCalls(message.ToolCalls)
+		cloned[i].Images = cloneImages(message.Images)
 	}
+	return cloned
+}
+
+func cloneImages(images []Image) []Image {
+	if images == nil {
+		return nil
+	}
+	cloned := make([]Image, len(images))
+	copy(cloned, images)
 	return cloned
 }
 
@@ -339,4 +353,27 @@ func cloneToolSpec(spec ToolSpec) ToolSpec {
 
 func cloneBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
+}
+
+// imageTagPattern matches a @@path@@ tag and captures the file path. The @@
+// delimiter is distinctive and survives JSON encoding unchanged, so it is
+// unlikely to collide with ordinary command output.
+var imageTagPattern = regexp.MustCompile(`@@([^@]+)@@`)
+
+// parseImageTags extracts every @@path@@ tag from text and converts each into a
+// dora.Image referencing the local file.
+func parseImageTags(text string) []Image {
+	matches := imageTagPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	images := make([]Image, 0, len(matches))
+	for _, match := range matches {
+		path := strings.TrimSpace(match[1])
+		if path == "" {
+			continue
+		}
+		images = append(images, Image{Path: path})
+	}
+	return images
 }

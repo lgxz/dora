@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/model/internal/imageutil"
 )
 
 const maxEventBytes = 4 << 20
@@ -236,8 +237,12 @@ func appendContinuationMessages(input *[]json.RawMessage, messages []dora.Messag
 			if len(message.ToolCalls) > 0 {
 				return errors.New("openai responses: continuation contains an uncovered assistant tool call")
 			}
-			if message.Content != "" {
-				if err := appendInput(input, inputItem{Role: string(message.Role), Content: message.Content}); err != nil {
+			if message.Content != "" || len(message.Images) > 0 {
+				content, err := encodeContent(message)
+				if err != nil {
+					return err
+				}
+				if err := appendInput(input, inputItem{Role: string(message.Role), Content: content}); err != nil {
 					return err
 				}
 			}
@@ -263,8 +268,12 @@ func appendMessages(input *[]json.RawMessage, messages []dora.Message) error {
 	for _, message := range messages {
 		switch message.Role {
 		case dora.RoleSystem, dora.RoleUser, dora.RoleAssistant:
-			if message.Content != "" {
-				if err := appendInput(input, inputItem{Role: string(message.Role), Content: message.Content}); err != nil {
+			if message.Content != "" || len(message.Images) > 0 {
+				content, err := encodeContent(message)
+				if err != nil {
+					return err
+				}
+				if err := appendInput(input, inputItem{Role: string(message.Role), Content: content}); err != nil {
 					return err
 				}
 			}
@@ -276,6 +285,42 @@ func appendMessages(input *[]json.RawMessage, messages []dora.Message) error {
 		}
 	}
 	return nil
+}
+
+// encodeContent renders a message's text and images into the Responses API
+// content field. Without images the content stays a plain string for
+// compatibility; with images it becomes an array of input_text and input_image
+// parts.
+func encodeContent(message dora.Message) (json.RawMessage, error) {
+	if len(message.Images) == 0 {
+		encoded, err := json.Marshal(message.Content)
+		if err != nil {
+			return nil, fmt.Errorf("openai responses: encode content: %w", err)
+		}
+		return encoded, nil
+	}
+	parts := make([]responseContentPart, 0, len(message.Images)+1)
+	if message.Content != "" {
+		parts = append(parts, responseContentPart{Type: "input_text", Text: message.Content})
+	}
+	for _, image := range message.Images {
+		url, err := imageutil.DataURL(image)
+		if err != nil {
+			return nil, fmt.Errorf("openai responses: %w", err)
+		}
+		parts = append(parts, responseContentPart{Type: "input_image", ImageURL: url})
+	}
+	encoded, err := json.Marshal(parts)
+	if err != nil {
+		return nil, fmt.Errorf("openai responses: encode content: %w", err)
+	}
+	return encoded, nil
+}
+
+type responseContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 func appendInput(input *[]json.RawMessage, item inputItem) error {
@@ -525,11 +570,11 @@ type responsesRequest struct {
 }
 
 type inputItem struct {
-	Type    string `json:"type,omitempty"`
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
-	CallID  string `json:"call_id,omitempty"`
-	Output  string `json:"output,omitempty"`
+	Type    string          `json:"type,omitempty"`
+	Role    string          `json:"role,omitempty"`
+	Content json.RawMessage `json:"content,omitempty"`
+	CallID  string          `json:"call_id,omitempty"`
+	Output  string          `json:"output,omitempty"`
 }
 
 type continuationState struct {

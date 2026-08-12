@@ -720,3 +720,188 @@ func TestRetryBackoffGrowsExponentially(t *testing.T) {
 		t.Fatalf("second backoff %v not greater than first %v", second, first)
 	}
 }
+
+func TestParseImageTagsSingle(t *testing.T) {
+	text := "prefix @@/tmp/shot.png@@ suffix"
+	images := parseImageTags(text)
+	if len(images) != 1 {
+		t.Fatalf("images = %#v", images)
+	}
+	if images[0].Path != "/tmp/shot.png" {
+		t.Fatalf("path = %q", images[0].Path)
+	}
+}
+
+func TestParseImageTagsMultiple(t *testing.T) {
+	text := "@@/tmp/a.png@@ text @@/tmp/b.jpg@@"
+	images := parseImageTags(text)
+	if len(images) != 2 {
+		t.Fatalf("images = %#v", images)
+	}
+	if images[0].Path != "/tmp/a.png" || images[1].Path != "/tmp/b.jpg" {
+		t.Fatalf("paths = %#v", images)
+	}
+}
+
+func TestParseImageTagsSkipsEmpty(t *testing.T) {
+	// Empty path tags are skipped.
+	text := "@@@@ @@@@   "
+	if images := parseImageTags(text); len(images) != 0 {
+		t.Fatalf("images = %#v", images)
+	}
+}
+
+func TestParseImageTagsNone(t *testing.T) {
+	if images := parseImageTags("no tags here"); images != nil {
+		t.Fatalf("images = %#v", images)
+	}
+}
+
+func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			if len(request.Messages) != 2 {
+				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			}
+			toolMessage := request.Messages[1]
+			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
+				t.Fatalf("unexpected tool message: %#v", toolMessage)
+			}
+			// The tag is not stripped from the content.
+			if toolMessage.Content != "captured @@/tmp/shot.png@@" {
+				t.Fatalf("content = %q", toolMessage.Content)
+			}
+			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != "/tmp/shot.png" {
+				t.Fatalf("images = %#v", toolMessage.Images)
+			}
+			return Response{Content: "seen"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "snap"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "captured @@/tmp/shot.png@@", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "seen" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			toolMessage := request.Messages[1]
+			if toolMessage.Content != "plain output" || len(toolMessage.Images) != 0 {
+				t.Fatalf("tool message = %#v", toolMessage)
+			}
+			return Response{Content: "done"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "plain"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "plain output", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
+	// Command tools wrap their output in a JSON object whose stdout field
+	// carries the actual output. The @@path@@ tag survives JSON encoding
+	// unchanged, so it is parsed directly from the JSON string.
+	jsonOutput := `{"exit_code":0,"stdout":"@@/tmp/shot.png@@\n","stderr":"","timed_out":false,"truncated":false}`
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			toolMessage := request.Messages[1]
+			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
+				t.Fatalf("unexpected tool message: %#v", toolMessage)
+			}
+			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != "/tmp/shot.png" {
+				t.Fatalf("images = %#v", toolMessage.Images)
+			}
+			return Response{Content: "seen"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "snap"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return jsonOutput, nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "seen" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunDoesNotMutateCallerImages(t *testing.T) {
+	input := []Message{{
+		Role:   RoleUser,
+		Content: "look",
+		Images: []Image{{Path: "/tmp/a.png"}},
+	}}
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		request.Messages[0].Images[0].Path = "changed"
+		return Response{Content: "done"}, nil
+	})
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Run(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if input[0].Images[0].Path != "/tmp/a.png" {
+		t.Fatalf("caller image was mutated: %#v", input[0].Images)
+	}
+}

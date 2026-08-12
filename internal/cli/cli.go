@@ -73,6 +73,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
 	var commandSkillDirectories stringListFlag
 	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
+	var imagePaths stringListFlag
+	flags.Var(&imagePaths, "image", "attach an image file to the prompt (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
 	var quiet bool
 	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
@@ -271,7 +273,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		messages = append(messages, snapshot.Messages...)
 		continuation = snapshot.Continuation
 	}
-	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
+	imageRefs := make([]dora.Image, 0, len(imagePaths))
+	for _, path := range imagePaths {
+		imageRefs = append(imageRefs, dora.Image{Path: path})
+	}
+	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt, Images: imageRefs})
 	state := dora.State{Messages: messages, Continuation: continuation}
 	var result dora.Result
 	var observer dora.Observer

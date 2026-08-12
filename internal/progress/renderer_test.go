@@ -138,6 +138,27 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	}
 }
 
+func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我先检查系统状态。\n\n",
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+		},
+	})
+	// Trailing newlines must not render as empty continuation lines.
+	if strings.Contains(output.String(), "│ \n") {
+		t.Fatalf("output = %q", output.String())
+	}
+	if !strings.Contains(output.String(), "● 我先检查系统状态。") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestToolSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 	call := dora.ToolCall{
 		Name:  "bash",

@@ -177,3 +177,48 @@ func TestStoreCanReplaceVersionOneByRevision(t *testing.T) {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
+
+func TestStoreRoundTripsImages(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []dora.Message{
+		{Role: dora.RoleUser, Content: "look", Images: []dora.Image{{Path: "/tmp/a.png"}, {URL: "https://example.test/b.png"}}},
+		{Role: dora.RoleTool, ToolCallID: "call-1", Content: "seen", Images: []dora.Image{{URL: "data:image/png;base64,AAAA"}}},
+	}
+	backend := Backend{Provider: "openai", API: "responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
+	if err := store.Save("images", 0, Snapshot{Backend: backend, Messages: messages}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("images")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Messages, messages) {
+		t.Fatalf("messages = %#v, want %#v", snapshot.Messages, messages)
+	}
+}
+
+func TestStoreReadsMessageWithoutImages(t *testing.T) {
+	// A message without an images field must still load with an empty image
+	// slice (backward compatibility for the optional field).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.json")
+	payload := `{"version":4,"revision":1,"backend":{"provider":"openai","api":"chat_completions","model":"test","base_url":"http://localhost"},"messages":[{"role":"user","content":"hello"}]}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 1 || len(snapshot.Messages) != 1 || snapshot.Messages[0].Content != "hello" || len(snapshot.Messages[0].Images) != 0 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
