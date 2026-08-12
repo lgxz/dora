@@ -18,7 +18,13 @@ GOARCH ?= arm64
 CGO_ENABLED ?= 0
 LINUX_BINARY ?= $(RELEASE_DIR)/dora-linux-$(GOARCH)
 
-.PHONY: build release install test check release-linux
+# Cross-compile a Windows binary. WINDOWS_GOARCH defaults to amd64 (the
+# dominant Windows architecture); override with WINDOWS_GOARCH=arm64 for
+# ARM64 targets.
+WINDOWS_GOARCH ?= amd64
+WINDOWS_BINARY ?= $(RELEASE_DIR)/dora-windows-$(WINDOWS_GOARCH).exe
+
+.PHONY: build release install test check release-linux release-windows
 
 build: | $(BUILD_DIR)/
 	$(GO) build -o $(BINARY) ./cmd/dora
@@ -36,6 +42,13 @@ install: release
 release-linux: | $(RELEASE_DIR)/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
 		$(GO) build -trimpath -ldflags="$(RELEASE_LDFLAGS)" -o $(LINUX_BINARY) ./cmd/dora
+
+# Cross-compile a Windows binary.
+#   make release-windows                       # -> dist/dora-windows-amd64.exe
+#   make release-windows WINDOWS_GOARCH=arm64  # -> dist/dora-windows-arm64.exe
+release-windows: | $(RELEASE_DIR)/
+	GOOS=windows GOARCH=$(WINDOWS_GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
+		$(GO) build -trimpath -ldflags="$(RELEASE_LDFLAGS)" -o $(WINDOWS_BINARY) ./cmd/dora
 
 test:
 	$(GO) test ./...
