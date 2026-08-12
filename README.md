@@ -135,9 +135,10 @@ make release
 ```
 
 The release target uses `-trimpath`, strips debug data, and embeds the version,
-commit, and build date. Override `VERSION`, `COMMIT`, or `BUILD_DATE` when
-needed. On Windows the equivalent Go command can be run directly with
-`build/dora.exe` as the output path when `make` is unavailable.
+commit, and build date, writing to `dist/dora` (`dist/dora.exe` on Windows).
+Override `VERSION`, `COMMIT`, or `BUILD_DATE` when needed. On Windows the
+equivalent Go command can be run directly with `dist/dora.exe` as the output
+path when `make` is unavailable.
 
 To build a release binary and install it into `$(PREFIX)/bin/dora` (default
 `$HOME/.local/bin/dora`), use:
