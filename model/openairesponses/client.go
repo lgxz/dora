@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
-	"github.com/lgxz/dora/model/internal/imageutil"
+	"github.com/lgxz/dora/imageutil"
 )
 
 const maxEventBytes = 4 << 20
@@ -304,7 +304,7 @@ func encodeContent(message dora.Message) (json.RawMessage, error) {
 		parts = append(parts, responseContentPart{Type: "input_text", Text: message.Content})
 	}
 	for _, image := range message.Images {
-		url, err := imageutil.DataURL(image)
+		url, err := imageDataURL(image)
 		if err != nil {
 			return nil, fmt.Errorf("openai responses: %w", err)
 		}
@@ -321,6 +321,18 @@ type responseContentPart struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+}
+
+// imageDataURL resolves an image reference to a data URL. A URL is used
+// directly; a Path is read and encoded by imageutil.
+func imageDataURL(image dora.Image) (string, error) {
+	if image.URL != "" {
+		return image.URL, nil
+	}
+	if image.Path == "" {
+		return "", errors.New("image has neither Path nor URL")
+	}
+	return imageutil.DataURL(image.Path)
 }
 
 func appendInput(input *[]json.RawMessage, item inputItem) error {

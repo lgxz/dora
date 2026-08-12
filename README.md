@@ -491,3 +491,10 @@ The model can also surface images itself: when a command tool's stdout contains
 a `@@path@@` tag, Dora parses it and attaches the image at that path to the
 tool message. The command tool description documents this convention so the
 model knows it can emit such a tag.
+
+Images consume model context: each attached image is encoded into vision tokens
+that count toward the model's context window, so large images or many images
+can exhaust a small context window. Dora limits each image file to 4 MiB and
+rejects files that are not images. When a `@@path@@` tag points at a missing,
+non-image, or oversized file, Dora does not attach it and instead reports the
+error to the model so it can correct the path.

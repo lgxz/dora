@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lgxz/dora/imageutil"
 )
 
 const defaultMaxRounds = 256
@@ -216,11 +217,19 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 				continue
 			}
 
+			paths, notes := imageutil.ParseTags(result.output)
+			images := make([]Image, 0, len(paths))
+			for _, path := range paths {
+				images = append(images, Image{Path: path})
+			}
 			toolMessage := Message{
 				Role:       RoleTool,
 				Content:    result.output,
 				ToolCallID: call.ID,
-				Images:     parseImageTags(result.output),
+				Images:     images,
+			}
+			if len(notes) > 0 {
+				toolMessage.Content += "\n\n" + strings.Join(notes, "\n")
 			}
 			history = append(history, toolMessage)
 			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
@@ -353,27 +362,4 @@ func cloneToolSpec(spec ToolSpec) ToolSpec {
 
 func cloneBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
-}
-
-// imageTagPattern matches a @@path@@ tag and captures the file path. The @@
-// delimiter is distinctive and survives JSON encoding unchanged, so it is
-// unlikely to collide with ordinary command output.
-var imageTagPattern = regexp.MustCompile(`@@([^@]+)@@`)
-
-// parseImageTags extracts every @@path@@ tag from text and converts each into a
-// dora.Image referencing the local file.
-func parseImageTags(text string) []Image {
-	matches := imageTagPattern.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	images := make([]Image, 0, len(matches))
-	for _, match := range matches {
-		path := strings.TrimSpace(match[1])
-		if path == "" {
-			continue
-		}
-		images = append(images, Image{Path: path})
-	}
-	return images
 }

@@ -4,12 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// pngBytes is a minimal valid PNG header so http.DetectContentType reports
+// image/png.
+var pngBytes = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
+
+// writeTempPNG writes a minimal PNG file and returns its path.
+func writeTempPNG(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "img.png")
+	if err := os.WriteFile(path, pngBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 type modelFunc func(context.Context, Request) (Response, error)
 
@@ -721,43 +738,8 @@ func TestRetryBackoffGrowsExponentially(t *testing.T) {
 	}
 }
 
-func TestParseImageTagsSingle(t *testing.T) {
-	text := "prefix @@/tmp/shot.png@@ suffix"
-	images := parseImageTags(text)
-	if len(images) != 1 {
-		t.Fatalf("images = %#v", images)
-	}
-	if images[0].Path != "/tmp/shot.png" {
-		t.Fatalf("path = %q", images[0].Path)
-	}
-}
-
-func TestParseImageTagsMultiple(t *testing.T) {
-	text := "@@/tmp/a.png@@ text @@/tmp/b.jpg@@"
-	images := parseImageTags(text)
-	if len(images) != 2 {
-		t.Fatalf("images = %#v", images)
-	}
-	if images[0].Path != "/tmp/a.png" || images[1].Path != "/tmp/b.jpg" {
-		t.Fatalf("paths = %#v", images)
-	}
-}
-
-func TestParseImageTagsSkipsEmpty(t *testing.T) {
-	// Empty path tags are skipped.
-	text := "@@@@ @@@@   "
-	if images := parseImageTags(text); len(images) != 0 {
-		t.Fatalf("images = %#v", images)
-	}
-}
-
-func TestParseImageTagsNone(t *testing.T) {
-	if images := parseImageTags("no tags here"); images != nil {
-		t.Fatalf("images = %#v", images)
-	}
-}
-
 func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
+	path := writeTempPNG(t)
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
@@ -773,10 +755,10 @@ func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
 				t.Fatalf("unexpected tool message: %#v", toolMessage)
 			}
 			// The tag is not stripped from the content.
-			if toolMessage.Content != "captured @@/tmp/shot.png@@" {
+			if toolMessage.Content != "captured @@"+path+"@@" {
 				t.Fatalf("content = %q", toolMessage.Content)
 			}
-			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != "/tmp/shot.png" {
+			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != path {
 				t.Fatalf("images = %#v", toolMessage.Images)
 			}
 			return Response{Content: "seen"}, nil
@@ -788,7 +770,7 @@ func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
 	tool := stubTool{
 		spec: ToolSpec{Name: "snap"},
 		execute: func(context.Context, json.RawMessage) (string, error) {
-			return "captured @@/tmp/shot.png@@", nil
+			return "captured @@" + path + "@@", nil
 		},
 	}
 	agent, err := New(model, tool)
@@ -844,7 +826,8 @@ func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
 	// Command tools wrap their output in a JSON object whose stdout field
 	// carries the actual output. The @@path@@ tag survives JSON encoding
 	// unchanged, so it is parsed directly from the JSON string.
-	jsonOutput := `{"exit_code":0,"stdout":"@@/tmp/shot.png@@\n","stderr":"","timed_out":false,"truncated":false}`
+	path := writeTempPNG(t)
+	jsonOutput := fmt.Sprintf(`{"exit_code":0,"stdout":"@@%s@@\n","stderr":"","timed_out":false,"truncated":false}`, path)
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
@@ -856,7 +839,7 @@ func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
 			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
 				t.Fatalf("unexpected tool message: %#v", toolMessage)
 			}
-			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != "/tmp/shot.png" {
+			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != path {
 				t.Fatalf("images = %#v", toolMessage.Images)
 			}
 			return Response{Content: "seen"}, nil
@@ -869,6 +852,49 @@ func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
 		spec: ToolSpec{Name: "snap"},
 		execute: func(context.Context, json.RawMessage) (string, error) {
 			return jsonOutput, nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "seen" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunReportsInvalidImagePathToModel(t *testing.T) {
+	// A @@path@@ tag pointing at a missing file must not attach an image and
+	// must surface a note so the model can correct the path.
+	missing := filepath.Join(t.TempDir(), "missing.png")
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			toolMessage := request.Messages[1]
+			if len(toolMessage.Images) != 0 {
+				t.Fatalf("images = %#v", toolMessage.Images)
+			}
+			if !strings.Contains(toolMessage.Content, "could not be attached") {
+				t.Fatalf("content = %q", toolMessage.Content)
+			}
+			return Response{Content: "seen"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "snap"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "captured @@" + missing + "@@", nil
 		},
 	}
 	agent, err := New(model, tool)

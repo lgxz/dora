@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
-	"github.com/lgxz/dora/model/internal/imageutil"
+	"github.com/lgxz/dora/imageutil"
 )
 
 const maxResponseBytes = 4 << 20
@@ -230,7 +230,7 @@ func encodeContent(message dora.Message) (json.RawMessage, error) {
 		parts = append(parts, chatContentPart{Type: "text", Text: message.Content})
 	}
 	for _, image := range message.Images {
-		url, err := imageutil.DataURL(image)
+		url, err := imageDataURL(image)
 		if err != nil {
 			return nil, fmt.Errorf("openai: %w", err)
 		}
@@ -256,6 +256,18 @@ type chatContentPart struct {
 
 type chatImageURL struct {
 	URL string `json:"url"`
+}
+
+// imageDataURL resolves an image reference to a data URL. A URL is used
+// directly; a Path is read and encoded by imageutil.
+func imageDataURL(image dora.Image) (string, error) {
+	if image.URL != "" {
+		return image.URL, nil
+	}
+	if image.Path == "" {
+		return "", errors.New("image has neither Path nor URL")
+	}
+	return imageutil.DataURL(image.Path)
 }
 
 func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func()) (dora.Response, error) {
