@@ -249,29 +249,72 @@ func TestNewRejectsDuplicateTools(t *testing.T) {
 	}
 }
 
-func TestRunReturnsMissingToolError(t *testing.T) {
-	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{ToolCalls: []ToolCall{{Name: "missing"}}}, nil
+func TestRunFeedsBackMissingToolError(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "missing"}}}, nil
+		case 2:
+			if len(request.Messages) != 2 {
+				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			}
+			result := request.Messages[1]
+			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
+				!strings.Contains(result.Content, `tool "missing" not found`) {
+				t.Fatalf("unexpected tool error message: %#v", result)
+			}
+			return Response{Content: "recovered"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
 	})
 	agent, err := New(model)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := agent.Run(context.Background(), nil); err == nil {
-		t.Fatal("expected missing tool error")
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "recovered" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
 	}
 }
 
-func TestRunWrapsToolError(t *testing.T) {
-	want := errors.New("broken")
-	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{ToolCalls: []ToolCall{{Name: "fail"}}}, nil
+func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{
+				ID:    "call-1",
+				Name:  "fail",
+				Input: json.RawMessage(`{"bad":true}`),
+			}}}, nil
+		case 2:
+			if len(request.Messages) != 2 {
+				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			}
+			result := request.Messages[1]
+			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
+				!strings.Contains(result.Content, `tool "fail" failed`) {
+				t.Fatalf("unexpected tool error message: %#v", result)
+			}
+			return Response{Content: "corrected"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "fail"},
 		execute: func(context.Context, json.RawMessage) (string, error) {
-			return "", want
+			return "", errors.New("broken")
 		},
 	}
 	agent, err := New(model, tool)
@@ -279,9 +322,93 @@ func TestRunWrapsToolError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = agent.Run(context.Background(), nil)
-	if !errors.Is(err, want) {
-		t.Fatalf("error = %v, want wrapped %v", err, want)
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "corrected" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{ToolCalls: []ToolCall{{
+				ID:    "call-1",
+				Name:  "weather",
+				Input: json.RawMessage(`not-json`),
+			}}}, nil
+		case 2:
+			if len(request.Messages) != 2 {
+				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			}
+			result := request.Messages[1]
+			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
+				!strings.Contains(result.Content, `arguments for tool "weather" were not valid JSON: not-json`) {
+				t.Fatalf("unexpected tool error message: %#v", result)
+			}
+			return Response{Content: "corrected"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "weather"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			t.Fatal("tool must not execute with invalid JSON arguments")
+			return "", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := agent.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "corrected" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+}
+
+func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		if calls == 1 {
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "fail"}}}, nil
+		}
+		return Response{Content: "done"}, nil
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "fail"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "", errors.New("broken")
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var failed []Update
+	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+		if update.Kind == UpdateToolFailed {
+			failed = append(failed, update)
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed) != 1 || failed[0].ToolCall.Name != "fail" || failed[0].Err == nil {
+		t.Fatalf("failed updates = %#v", failed)
 	}
 }
 

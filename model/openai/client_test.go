@@ -127,7 +127,7 @@ func TestGenerateReturnsAPIError(t *testing.T) {
 	}
 }
 
-func TestGenerateRejectsInvalidToolArguments(t *testing.T) {
+func TestGenerateReturnsRawInvalidToolArguments(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return streamResponse(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"bad","arguments":"not-json"}}]}}]}`), nil
 	})}
@@ -136,9 +136,13 @@ func TestGenerateRejectsInvalidToolArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Generate(context.Background(), dora.Request{})
-	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
-		t.Fatalf("error = %v", err)
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "bad" ||
+		string(response.ToolCalls[0].Input) != "not-json" {
+		t.Fatalf("response = %#v", response)
 	}
 }
 

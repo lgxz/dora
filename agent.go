@@ -2,6 +2,7 @@ package dora
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -151,18 +152,32 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 
 		for _, call := range response.ToolCalls {
 			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call})
+
 			tool, ok := a.tools[call.Name]
 			if !ok {
-				err := fmt.Errorf("dora: tool %q not found", call.Name)
+				err := fmt.Errorf("tool %q not found", call.Name)
 				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
-				return Result{}, err
+				feedToolError(&history, call, err)
+				continue
+			}
+
+			if !json.Valid(call.Input) {
+				err := fmt.Errorf("arguments are not valid JSON: %s", call.Input)
+				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
+				history = append(history, Message{
+					Role:       RoleTool,
+					ToolCallID: call.ID,
+					Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
+				})
+				continue
 			}
 
 			output, err := tool.Execute(ctx, cloneBytes(call.Input))
 			if err != nil {
-				err = fmt.Errorf("dora: execute tool %q: %w", call.Name, err)
+				err = fmt.Errorf("execute tool %q: %w", call.Name, err)
 				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: err})
-				return Result{}, err
+				feedToolError(&history, call, err)
+				continue
 			}
 
 			toolMessage := Message{
@@ -236,6 +251,17 @@ func notify(observer Observer, update Update) {
 	update.Message = cloneMessage(update.Message)
 	update.ToolCall = cloneToolCall(update.ToolCall)
 	observer.Observe(update)
+}
+
+// feedToolError appends a RoleTool message describing a failed tool call so the
+// model can correct itself, and is used instead of aborting the run. The error
+// is correlated to the original call via call.ID.
+func feedToolError(history *[]Message, call ToolCall, err error) {
+	*history = append(*history, Message{
+		Role:       RoleTool,
+		ToolCallID: call.ID,
+		Content:    fmt.Sprintf("Error: tool %q failed: %v. Please correct your arguments and try again.", call.Name, err),
+	})
 }
 
 func cloneMessage(message Message) Message {

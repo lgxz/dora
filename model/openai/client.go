@@ -278,9 +278,6 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 		if len(arguments) == 0 {
 			arguments = json.RawMessage(`{}`)
 		}
-		if !json.Valid(arguments) {
-			return dora.Response{}, fmt.Errorf("tool %q returned invalid JSON arguments", call.name)
-		}
 		toolCall := dora.ToolCall{ID: call.id, Name: call.name, Input: arguments}
 		result.ToolCalls = append(result.ToolCalls, toolCall)
 		if emit != nil {

@@ -346,9 +346,6 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 				if len(arguments) == 0 {
 					arguments = json.RawMessage(`{}`)
 				}
-				if !json.Valid(arguments) {
-					return fmt.Errorf("tool %q returned invalid JSON arguments", item.Name)
-				}
 				emit(dora.ModelEvent{Kind: dora.ModelEventToolCallReady, ToolCall: dora.ToolCall{
 					ID: item.CallID, Name: item.Name, Input: arguments,
 				}})
@@ -422,9 +419,6 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 			arguments := json.RawMessage(item.Arguments)
 			if len(arguments) == 0 {
 				arguments = json.RawMessage(`{}`)
-			}
-			if !json.Valid(arguments) {
-				return dora.Response{}, fmt.Errorf("tool %q returned invalid JSON arguments", item.Name)
 			}
 			result.ToolCalls = append(result.ToolCalls, dora.ToolCall{
 				ID: item.CallID, Name: item.Name, Input: arguments,

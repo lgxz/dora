@@ -166,7 +166,7 @@ Current execution semantics:
 - Input messages, tool calls, and output state are all defensively copied.
 - When the model returns multiple tool calls, they are executed serially in the returned order.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
-- A tool execution error terminates the current task; a tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
+- A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, after reaching `MaxRounds` it returns both `ErrMaxRounds` and a resumable `Result` containing the completed tool output; the default limit is 256. When both stdin and stderr are connected to a terminal, the CLI asks whether to continue the next segment from that state; when the user declines, it saves the partial state of the named session and stops normally. Non-interactive runs keep reporting the error directly, avoiding waiting for input in pipelines or automated tasks.
 - The current CLI does not inject a system prompt. `Message` and both API adapters support the `system` role, so library callers can pass one in themselves.
 
@@ -210,6 +210,11 @@ Both adapters are themselves responsible for:
 - protocol wrapping of Tool JSON Schemas;
 - interpretation of HTTP status and malformed response formats;
 - response size or stream event size limits.
+
+The adapters do not validate the JSON of model-emitted tool-call arguments; they
+pass the raw arguments through to the Agent, which is the single authority on
+tool-call validity. Invalid arguments are fed back to the model as a recoverable
+`tool` message rather than aborting the run.
 
 ## Session
 
