@@ -476,17 +476,18 @@ or defaults to 120 seconds when that setting is zero or absent.
 
 Dora can attach images to messages so a multimodal (vision) model can "see"
 them. Image understanding depends on the configured model: the default
-DeepSeek model may not support vision, so use `--model` or a config override to
-select a vision-capable model (for example an OpenAI `gpt-4o`-class model).
+DeepSeek model may not support vision, so enable it explicitly with `--vision`
+or `model.vision: true` in the config, and select a vision-capable model (for
+example an OpenAI `gpt-4o`-class model).
 
-Attach a local image to the current prompt with the repeatable `--image` flag:
+Attach a local image to the current prompt with the repeatable `--image` flag
+(requires vision to be enabled):
 
 ```sh
-./dora --model gpt-4o --image photo.png "Describe this photo"
+./dora --vision --model gpt-4o --image photo.png "Describe this photo"
 ```
 
 The model can also surface images itself: when a command tool's stdout contains
-an `<image>base64</image>` tag, Dora parses it, attaches the decoded image to
-the tool message, and replaces the tag with a short placeholder in the visible
-output. The Bash tool description documents this convention so the model knows
-it can emit such a tag.
+a `@@path@@` tag, Dora parses it and attaches the image at that path to the
+tool message. The command tool description documents this convention so the
+model knows it can emit such a tag.

@@ -18,7 +18,7 @@ type toolCandidate struct {
 	unavailable      error
 }
 
-func buildCommandTools(cfg config.Tools) ([]dora.Tool, error) {
+func buildCommandTools(cfg config.Tools, vision bool) ([]dora.Tool, error) {
 	return assembleCommandTools(runtime.GOOS, []toolCandidate{
 		{
 			enabled:          cfg.Bash.Enabled,
@@ -26,6 +26,7 @@ func buildCommandTools(cfg config.Tools) ([]dora.Tool, error) {
 			create: func() (dora.Tool, error) {
 				return bashtool.New(bashtool.Config{
 					Timeout: time.Duration(cfg.Bash.TimeoutSeconds) * time.Second,
+					Vision:  vision,
 				})
 			},
 			unavailable: bashtool.ErrUnavailable,
@@ -36,6 +37,7 @@ func buildCommandTools(cfg config.Tools) ([]dora.Tool, error) {
 			create: func() (dora.Tool, error) {
 				return powershelltool.New(powershelltool.Config{
 					Timeout: time.Duration(cfg.PowerShell.TimeoutSeconds) * time.Second,
+					Vision:  vision,
 				})
 			},
 			unavailable: powershelltool.ErrUnavailable,

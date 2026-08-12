@@ -45,6 +45,10 @@ type Model struct {
 	// Zero disables the idle timeout and leaves the stream governed by the
 	// caller's context.
 	StreamIdleTimeoutSeconds int `yaml:"stream_idle_timeout_seconds,omitempty"`
+	// Vision enables image understanding. When true, command tools advertise
+	// the @@path@@ image tag and --image is accepted. Requires a vision-capable
+	// model.
+	Vision bool `yaml:"vision,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.

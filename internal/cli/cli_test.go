@@ -102,6 +102,7 @@ model:
   name: test-model
   base_url: %s
   api_key: secret
+  vision: true
 `, "https://example.test/v1")
 	if err := os.WriteFile(configPath, []byte(configContents), 0o600); err != nil {
 		t.Fatal(err)

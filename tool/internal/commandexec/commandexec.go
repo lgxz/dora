@@ -29,6 +29,9 @@ type Config struct {
 	CommandArgs    func(string) []string
 	Timeout        time.Duration
 	MaxOutputBytes int
+	// Vision advertises the @@path@@ image tag in the tool description so the
+	// model can attach images for viewing. Requires a vision-capable model.
+	Vision bool
 }
 
 // Tool executes commands using a configured executable.
@@ -39,6 +42,7 @@ type Tool struct {
 	commandArgs    func(string) []string
 	timeout        time.Duration
 	maxOutputBytes int
+	vision         bool
 }
 
 // New creates a command execution tool.
@@ -68,6 +72,7 @@ func New(cfg Config) (*Tool, error) {
 		commandArgs:    cfg.CommandArgs,
 		timeout:        timeout,
 		maxOutputBytes: maxOutputBytes,
+		vision:         cfg.Vision,
 	}, nil
 }
 
@@ -78,10 +83,12 @@ func (t *Tool) Spec() dora.ToolSpec {
 		t.timeout,
 	)
 	description := t.description
-	if description != "" {
-		description += " "
+	if t.vision {
+		if description != "" {
+			description += " "
+		}
+		description += "To load an image file for viewing, use `echo @@path@@`"
 	}
-	description += "To load an image file for viewing, use `echo @@path@@`"
 	return dora.ToolSpec{
 		Name:        t.name,
 		Description: description,

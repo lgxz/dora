@@ -57,6 +57,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	visionFlag := flags.Bool("vision", false, "enable image understanding (requires a vision-capable model)")
 	var maxRounds int
 	var maxRoundsSet bool
 	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
@@ -94,6 +95,12 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		return err
 	}
+	visionSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "vision" {
+			visionSet = true
+		}
+	})
 	if *showVersion {
 		version := streams.Version
 		if version == "" {
@@ -158,6 +165,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if *baseURL != "" {
 		cfg.Model.BaseURL = *baseURL
+	}
+	if visionSet {
+		cfg.Model.Vision = *visionFlag
 	}
 	if maxRoundsSet {
 		cfg.Agent.MaxRounds = maxRounds
@@ -255,7 +265,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 		}
 	}
-	commandTools, err := buildCommandTools(cfg.Tools)
+	commandTools, err := buildCommandTools(cfg.Tools, cfg.Model.Vision)
 	if err != nil {
 		return err
 	}
@@ -272,6 +282,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if !*fresh {
 		messages = append(messages, snapshot.Messages...)
 		continuation = snapshot.Continuation
+	}
+	if len(imagePaths) > 0 && !cfg.Model.Vision {
+		return errors.New("--image requires a vision-capable model; enable it with --vision or model.vision: true")
 	}
 	imageRefs := make([]dora.Image, 0, len(imagePaths))
 	for _, path := range imagePaths {

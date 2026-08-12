@@ -46,7 +46,7 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecIdentifiesPowerShell(t *testing.T) {
-	tool, err := New(Config{Timeout: 120 * time.Second})
+	tool, err := New(Config{Timeout: 120 * time.Second, Vision: true})
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("PowerShell is not installed")
 	}

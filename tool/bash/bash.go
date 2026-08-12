@@ -22,6 +22,8 @@ var ErrUnavailable = errors.New("bash: executable unavailable")
 type Config struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
+	// Vision advertises the @@path@@ image tag in the tool description.
+	Vision bool
 }
 
 // Tool executes commands using Bash.
@@ -44,6 +46,7 @@ func New(cfg Config) (*Tool, error) {
 		CommandArgs:    commandArgs,
 		Timeout:        cfg.Timeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
+		Vision:         cfg.Vision,
 	})
 	if err != nil {
 		return nil, err

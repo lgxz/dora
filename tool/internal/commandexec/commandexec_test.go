@@ -25,13 +25,21 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
-	tool := newTestTool(t, Config{Timeout: 45 * time.Second})
+	tool := newTestTool(t, Config{Timeout: 45 * time.Second, Vision: true})
 	spec := tool.Spec()
 	if spec.Name != "test-command" ||
 		!strings.Contains(spec.Description, "Execute a test command") ||
 		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "default of 45s") {
 		t.Fatalf("spec = %#v", spec)
+	}
+}
+
+func TestSpecOmitsImageNoteWithoutVision(t *testing.T) {
+	tool := newTestTool(t, Config{})
+	spec := tool.Spec()
+	if strings.Contains(spec.Description, "@@path@@") {
+		t.Fatalf("description = %q", spec.Description)
 	}
 }
 

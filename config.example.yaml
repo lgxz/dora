@@ -19,6 +19,11 @@ model:
   # governed by the caller's context. Default: 0.
   # stream_idle_timeout_seconds: 0
 
+  # Enable image understanding. Requires a vision-capable model. When true,
+  # command tools advertise the @@path@@ image tag and --image is accepted.
+  # Default: false.
+  # vision: true
+
 agent:
   max_rounds: 256
 
