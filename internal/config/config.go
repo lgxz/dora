@@ -153,6 +153,12 @@ func intPtr(v int) *int {
 	return &v
 }
 
+// strPtr returns a pointer to v. It is a convenience helper for setting
+// pointer-typed config defaults.
+func strPtr(v string) *string {
+	return &v
+}
+
 func (cfg *Config) resolveAndValidate() error {
 	model := &cfg.Model
 	if err := model.selectProvider(); err != nil {
@@ -169,6 +175,9 @@ func (cfg *Config) resolveAndValidate() error {
 	case "chat_completions", "responses":
 	default:
 		return errors.New(`model.api must be "chat_completions" or "responses"`)
+	}
+	if model.Provider == "deepseek" && model.Thinking == nil {
+		model.Thinking = strPtr("off")
 	}
 	if model.Name == "" {
 		model.Name = preset.name

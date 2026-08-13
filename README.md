@@ -300,7 +300,9 @@ tool-calling models ignore or reject non-default temperatures, treat
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when
-omitted, no value is sent and the provider uses its own reasoning default.
+omitted, no value is sent and the provider uses its own reasoning default. The
+`deepseek` preset is the exception and defaults to `off`; set `thinking`
+explicitly to override.
 Support varies by provider, and unsupported values are silently ignored rather
 than causing an error:
 

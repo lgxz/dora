@@ -573,14 +573,44 @@ func TestLoadRejectsTemperatureOutOfRange(t *testing.T) {
 }
 
 func TestDefaultThinkingIsNil(t *testing.T) {
+	// The openai preset leaves thinking unset (nil = provider default). Only
+	// deepseek defaults thinking to off.
 	clearPresetAPIKeys(t)
-	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("OPENAI_API_KEY", "test-secret")
 	cfg, err := Default()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Model.Thinking != nil {
 		t.Fatalf("thinking = %#v, want nil", cfg.Model.Thinking)
+	}
+}
+
+func TestDeepSeekDefaultThinkingIsOff(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	path := writeConfig(t, "model:\n  provider: deepseek\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Thinking == nil || *cfg.Model.Thinking != "off" {
+		t.Fatalf("thinking = %#v, want \"off\"", cfg.Model.Thinking)
+	}
+}
+
+func TestDeepSeekPreservesExplicitThinking(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	path := writeConfig(t, "model:\n  provider: deepseek\n  thinking: medium\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Thinking == nil || *cfg.Model.Thinking != "medium" {
+		t.Fatalf("thinking = %#v, want \"medium\"", cfg.Model.Thinking)
 	}
 }
 

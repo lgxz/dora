@@ -30,7 +30,8 @@ model:
   # temperature: 1.0
   # Model "thinking mode" reasoning effort: off | minimal | low | medium | high.
   # Nil leaves it to the provider default. Values the provider does not support
-  # are silently ignored (not sent).
+  # are silently ignored (not sent). The deepseek preset defaults to off;
+  # set thinking here to override.
   # thinking: off
 
   # Enable image understanding. Requires a vision-capable model. When true,
