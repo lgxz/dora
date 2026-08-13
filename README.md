@@ -315,8 +315,13 @@ than causing an error:
   Chat Completions or `reasoning.effort: none` on Responses.
 - **trust**: treated best-effort like OpenAI on both APIs.
 
-Because a setting may simply be dropped, treat `thinking` as a hint rather than
-a guarantee.
+Because a setting may simply be dropped, treat `thinking` as a hint rather
+than a guarantee. For one invocation, `--thinking` overrides the configured
+`model.thinking` with one of `off`, `minimal`, `low`, `medium`, or `high`:
+
+```sh
+./dora --thinking high "Solve a hard problem"
+```
 
 Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:
@@ -402,9 +407,9 @@ the existing stateless behavior. Session files can contain commands and tool
 output, so treat them as sensitive. Do not run two Dora processes against the
 same session name concurrently.
 
-Use `--config`, `--model`, `--base-url`, `--max-rounds`, `--max-history-rounds`,
-`--skills-dir`, or `--no-skills` to override the corresponding configuration
-for one invocation.
+Use `--config`, `--model`, `--base-url`, `--thinking`, `--max-rounds`,
+`--max-history-rounds`, `--skills-dir`, or `--no-skills` to override the
+corresponding configuration for one invocation.
 
 ### Skills
 

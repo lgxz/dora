@@ -484,6 +484,112 @@ func TestRunIgnoresDeepSeekChatThinkingMinimal(t *testing.T) {
 	}
 }
 
+func TestRunThinkingFlagOverridesChatConfig(t *testing.T) {
+	// --thinking low overrides an openai chat config with no config thinking,
+	// so the outgoing body gets reasoning_effort: low and no nested reasoning.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["reasoning_effort"] != "low" {
+			t.Fatalf("reasoning_effort = %#v, want \"low\"", body["reasoning_effort"])
+		}
+		if _, exists := body["reasoning"]; exists {
+			t.Fatalf("unexpected reasoning in %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--thinking", "low", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunThinkingFlagOverridesDeepSeekDefaultOff(t *testing.T) {
+	// A deepseek config with no thinking defaults to off; --thinking medium
+	// must beat that default and send reasoning_effort: medium (no disabled
+	// thinking object and no reasoning_effort).
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("TRUST_API_KEY", "")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["reasoning_effort"] != "medium" {
+			t.Fatalf("reasoning_effort = %#v, want \"medium\"", body["reasoning_effort"])
+		}
+		if _, exists := body["thinking"]; exists {
+			t.Fatalf("unexpected thinking in %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model:\n  provider: deepseek\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--thinking", "medium", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunRejectsInvalidThinkingFlag(t *testing.T) {
+	// --thinking turbo is not a legal mode and must be rejected before any
+	// model call, mentioning the allowed set.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected model request %s", request.URL.String())
+		return nil, nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"--thinking", "turbo", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          &stderr,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	})
+	if err == nil {
+		t.Fatal("expected an error for invalid --thinking value")
+	}
+	if !strings.Contains(err.Error(), `--thinking must be one of "off", "minimal", "low", "medium", "high"`) {
+		t.Fatalf("error = %q, want the allowed set", err.Error())
+	}
+}
+
 func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

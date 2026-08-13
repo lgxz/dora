@@ -57,6 +57,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	configPath := flags.String("config", "", "path to YAML configuration")
 	modelName := flags.String("model", "", "override the configured model name")
 	baseURL := flags.String("base-url", "", "override the configured model base URL")
+	thinkingFlag := flags.String("thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
 	visionFlag := flags.Bool("vision", false, "enable image understanding (requires a vision-capable model)")
 	var maxRounds int
 	var maxRoundsSet bool
@@ -176,6 +177,15 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if *baseURL != "" {
 		cfg.Model.BaseURL = *baseURL
+	}
+	if *thinkingFlag != "" {
+		switch *thinkingFlag {
+		case "off", "minimal", "low", "medium", "high":
+		default:
+			return errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high"`)
+		}
+		value := *thinkingFlag
+		cfg.Model.Thinking = &value
 	}
 	if visionSet {
 		cfg.Model.Vision = *visionFlag
