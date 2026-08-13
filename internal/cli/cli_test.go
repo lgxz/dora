@@ -661,6 +661,69 @@ func TestRunRejectsNonPositiveMaximumRoundsFlag(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNegativeMaximumHistoryRoundsFlag(t *testing.T) {
+	err := Run(context.Background(), []string{"--max-history-rounds", "-1", "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "non-negative integer") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunMaximumHistoryRoundsFlagOverridesConfig(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		// The config sets max_history_rounds to 1, but the flag overrides it to
+		// 2, so the second model call should still receive the full history
+		// (user + assistant + tool) instead of being compacted.
+		if calls == 2 {
+			messages, ok := body["messages"].([]any)
+			if !ok || len(messages) != 3 {
+				t.Fatalf("messages = %#v, want 3", body["messages"])
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf ok\"}"}}]}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+agent:
+  max_history_rounds: 1
+tools:
+  bash:
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--max-history-rounds", "2", "--config", configPath, "run it"}, IO{
+		Stdin:            strings.NewReader(""),
+		Stdout:           &stdout,
+		Stderr:           io.Discard,
+		StdinIsTerminal:  true,
+		TerminalProgress: true,
+		HTTPClient:       httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
 func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("DORA_HOME", t.TempDir())

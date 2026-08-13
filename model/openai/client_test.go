@@ -158,6 +158,7 @@ func TestGenerateClassifiesRetryableStatus(t *testing.T) {
 		wantDelay  time.Duration
 	}{
 		{name: "rate limited", status: http.StatusTooManyRequests, retryAfter: "5", wantRetry: true, wantDelay: 5 * time.Second},
+		{name: "rate limited without retry after", status: http.StatusTooManyRequests, wantRetry: true, wantDelay: defaultRateLimitRetryAfter},
 		{name: "server error", status: http.StatusInternalServerError, wantRetry: true},
 		{name: "bad gateway", status: http.StatusBadGateway, wantRetry: true},
 		{name: "bad request", status: http.StatusBadRequest, wantRetry: false},

@@ -69,6 +69,17 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		maxRoundsSet = true
 		return nil
 	})
+	var maxHistoryRounds int
+	var maxHistoryRoundsSet bool
+	flags.Func("max-history-rounds", "override the number of recent rounds sent to the model each iteration (0 disables compaction)", func(value string) error {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return errors.New("must be a non-negative integer")
+		}
+		maxHistoryRounds = parsed
+		maxHistoryRoundsSet = true
+		return nil
+	})
 	showVersion := flags.Bool("version", false, "print version information")
 	performUpdate := flags.Bool("update", false, "update a standalone installation")
 	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
@@ -172,6 +183,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if maxRoundsSet {
 		cfg.Agent.MaxRounds = maxRounds
 	}
+	if maxHistoryRoundsSet {
+		cfg.Agent.MaxHistoryRounds = maxHistoryRounds
+	}
 	backend := session.Backend{
 		Provider: cfg.Model.Provider,
 		API:      cfg.Model.API,
@@ -274,6 +288,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds:        cfg.Agent.MaxRounds,
 		MaxHistoryRounds: cfg.Agent.MaxHistoryRounds,
+		ContextWindow:    cfg.Agent.ContextWindow,
 	}, tools...)
 	if err != nil {
 		return err

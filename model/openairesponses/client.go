@@ -23,6 +23,10 @@ import (
 
 const maxEventBytes = 4 << 20
 
+// defaultRateLimitRetryAfter is the delay used when a rate-limit (429)
+// response does not carry a usable Retry-After header.
+const defaultRateLimitRetryAfter = 30 * time.Second
+
 // Config configures a Client.
 type Config struct {
 	BaseURL    string
@@ -507,7 +511,14 @@ func apiError(status int, header http.Header, body []byte) error {
 	}
 	err := errors.New(message)
 	if isRetryableStatus(status) {
-		return retryableWithDelay(err, parseRetryAfter(header))
+		if status == http.StatusTooManyRequests {
+			delay := parseRetryAfter(header)
+			if delay == 0 {
+				delay = defaultRateLimitRetryAfter
+			}
+			return retryableWithDelay(err, delay, dora.RetryableRateLimit)
+		}
+		return retryableWithDelay(err, parseRetryAfter(header), dora.RetryableGeneric)
 	}
 	return err
 }
@@ -523,9 +534,10 @@ func retryable(err error) error {
 	return &dora.RetryableError{Err: err}
 }
 
-// retryableWithDelay wraps err as a dora.RetryableError with a suggested delay.
-func retryableWithDelay(err error, retryAfter time.Duration) error {
-	return &dora.RetryableError{Err: err, RetryAfter: retryAfter}
+// retryableWithDelay wraps err as a dora.RetryableError with a suggested delay
+// and kind.
+func retryableWithDelay(err error, retryAfter time.Duration, kind dora.RetryableErrorKind) error {
+	return &dora.RetryableError{Err: err, RetryAfter: retryAfter, Kind: kind}
 }
 
 // parseRetryAfter reads the Retry-After header, which may be a delay in

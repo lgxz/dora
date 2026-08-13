@@ -289,6 +289,16 @@ Override it for one invocation with `--max-rounds`:
 ./dora --max-rounds 96 "Complete a long task"
 ```
 
+By default Dora sends the most recent 32 rounds to the model each iteration and
+compresses older history so a long tool loop does not grow the context without
+bound. Override the number of retained rounds for one invocation with
+`--max-history-rounds` (use `0` to disable compaction and send the full
+history):
+
+```sh
+./dora --max-history-rounds 64 "Complete a long task"
+```
+
 When the limit is reached with both stdin and stderr attached to a terminal,
 Dora asks whether to continue for another segment. Confirming resumes from the
 completed tool output without replaying work. Declining stops normally and
@@ -349,8 +359,9 @@ the existing stateless behavior. Session files can contain commands and tool
 output, so treat them as sensitive. Do not run two Dora processes against the
 same session name concurrently.
 
-Use `--config`, `--model`, `--base-url`, `--max-rounds`, `--skills-dir`, or
-`--no-skills` to override the corresponding configuration for one invocation.
+Use `--config`, `--model`, `--base-url`, `--max-rounds`, `--max-history-rounds`,
+`--skills-dir`, or `--no-skills` to override the corresponding configuration
+for one invocation.
 
 ### Skills
 

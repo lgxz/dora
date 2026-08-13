@@ -15,9 +15,22 @@ import (
 
 const defaultMaxRounds = 256
 
+// defaultMaxHistoryRounds bounds the number of recent rounds sent to the model
+// when compaction is enabled.
+const defaultMaxHistoryRounds = 32
+
+// defaultContextWindow bounds the total text budget (in bytes) for the
+// messages sent to the model when budget-based compaction is enabled.
+const defaultContextWindow = 1 << 20
+
 // maxModelAttempts bounds the number of times a single model call is retried
-// after a retryable failure.
+// after a generic retryable failure.
 const maxModelAttempts = 3
+
+// maxRateLimitAttempts bounds the number of times a single model call is
+// retried after a rate-limit failure, which typically resolves with a longer
+// wait.
+const maxRateLimitAttempts = 5
 
 var (
 	// ErrMaxRounds indicates that a model kept requesting tools without
@@ -35,6 +48,9 @@ type Agent struct {
 	// maxHistoryRounds bounds the number of recent rounds sent to the model
 	// each iteration. Zero disables compaction and sends the full history.
 	maxHistoryRounds int
+	// contextWindow bounds the total text budget (in bytes) for the messages
+	// sent to the model. Zero disables budget-based compaction.
+	contextWindow int
 }
 
 // AgentConfig controls safeguards for the model-tool loop. A zero
@@ -44,6 +60,9 @@ type AgentConfig struct {
 	// MaxHistoryRounds bounds the number of recent rounds sent to the model
 	// each iteration. Zero disables compaction and sends the full history.
 	MaxHistoryRounds int
+	// ContextWindow bounds the total text budget (in bytes) for the messages
+	// sent to the model. Zero disables budget-based compaction.
+	ContextWindow int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -62,9 +81,20 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if cfg.MaxHistoryRounds < 0 {
 		return nil, errors.New("dora: MaxHistoryRounds cannot be negative")
 	}
+	if cfg.ContextWindow < 0 {
+		return nil, errors.New("dora: ContextWindow cannot be negative")
+	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
+	}
+	maxHistoryRounds := cfg.MaxHistoryRounds
+	if maxHistoryRounds == 0 {
+		maxHistoryRounds = defaultMaxHistoryRounds
+	}
+	contextWindow := cfg.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = defaultContextWindow
 	}
 
 	a := &Agent{
@@ -72,7 +102,8 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 		tools:            make(map[string]Tool, len(tools)),
 		specs:            make([]ToolSpec, 0, len(tools)),
 		maxRounds:        maxRounds,
-		maxHistoryRounds: cfg.MaxHistoryRounds,
+		maxHistoryRounds: maxHistoryRounds,
+		contextWindow:    contextWindow,
 	}
 
 	for _, tool := range tools {
@@ -273,14 +304,21 @@ func (a *Agent) generateWithRetry(ctx context.Context, request Request, emit fun
 		} else {
 			response, err = a.model.Generate(ctx, request)
 		}
-		if err == nil || attempt >= maxModelAttempts-1 || emitted {
+		if err == nil || emitted {
 			return response, err
 		}
 		var retryable *RetryableError
 		if !errors.As(err, &retryable) {
 			return response, err
 		}
-		wait := retryBackoff(attempt, retryable.RetryAfter)
+		limit := maxModelAttempts
+		if retryable.Kind == RetryableRateLimit {
+			limit = maxRateLimitAttempts
+		}
+		if attempt >= limit-1 {
+			return response, err
+		}
+		wait := retryBackoff(attempt, retryable.RetryAfter, retryable.Kind)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -290,12 +328,16 @@ func (a *Agent) generateWithRetry(ctx context.Context, request Request, emit fun
 }
 
 // retryBackoff computes the delay before the next attempt: the server's
-// RetryAfter when provided, otherwise exponential backoff with jitter.
-func retryBackoff(attempt int, retryAfter time.Duration) time.Duration {
+// RetryAfter when provided, otherwise exponential backoff with jitter. Rate
+// limit failures use a longer base so they wait longer between attempts.
+func retryBackoff(attempt int, retryAfter time.Duration, kind RetryableErrorKind) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
 	}
 	base := time.Duration(1<<uint(attempt)) * time.Second
+	if kind == RetryableRateLimit {
+		base = time.Duration(5<<uint(attempt)) * time.Second
+	}
 	jitter := time.Duration(rand.Int63n(int64(base) / 2))
 	return base + jitter
 }

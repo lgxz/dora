@@ -724,17 +724,44 @@ func TestRunDoesNotRetryAfterPartialStream(t *testing.T) {
 }
 
 func TestRetryBackoffHonorsRetryAfter(t *testing.T) {
-	delay := retryBackoff(0, 7*time.Second)
+	delay := retryBackoff(0, 7*time.Second, RetryableGeneric)
 	if delay != 7*time.Second {
 		t.Fatalf("delay = %v, want 7s", delay)
 	}
 }
 
 func TestRetryBackoffGrowsExponentially(t *testing.T) {
-	first := retryBackoff(0, 0)
-	second := retryBackoff(1, 0)
+	first := retryBackoff(0, 0, RetryableGeneric)
+	second := retryBackoff(1, 0, RetryableGeneric)
 	if second <= first {
 		t.Fatalf("second backoff %v not greater than first %v", second, first)
+	}
+}
+
+func TestRetryBackoffRateLimitGrowsFasterThanGeneric(t *testing.T) {
+	rateLimit := retryBackoff(0, 0, RetryableRateLimit)
+	generic := retryBackoff(0, 0, RetryableGeneric)
+	if rateLimit <= generic {
+		t.Fatalf("rate limit backoff %v not greater than generic %v", rateLimit, generic)
+	}
+}
+
+func TestRunRetriesRateLimitUpToMaxRateLimitAttempts(t *testing.T) {
+	var calls int
+	model := modelFunc(func(context.Context, Request) (Response, error) {
+		calls++
+		return Response{}, &RetryableError{Err: errors.New("rate limited"), Kind: RetryableRateLimit}
+	})
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("error = %v", err)
+	}
+	if calls != maxRateLimitAttempts {
+		t.Fatalf("calls = %d, want %d", calls, maxRateLimitAttempts)
 	}
 }
 
