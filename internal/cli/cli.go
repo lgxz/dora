@@ -242,6 +242,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
 			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
 			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
+			MaxTokens:         cfg.Model.MaxTokens,
+			Temperature:       cfg.Model.Temperature,
 		})
 	case "responses":
 		model, err = openairesponses.New(openairesponses.Config{
@@ -252,6 +254,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
 			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
 			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
+			MaxTokens:         cfg.Model.MaxTokens,
+			Temperature:       cfg.Model.Temperature,
 		})
 	}
 	if err != nil {

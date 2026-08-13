@@ -51,6 +51,15 @@ type Model struct {
 	// Zero disables the idle timeout and leaves the stream governed by the
 	// caller's context.
 	StreamIdleTimeoutSeconds int `yaml:"stream_idle_timeout_seconds,omitempty"`
+	// MaxTokens caps the number of tokens the model is allowed to generate in
+	// one response. Defaults to 32768. An explicit 0 means "no explicit cap";
+	// the value is sent to the provider as-is, so providers that reject 0
+	// should use the provider default instead.
+	MaxTokens *int `yaml:"max_tokens,omitempty"`
+	// Temperature controls sampling randomness in [0, 2]. Unset sends no value
+	// and leaves it to the provider default. Some reasoning/tool-calling models
+	// ignore or reject non-default values.
+	Temperature *float64 `yaml:"temperature,omitempty"`
 	// Vision enables image understanding. When true, command tools advertise
 	// the @@path@@ image tag and --image is accepted. Requires a vision-capable
 	// model.
@@ -129,8 +138,15 @@ func defaultConfig() Config {
 		Model: Model{
 			TimeoutSeconds:        120,
 			ConnectTimeoutSeconds: 10,
+			MaxTokens:             intPtr(32768),
 		},
 	}
+}
+
+// intPtr returns a pointer to v. It is a convenience helper for setting
+// pointer-typed config defaults.
+func intPtr(v int) *int {
+	return &v
 }
 
 func (cfg *Config) resolveAndValidate() error {
@@ -195,6 +211,12 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if model.StreamIdleTimeoutSeconds < 0 {
 		return errors.New("model.stream_idle_timeout_seconds cannot be negative")
+	}
+	if model.MaxTokens != nil && *model.MaxTokens < 0 {
+		return errors.New("model.max_tokens cannot be negative")
+	}
+	if model.Temperature != nil && (*model.Temperature < 0 || *model.Temperature > 2) {
+		return errors.New("model.temperature must be within [0, 2]")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

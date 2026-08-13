@@ -275,6 +275,29 @@ out of the configuration file. A non-empty literal key takes precedence over
 `api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
 not require authentication.
 
+Control the per-response output budget and sampling with `max_tokens` and
+`temperature`:
+
+```yaml
+model:
+  provider: openai
+  name: openrouter/auto
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  max_tokens: 32768
+  temperature: 0.7
+```
+
+`max_tokens` caps the number of tokens the model generates in one response and
+defaults to 32768. It is sent on the wire as `max_tokens` for the
+`chat_completions` API and as `max_output_tokens` for the `responses` API; an
+explicit `0` means "no explicit cap" and is relayed as-is. `temperature` has no
+default: when it is omitted, no value is sent and the provider uses its default
+sampling. It accepts values in `[0, 2]`. Because some reasoning and
+tool-calling models ignore or reject non-default temperatures, treat
+`temperature` as best-effort. Both keys only apply when set in
+`model.`; there are no command-line flags for them.
+
 Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:
 

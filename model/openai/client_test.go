@@ -300,6 +300,111 @@ func TestEncodeContentRejectsImageWithoutSource(t *testing.T) {
 	}
 }
 
+func TestRequestBodyDefaultMaxTokensOnWire(t *testing.T) {
+	// With no MaxTokens the field is omitted from the body.
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := decoded["max_tokens"]; exists {
+		t.Fatalf("unexpected max_tokens in %#v", decoded)
+	}
+	if _, exists := decoded["temperature"]; exists {
+		t.Fatalf("unexpected temperature in %#v", decoded)
+	}
+}
+
+func TestRequestBodyEmitsMaxTokensAndTemperature(t *testing.T) {
+	maxTokens := 4096
+	temperature := 0.5
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", MaxTokens: &maxTokens, Temperature: &temperature})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["max_tokens"] != float64(4096) {
+		t.Fatalf("max_tokens = %#v, want 4096", decoded["max_tokens"])
+	}
+	if decoded["temperature"] != 0.5 {
+		t.Fatalf("temperature = %#v, want 0.5", decoded["temperature"])
+	}
+}
+
+func TestRequestBodyEmitsExplicitZeroTemperature(t *testing.T) {
+	temperature := 0.0
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", Temperature: &temperature})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if value, exists := decoded["temperature"]; !exists || value != 0.0 {
+		t.Fatalf("temperature = %#v (exists %v), want 0", value, exists)
+	}
+	if _, exists := decoded["max_tokens"]; exists {
+		t.Fatalf("unexpected max_tokens in %#v", decoded)
+	}
+}
+
+func TestGenerateSendsMaxTokensOnWire(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		// The chat_completions key is max_tokens, not max_output_tokens.
+		if body["max_tokens"] != float64(32768) {
+			t.Fatalf("max_tokens = %#v, want 32768", body["max_tokens"])
+		}
+		return streamResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	maxTokens := 32768
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient, MaxTokens: &maxTokens})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "ok" {
+		t.Fatalf("content = %q", response.Content)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

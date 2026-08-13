@@ -211,6 +211,17 @@ Both adapters are themselves responsible for:
 - interpretation of HTTP status and malformed response formats;
 - response size or stream event size limits.
 
+Sampling and output-cap settings are per-model configuration threaded from
+`config.Model.MaxTokens` and `config.Model.Temperature` into each adapter's
+`Config` and emitted in the request body with `omitempty` pointers. `temperature`
+has no default and is only sent when explicitly configured, leaving the provider
+default sampling otherwise. `max_tokens` defaults to 32768 in the config layer
+and is therefore always sent. Because the two wire protocols use different key
+names, the adapters map the single config concept to the correct key:
+`max_tokens` for Chat Completions and `max_output_tokens` for the Responses API;
+`temperature` is common to both. An explicit `max_tokens: 0` is relayed as-is,
+meaning "no explicit cap."
+
 The adapters do not validate the JSON of model-emitted tool-call arguments; they
 pass the raw arguments through to the Agent, which is the single authority on
 tool-call validity. Invalid arguments are fed back to the model as a recoverable

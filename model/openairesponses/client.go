@@ -43,6 +43,14 @@ type Config struct {
 	// Timeout bounds a non-streaming generation request. Zero uses a 120
 	// second default.
 	Timeout time.Duration
+	// MaxTokens caps the number of tokens the model is allowed to generate in
+	// one response. Nil sends no cap and leaves it to the provider default. It
+	// is sent as max_output_tokens on the Responses API. An explicit 0 means
+	// "no explicit cap" and is sent as-is.
+	MaxTokens *int
+	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
+	// and leaves it to the provider default.
+	Temperature *float64
 }
 
 // Client is an OpenAI Responses API model client.
@@ -54,6 +62,8 @@ type Client struct {
 	connectTimeout    time.Duration
 	streamIdleTimeout time.Duration
 	timeout           time.Duration
+	maxTokens         *int
+	temperature       *float64
 }
 
 // New creates an OpenAI Responses API model client.
@@ -100,6 +110,8 @@ func New(cfg Config) (*Client, error) {
 		connectTimeout:    connectTimeout,
 		streamIdleTimeout: cfg.StreamIdleTimeout,
 		timeout:           timeout,
+		maxTokens:         cfg.MaxTokens,
+		temperature:       cfg.Temperature,
 	}, nil
 }
 
@@ -186,10 +198,12 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 
 func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 	body := responsesRequest{
-		Model:   c.model,
-		Stream:  true,
-		Store:   false,
-		Include: []string{"reasoning.encrypted_content"},
+		Model:           c.model,
+		Stream:          true,
+		Store:           false,
+		Include:         []string{"reasoning.encrypted_content"},
+		MaxOutputTokens: c.maxTokens,
+		Temperature:     c.temperature,
 	}
 
 	if request.Continuation != "" {
@@ -585,12 +599,14 @@ func withIdleTimeout(ctx context.Context, idle time.Duration) (context.Context, 
 }
 
 type responsesRequest struct {
-	Model   string            `json:"model"`
-	Input   []json.RawMessage `json:"input"`
-	Tools   []responseTool    `json:"tools,omitempty"`
-	Stream  bool              `json:"stream"`
-	Store   bool              `json:"store"`
-	Include []string          `json:"include,omitempty"`
+	Model           string            `json:"model"`
+	Input           []json.RawMessage `json:"input"`
+	Tools           []responseTool    `json:"tools,omitempty"`
+	Stream          bool              `json:"stream"`
+	Store           bool              `json:"store"`
+	Include         []string          `json:"include,omitempty"`
+	MaxOutputTokens *int              `json:"max_output_tokens,omitempty"`
+	Temperature     *float64          `json:"temperature,omitempty"`
 }
 
 type inputItem struct {

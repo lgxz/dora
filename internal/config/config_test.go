@@ -464,6 +464,114 @@ func TestLoadRejectsNegativeModelTimeouts(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxTokensIs32768(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.MaxTokens == nil || *cfg.Model.MaxTokens != 32768 {
+		t.Fatalf("max_tokens = %#v, want 32768", cfg.Model.MaxTokens)
+	}
+	if cfg.Model.Temperature != nil {
+		t.Fatalf("temperature = %#v, want nil", cfg.Model.Temperature)
+	}
+}
+
+func TestLoadMaxTokensWhenOmittedKeepsDefault(t *testing.T) {
+	// A user config without the key must keep the 32768 default on the wire.
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.MaxTokens == nil || *cfg.Model.MaxTokens != 32768 {
+		t.Fatalf("max_tokens = %#v, want 32768", cfg.Model.MaxTokens)
+	}
+	if cfg.Model.Temperature != nil {
+		t.Fatalf("temperature = %#v, want nil", cfg.Model.Temperature)
+	}
+}
+
+func TestLoadOverridesMaxTokens(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  max_tokens: 4096\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.MaxTokens == nil || *cfg.Model.MaxTokens != 4096 {
+		t.Fatalf("max_tokens = %#v, want 4096", cfg.Model.MaxTokens)
+	}
+}
+
+func TestLoadKeepsExplicitZeroMaxTokens(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  max_tokens: 0\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.MaxTokens == nil || *cfg.Model.MaxTokens != 0 {
+		t.Fatalf("max_tokens = %#v, want explicit 0", cfg.Model.MaxTokens)
+	}
+}
+
+func TestLoadRejectsNegativeMaxTokens(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  max_tokens: -1\n")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "model.max_tokens cannot be negative") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadAcceptsTemperature(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  temperature: 0.5\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Temperature == nil || *cfg.Model.Temperature != 0.5 {
+		t.Fatalf("temperature = %#v, want 0.5", cfg.Model.Temperature)
+	}
+}
+
+func TestLoadKeepsExplicitZeroTemperature(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("OPENAI_API_KEY", "test-secret")
+	path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  temperature: 0\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Temperature == nil || *cfg.Model.Temperature != 0 {
+		t.Fatalf("temperature = %#v, want explicit 0", cfg.Model.Temperature)
+	}
+}
+
+func TestLoadRejectsTemperatureOutOfRange(t *testing.T) {
+	for _, value := range []string{"-0.1", "2.1"} {
+		t.Run(value, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv("OPENAI_API_KEY", "test-secret")
+			path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  temperature: "+value+"\n")
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "model.temperature must be within [0, 2]") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsRemovedMaxModelCalls(t *testing.T) {
 	path := writeConfig(t, `
 model:

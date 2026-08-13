@@ -44,6 +44,12 @@ type Config struct {
 	// Timeout bounds a non-streaming generation request. Zero uses a 120
 	// second default.
 	Timeout time.Duration
+	// MaxTokens caps the number of tokens the model is allowed to generate in
+	// one response. Nil sends no cap and leaves it to the provider default.
+	MaxTokens *int
+	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
+	// and leaves it to the provider default.
+	Temperature *float64
 }
 
 // Client is an OpenAI-compatible dora.Model.
@@ -55,6 +61,8 @@ type Client struct {
 	connectTimeout    time.Duration
 	streamIdleTimeout time.Duration
 	timeout           time.Duration
+	maxTokens         *int
+	temperature       *float64
 }
 
 // New creates an OpenAI-compatible model client.
@@ -102,6 +110,8 @@ func New(cfg Config) (*Client, error) {
 		connectTimeout:    connectTimeout,
 		streamIdleTimeout: cfg.StreamIdleTimeout,
 		timeout:           timeout,
+		maxTokens:         cfg.MaxTokens,
+		temperature:       cfg.Temperature,
 	}, nil
 }
 
@@ -164,7 +174,7 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 }
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
-	body := chatRequest{Model: c.model, Stream: true}
+	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature}
 	for _, message := range request.Messages {
 		content, err := encodeContent(message)
 		if err != nil {
@@ -454,10 +464,12 @@ func withIdleTimeout(ctx context.Context, idle time.Duration) (context.Context, 
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []chatTool    `json:"tools,omitempty"`
-	Stream   bool          `json:"stream"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Tools       []chatTool    `json:"tools,omitempty"`
+	Stream      bool          `json:"stream"`
+	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
 }
 
 type chatMessage struct {

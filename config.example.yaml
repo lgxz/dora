@@ -19,6 +19,16 @@ model:
   # governed by the caller's context. Default: 0.
   # stream_idle_timeout_seconds: 0
 
+  # Cap the number of tokens the model is allowed to generate in one response.
+  # Default: 32768. Sent to the provider on the wire: max_tokens for the
+  # chat_completions API and max_output_tokens for the responses API. An
+  # explicit 0 means "no explicit cap" and is sent as-is.
+  # max_tokens: 32768
+  # Sampling randomness in [0, 2]. Unset sends no value and leaves it to the
+  # provider default sampling. Some reasoning/tool-calling models ignore or
+  # reject non-default values.
+  # temperature: 1.0
+
   # Enable image understanding. Requires a vision-capable model. When true,
   # command tools advertise the @@path@@ image tag and --image is accepted.
   # Default: false.
