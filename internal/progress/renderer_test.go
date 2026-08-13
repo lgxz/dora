@@ -40,7 +40,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	for _, want := range []string{
 		"dora: thinking",
 		"我先看看当前目录",
-		"bash · pwd ·",
+		"pwd ·",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
@@ -73,14 +73,15 @@ func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 
 	for _, want := range []string{
 		"我会检查负载和磁盘",
-		"bash · uptime",
 		"uptime",
-		"bash · df -h",
 		"df -h",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
 		}
+	}
+	if strings.Contains(output.String(), "bash ·") {
+		t.Fatalf("output %q contains a bash tool-name prefix", output.String())
 	}
 	if strings.Contains(output.String(), "道具调用") {
 		t.Fatalf("output contains redundant batch heading: %q", output.String())

@@ -160,16 +160,27 @@ func (r *Renderer) renderToolFailure(call dora.ToolCall) {
 }
 
 func (r *Renderer) renderToolLine(run toolRun, statusColor, status string) {
-	label := run.call.Name
 	marker := "•"
 	if statusColor == red {
 		marker = "△"
+	}
+	// bash and powershell identify themselves by their command text, so the
+	// tool-name prefix is omitted to keep the progress line concise.
+	if run.call.Name == "bash" || run.call.Name == "powershell" {
+		fmt.Fprintf(
+			r.output,
+			"%s %s %s\n",
+			r.paint(statusColor, marker),
+			r.paint(dim, toolSummary(run.call)),
+			r.paint(statusColor, "· "+status),
+		)
+		return
 	}
 	fmt.Fprintf(
 		r.output,
 		"%s %s %s %s\n",
 		r.paint(statusColor, marker),
-		r.paint(yellow, label),
+		r.paint(yellow, run.call.Name),
 		r.paint(dim, "· "+toolSummary(run.call)),
 		r.paint(statusColor, "· "+status),
 	)
