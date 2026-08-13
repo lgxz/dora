@@ -298,6 +298,24 @@ tool-calling models ignore or reject non-default temperatures, treat
 `temperature` as best-effort. Both keys only apply when set in
 `model.`; there are no command-line flags for them.
 
+`thinking` controls the model's "thinking mode" reasoning effort. Set it to one
+of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when
+omitted, no value is sent and the provider uses its own reasoning default.
+Support varies by provider, and unsupported values are silently ignored rather
+than causing an error:
+
+- **openai**: on the Responses API all of `off`→`none`, `minimal`, `low`,
+  `medium`, and `high` are sent; on Chat Completions `minimal`–`high` are sent
+  as `reasoning_effort`, but `off` is not supported (gpt-5's floor is
+  `minimal`) and is ignored.
+- **deepseek**: `low`/`medium`/`high` are sent on both APIs, `minimal` is not
+  supported and is ignored, and `off` is sent as `thinking.type: disabled` on
+  Chat Completions or `reasoning.effort: none` on Responses.
+- **trust**: treated best-effort like OpenAI on both APIs.
+
+Because a setting may simply be dropped, treat `thinking` as a hint rather than
+a guarantee.
+
 Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:
 

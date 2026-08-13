@@ -234,6 +234,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	var model dora.Model
 	switch cfg.Model.API {
 	case "chat_completions":
+		reasoningEffort, thinking := mapChatThinking(cfg.Model)
 		model, err = openai.New(openai.Config{
 			BaseURL:           cfg.Model.BaseURL,
 			APIKey:            cfg.Model.APIKey,
@@ -244,8 +245,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
 			MaxTokens:         cfg.Model.MaxTokens,
 			Temperature:       cfg.Model.Temperature,
+			ReasoningEffort:   reasoningEffort,
+			Thinking:          thinking,
 		})
 	case "responses":
+		reasoning := mapResponsesThinking(cfg.Model)
 		model, err = openairesponses.New(openairesponses.Config{
 			BaseURL:           cfg.Model.BaseURL,
 			APIKey:            cfg.Model.APIKey,
@@ -256,6 +260,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
 			MaxTokens:         cfg.Model.MaxTokens,
 			Temperature:       cfg.Model.Temperature,
+			Reasoning:         reasoning,
 		})
 	}
 	if err != nil {
@@ -368,6 +373,48 @@ func Run(ctx context.Context, args []string, streams IO) error {
 func writeAnswer(streams IO, content string) error {
 	_, err := fmt.Fprintln(streams.Stdout, content)
 	return err
+}
+
+// mapChatThinking maps the config model.thinking value onto the Chat
+// Completions reasoning_effort and thinking controls according to the provider
+// policy. Values a provider does not support are ignored (not sent).
+func mapChatThinking(model config.Model) (*string, *openai.ThinkingControl) {
+	if model.Thinking == nil {
+		return nil, nil
+	}
+	value := *model.Thinking
+	if value == "off" {
+		switch model.Provider {
+		case "deepseek":
+			return nil, openai.NewThinkingControl("disabled")
+		default:
+			// openai/trust do not support off on Chat Completions; ignore.
+			return nil, nil
+		}
+	}
+	if value == "minimal" && model.Provider == "deepseek" {
+		// DeepSeek does not support minimal on Chat Completions; ignore.
+		return nil, nil
+	}
+	return &value, nil
+}
+
+// mapResponsesThinking maps the config model.thinking value onto the Responses
+// API reasoning control according to the provider policy. Values a provider
+// does not support are ignored (not sent).
+func mapResponsesThinking(model config.Model) *openairesponses.ReasoningControl {
+	if model.Thinking == nil {
+		return nil
+	}
+	value := *model.Thinking
+	if value == "off" {
+		return openairesponses.NewReasoningControl("none")
+	}
+	if value == "minimal" && model.Provider == "deepseek" {
+		// DeepSeek does not support minimal on the Responses API; ignore.
+		return nil
+	}
+	return openairesponses.NewReasoningControl(value)
 }
 
 func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {

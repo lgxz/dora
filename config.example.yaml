@@ -28,6 +28,10 @@ model:
   # provider default sampling. Some reasoning/tool-calling models ignore or
   # reject non-default values.
   # temperature: 1.0
+  # Model "thinking mode" reasoning effort: off | minimal | low | medium | high.
+  # Nil leaves it to the provider default. Values the provider does not support
+  # are silently ignored (not sent).
+  # thinking: off
 
   # Enable image understanding. Requires a vision-capable model. When true,
   # command tools advertise the @@path@@ image tag and --image is accepted.

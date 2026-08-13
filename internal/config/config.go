@@ -60,6 +60,10 @@ type Model struct {
 	// and leaves it to the provider default. Some reasoning/tool-calling models
 	// ignore or reject non-default values.
 	Temperature *float64 `yaml:"temperature,omitempty"`
+	// Thinking controls model "thinking mode" reasoning effort. Legal values:
+	// off | minimal | low | medium | high. Nil leaves it to the provider default.
+	// Values the provider does not support are silently ignored (not sent).
+	Thinking *string `yaml:"thinking,omitempty"`
 	// Vision enables image understanding. When true, command tools advertise
 	// the @@path@@ image tag and --image is accepted. Requires a vision-capable
 	// model.
@@ -217,6 +221,13 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if model.Temperature != nil && (*model.Temperature < 0 || *model.Temperature > 2) {
 		return errors.New("model.temperature must be within [0, 2]")
+	}
+	if model.Thinking != nil {
+		switch *model.Thinking {
+		case "off", "minimal", "low", "medium", "high":
+		default:
+			return errors.New(`model.thinking must be one of "off", "minimal", "low", "medium", "high"`)
+		}
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

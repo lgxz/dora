@@ -50,6 +50,13 @@ type Config struct {
 	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
 	// and leaves it to the provider default.
 	Temperature *float64
+	// ReasoningEffort controls the model's reasoning effort for compatible
+	// providers. Nil sends no value and leaves it to the provider default.
+	ReasoningEffort *string
+	// Thinking controls "thinking mode" reasoning for providers that support
+	// it over Chat Completions (e.g. DeepSeek's disabled control). Nil sends
+	// no value and leaves it to the provider default.
+	Thinking *ThinkingControl
 }
 
 // Client is an OpenAI-compatible dora.Model.
@@ -63,6 +70,8 @@ type Client struct {
 	timeout           time.Duration
 	maxTokens         *int
 	temperature       *float64
+	reasoningEffort   *string
+	thinking          *thinkingControl
 }
 
 // New creates an OpenAI-compatible model client.
@@ -112,6 +121,8 @@ func New(cfg Config) (*Client, error) {
 		timeout:           timeout,
 		maxTokens:         cfg.MaxTokens,
 		temperature:       cfg.Temperature,
+		reasoningEffort:   cfg.ReasoningEffort,
+		thinking:          cfg.Thinking,
 	}, nil
 }
 
@@ -174,7 +185,7 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 }
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
-	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature}
+	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
 	for _, message := range request.Messages {
 		content, err := encodeContent(message)
 		if err != nil {
@@ -464,12 +475,29 @@ func withIdleTimeout(ctx context.Context, idle time.Duration) (context.Context, 
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Tools       []chatTool    `json:"tools,omitempty"`
-	Stream      bool          `json:"stream"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
+	Model           string           `json:"model"`
+	Messages        []chatMessage    `json:"messages"`
+	Tools           []chatTool       `json:"tools,omitempty"`
+	Stream          bool             `json:"stream"`
+	MaxTokens       *int             `json:"max_tokens,omitempty"`
+	Temperature     *float64         `json:"temperature,omitempty"`
+	ReasoningEffort *string          `json:"reasoning_effort,omitempty"`
+	Thinking        *thinkingControl `json:"thinking,omitempty"`
+}
+
+// thinkingControl controls "thinking mode" reasoning for providers that
+// support it over Chat Completions (e.g. DeepSeek's disabled control).
+type thinkingControl struct {
+	Type string `json:"type"`
+}
+
+// ThinkingControl is an exported alias for the "thinking mode" control that
+// the CLI uses to build the wire field for providers that support it.
+type ThinkingControl = thinkingControl
+
+// NewThinkingControl returns a "thinking mode" control with the given type.
+func NewThinkingControl(ctrlType string) *thinkingControl {
+	return &thinkingControl{Type: ctrlType}
 }
 
 type chatMessage struct {

@@ -335,6 +335,155 @@ model:
 	}
 }
 
+func TestRunMapsChatThinkingLowToReasoningEffort(t *testing.T) {
+	// gpt-5 (openai) chat_completions with thinking: low sends reasoning_effort
+	// at the top level and no nested reasoning object.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["reasoning_effort"] != "low" {
+			t.Fatalf("reasoning_effort = %#v, want \"low\"", body["reasoning_effort"])
+		}
+		if _, exists := body["reasoning"]; exists {
+			t.Fatalf("unexpected reasoning in %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+  thinking: low
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunMapsDeepSeekChatThinkingOffToDisabled(t *testing.T) {
+	// deepseek chat_completions with thinking: off sends thinking.type: disabled
+	// and no reasoning_effort.
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("TRUST_API_KEY", "")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		thinking := body["thinking"].(map[string]any)
+		if thinking["type"] != "disabled" {
+			t.Fatalf("thinking = %#v, want {\"type\":\"disabled\"}", body["thinking"])
+		}
+		if _, exists := body["reasoning_effort"]; exists {
+			t.Fatalf("unexpected reasoning_effort in %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model:\n  provider: deepseek\n  thinking: off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunMapsOpenAIResponsesThinkingOffToNone(t *testing.T) {
+	// openai responses with thinking: off sends reasoning.effort: none and
+	// keeps reasoning.encrypted_content in include.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "none" {
+			t.Fatalf("reasoning = %#v, want {\"effort\":\"none\"}", body["reasoning"])
+		}
+		if _, exists := body["reasoning_effort"]; exists {
+			t.Fatalf("unexpected reasoning_effort in %#v", body)
+		}
+		return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+model:
+  provider: openai
+  api: responses
+  name: test-model
+  base_url: https://example.test/v1
+  thinking: off
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunIgnoresDeepSeekChatThinkingMinimal(t *testing.T) {
+	// deepseek does not support minimal on chat_completions; it is silently
+	// dropped and no reasoning params are sent.
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("TRUST_API_KEY", "")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["reasoning_effort"]; exists {
+			t.Fatalf("unexpected reasoning_effort in %#v", body)
+		}
+		if _, exists := body["thinking"]; exists {
+			t.Fatalf("unexpected thinking in %#v", body)
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model:\n  provider: deepseek\n  thinking: minimal\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

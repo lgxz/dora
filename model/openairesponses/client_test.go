@@ -487,6 +487,78 @@ func TestRequestBodyEmitsExplicitZeroTemperature(t *testing.T) {
 	}
 }
 
+func TestRequestBodyEmitsReasoningNone(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", Reasoning: NewReasoningControl("none")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	reasoning := decoded["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" {
+		t.Fatalf("reasoning = %#v, want {\"effort\":\"none\"}", decoded["reasoning"])
+	}
+}
+
+func TestRequestBodyEmitsReasoningHigh(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", Reasoning: NewReasoningControl("high")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	reasoning := decoded["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %#v, want {\"effort\":\"high\"}", decoded["reasoning"])
+	}
+}
+
+func TestRequestBodyKeepsIncludeAndOmitsReasoningWhenUnset(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	include := decoded["include"].([]any)
+	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v, want [reasoning.encrypted_content]", decoded["include"])
+	}
+	if _, exists := decoded["reasoning"]; exists {
+		t.Fatalf("unexpected reasoning in %#v", decoded)
+	}
+}
+
 func TestGenerateSendsMaxOutputTokensOnWire(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any

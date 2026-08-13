@@ -222,6 +222,17 @@ names, the adapters map the single config concept to the correct key:
 `temperature` is common to both. An explicit `max_tokens: 0` is relayed as-is,
 meaning "no explicit cap."
 
+Thinking-mode reasoning effort follows the same pattern. The CLI maps a single
+`config.Model.Thinking` value (`off | minimal | low | medium | high`, nil by
+default) to each protocol's control: Chat Completions emits `reasoning_effort`
+for `minimal`–`high` and DeepSeek's `thinking.type: disabled` for `off`;
+Responses emits a nested `reasoning` object with `effort: none` for `off` and
+the effort value otherwise. The mapping is provider-aware and drops values a
+provider does not support (for example DeepSeek ignores `minimal`; OpenAI Chat
+Completions ignores `off`), so unsupported settings are silently absent from the
+wire rather than erroring. The per-provider policy lives in `internal/cli`, and
+the adapters only render the pre-computed fields.
+
 The adapters do not validate the JSON of model-emitted tool-call arguments; they
 pass the raw arguments through to the Agent, which is the single authority on
 tool-call validity. Invalid arguments are fed back to the model as a recoverable

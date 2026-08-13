@@ -379,6 +379,77 @@ func TestRequestBodyEmitsExplicitZeroTemperature(t *testing.T) {
 	}
 }
 
+func TestRequestBodyEmitsReasoningEffort(t *testing.T) {
+	effort := "low"
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", ReasoningEffort: &effort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort = %#v, want \"low\"", decoded["reasoning_effort"])
+	}
+}
+
+func TestRequestBodyEmitsThinkingControl(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", Thinking: NewThinkingControl("disabled")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	thinking := decoded["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" {
+		t.Fatalf("thinking = %#v, want {\"type\":\"disabled\"}", decoded["thinking"])
+	}
+}
+
+func TestRequestBodyOmitsThinkingControlsWhenUnset(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := decoded["reasoning_effort"]; exists {
+		t.Fatalf("unexpected reasoning_effort in %#v", decoded)
+	}
+	if _, exists := decoded["thinking"]; exists {
+		t.Fatalf("unexpected thinking in %#v", decoded)
+	}
+}
+
 func TestGenerateSendsMaxTokensOnWire(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any

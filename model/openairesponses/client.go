@@ -51,6 +51,9 @@ type Config struct {
 	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
 	// and leaves it to the provider default.
 	Temperature *float64
+	// Reasoning controls the model's reasoning effort. Nil sends no value and
+	// leaves it to the provider default.
+	Reasoning *ReasoningControl
 }
 
 // Client is an OpenAI Responses API model client.
@@ -64,6 +67,7 @@ type Client struct {
 	timeout           time.Duration
 	maxTokens         *int
 	temperature       *float64
+	reasoning         *reasoningControl
 }
 
 // New creates an OpenAI Responses API model client.
@@ -112,6 +116,7 @@ func New(cfg Config) (*Client, error) {
 		timeout:           timeout,
 		maxTokens:         cfg.MaxTokens,
 		temperature:       cfg.Temperature,
+		reasoning:         cfg.Reasoning,
 	}, nil
 }
 
@@ -204,6 +209,7 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 		Include:         []string{"reasoning.encrypted_content"},
 		MaxOutputTokens: c.maxTokens,
 		Temperature:     c.temperature,
+		Reasoning:       c.reasoning,
 	}
 
 	if request.Continuation != "" {
@@ -607,6 +613,21 @@ type responsesRequest struct {
 	Include         []string          `json:"include,omitempty"`
 	MaxOutputTokens *int              `json:"max_output_tokens,omitempty"`
 	Temperature     *float64          `json:"temperature,omitempty"`
+	Reasoning       *reasoningControl `json:"reasoning,omitempty"`
+}
+
+// reasoningControl controls the model's reasoning effort on the Responses API.
+type reasoningControl struct {
+	Effort string `json:"effort"`
+}
+
+// ReasoningControl is an exported alias for the reasoning control that the CLI
+// uses to build the wire field.
+type ReasoningControl = reasoningControl
+
+// NewReasoningControl returns a reasoning control with the given effort.
+func NewReasoningControl(effort string) *reasoningControl {
+	return &reasoningControl{Effort: effort}
 }
 
 type inputItem struct {

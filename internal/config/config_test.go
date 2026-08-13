@@ -572,6 +572,49 @@ func TestLoadRejectsTemperatureOutOfRange(t *testing.T) {
 	}
 }
 
+func TestDefaultThinkingIsNil(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Thinking != nil {
+		t.Fatalf("thinking = %#v, want nil", cfg.Model.Thinking)
+	}
+}
+
+func TestLoadAcceptsThinkingValues(t *testing.T) {
+	for _, value := range []string{"off", "minimal", "low", "medium", "high"} {
+		t.Run(value, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv("OPENAI_API_KEY", "test-secret")
+			path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  thinking: "+value+"\n")
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model.Thinking == nil || *cfg.Model.Thinking != value {
+				t.Fatalf("thinking = %#v, want %q", cfg.Model.Thinking, value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidThinkingValue(t *testing.T) {
+	for _, value := range []string{"none", "turbo"} {
+		t.Run(value, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv("OPENAI_API_KEY", "test-secret")
+			path := writeConfig(t, "model:\n  provider: openai\n  name: test-model\n  base_url: http://localhost\n  thinking: "+value+"\n")
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), `model.thinking must be one of "off", "minimal", "low", "medium", "high"`) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsRemovedMaxModelCalls(t *testing.T) {
 	path := writeConfig(t, `
 model:
