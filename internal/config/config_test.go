@@ -87,6 +87,21 @@ func TestLoadSelectsProviderFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentOverridesConfigProvider(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("TRUST_API_KEY", "trust-secret")
+	path := writeConfig(t, "model:\n  provider: deepseek\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "trust" || cfg.Model.Name != "auto" ||
+		cfg.Model.BaseURL != "https://api.trustoken.cn/v1" || cfg.Model.APIKey != "trust-secret" {
+		t.Fatalf("model = %#v", cfg.Model)
+	}
+}
+
 func TestLoadRejectsAmbiguousProviderEnvironment(t *testing.T) {
 	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
@@ -100,17 +115,13 @@ func TestLoadRejectsAmbiguousProviderEnvironment(t *testing.T) {
 	}
 }
 
-func TestLoadFallsBackToDeepSeekWithoutProviderEnvironment(t *testing.T) {
+func TestLoadRejectsMissingProviderWithoutEnvironment(t *testing.T) {
 	clearPresetAPIKeys(t)
 	path := writeConfig(t, "model:\n  api_key: literal-secret\n")
 
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Model.Provider != "deepseek" || cfg.Model.Name != "deepseek-v4-flash" ||
-		cfg.Model.APIKey != "literal-secret" {
-		t.Fatalf("model = %#v", cfg.Model)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "no model provider configured") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -263,6 +274,7 @@ model:
 }
 
 func TestLoadAppliesDeepSeekDefaults(t *testing.T) {
+	clearPresetAPIKeys(t)
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
 	path := writeConfig(t, "model:\n  provider: deepseek\n")
 
@@ -277,6 +289,7 @@ func TestLoadAppliesDeepSeekDefaults(t *testing.T) {
 }
 
 func TestLoadAppliesTrustDefaults(t *testing.T) {
+	clearPresetAPIKeys(t)
 	t.Setenv("TRUST_API_KEY", "trust-secret")
 	path := writeConfig(t, "model:\n  provider: trust\n")
 
@@ -322,6 +335,7 @@ model:
 }
 
 func TestLoadRejectsLegacyProvider(t *testing.T) {
+	clearPresetAPIKeys(t)
 	path := writeConfig(t, "model:\n  provider: openai-compatible\n")
 
 	_, err := Load(path)

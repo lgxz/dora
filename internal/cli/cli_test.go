@@ -126,6 +126,8 @@ model:
 
 func TestRunCallsDeepSeekPreset(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("TRUST_API_KEY", "")
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://api.deepseek.com/chat/completions" {
 			t.Fatalf("url = %q", request.URL.String())
@@ -164,6 +166,8 @@ func TestRunCallsDeepSeekPreset(t *testing.T) {
 
 func TestRunCallsTrustPreset(t *testing.T) {
 	t.Setenv("TRUST_API_KEY", "trust-secret")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://api.trustoken.cn/v1/chat/completions" {
 			t.Fatalf("url = %q", request.URL.String())

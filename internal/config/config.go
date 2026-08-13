@@ -205,10 +205,7 @@ func (cfg *Config) resolveAndValidate() error {
 }
 
 func (model *Model) selectProvider() error {
-	if model.Provider != "" {
-		return nil
-	}
-
+	// Environment variables take precedence over the config-file provider.
 	var detected []string
 	for provider, preset := range modelPresets {
 		if value, ok := os.LookupEnv(preset.apiKeyEnv); ok && value != "" {
@@ -219,7 +216,11 @@ func (model *Model) selectProvider() error {
 
 	switch len(detected) {
 	case 0:
-		model.Provider = "deepseek"
+		// No provider detected from the environment; keep the config-file
+		// value if set, otherwise error out.
+		if model.Provider == "" {
+			return errors.New("no model provider configured; set model.provider or an API key environment variable")
+		}
 	case 1:
 		model.Provider = detected[0]
 	default:
