@@ -307,11 +307,12 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	tools = append(tools, commandTools...)
 
-	// The job tool is a regular tool; it implements ConditionalTool and is
-	// filtered out of the exposed specs while there are no active background
-	// jobs.
+	// The job tool is a regular tool like the others.
 	jobTool := jobtool.New(jobManager)
 	tools = append(tools, jobTool)
+
+	// File tools (read/write/edit) for precise file operations.
+	tools = append(tools, buildFileTools()...)
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds:        cfg.Agent.MaxRounds,

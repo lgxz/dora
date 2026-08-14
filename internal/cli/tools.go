@@ -9,8 +9,18 @@ import (
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/job"
 	bashtool "github.com/lgxz/dora/tool/bash"
+	filetool "github.com/lgxz/dora/tool/file"
 	powershelltool "github.com/lgxz/dora/tool/powershell"
 )
+
+// buildFileTools returns the read/write/edit file tools.
+func buildFileTools() []dora.Tool {
+	return []dora.Tool{
+		filetool.NewReadTool(),
+		filetool.NewWriteTool(),
+		filetool.NewEditTool(),
+	}
+}
 
 type toolCandidate struct {
 	enabled          *bool
