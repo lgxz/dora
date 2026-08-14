@@ -7,6 +7,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/job"
 	bashtool "github.com/lgxz/dora/tool/bash"
 	powershelltool "github.com/lgxz/dora/tool/powershell"
 )
@@ -18,15 +19,16 @@ type toolCandidate struct {
 	unavailable      error
 }
 
-func buildCommandTools(cfg config.Tools, vision bool) ([]dora.Tool, error) {
+func buildCommandTools(cfg config.Tools, vision bool, jobManager *job.Manager) ([]dora.Tool, error) {
 	return assembleCommandTools(runtime.GOOS, []toolCandidate{
 		{
 			enabled:          cfg.Bash.Enabled,
 			defaultPlatforms: []string{"darwin", "linux"},
 			create: func() (dora.Tool, error) {
 				return bashtool.New(bashtool.Config{
-					Timeout: time.Duration(cfg.Bash.TimeoutSeconds) * time.Second,
-					Vision:  vision,
+					Timeout:    time.Duration(cfg.Bash.TimeoutSeconds) * time.Second,
+					Vision:     vision,
+					JobManager: jobManager,
 				})
 			},
 			unavailable: bashtool.ErrUnavailable,
@@ -36,8 +38,9 @@ func buildCommandTools(cfg config.Tools, vision bool) ([]dora.Tool, error) {
 			defaultPlatforms: []string{"windows"},
 			create: func() (dora.Tool, error) {
 				return powershelltool.New(powershelltool.Config{
-					Timeout: time.Duration(cfg.PowerShell.TimeoutSeconds) * time.Second,
-					Vision:  vision,
+					Timeout:    time.Duration(cfg.PowerShell.TimeoutSeconds) * time.Second,
+					Vision:     vision,
+					JobManager: jobManager,
 				})
 			},
 			unavailable: powershelltool.ErrUnavailable,

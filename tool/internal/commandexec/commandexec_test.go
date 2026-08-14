@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lgxz/dora/internal/job"
 )
 
 func TestExecuteReturnsCommandOutput(t *testing.T) {
@@ -30,7 +32,7 @@ func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
 	if spec.Name != "test-command" ||
 		!strings.Contains(spec.Description, "Execute a test command") ||
 		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
-		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "default of 45s") {
+		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "wait_seconds") {
 		t.Fatalf("spec = %#v", spec)
 	}
 }
@@ -82,16 +84,55 @@ func TestExecuteTimesOut(t *testing.T) {
 	}
 }
 
-func TestExecuteUsesPerCommandTimeout(t *testing.T) {
-	tool := newTestTool(t, Config{Timeout: time.Nanosecond})
+func TestExecuteTransitionsToBackground(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"short-sleep","timeout_seconds":5}`))
+	// "long-sleep" sleeps 5s; wait_seconds=1 should transition to background.
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep","wait_seconds":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(output), &bg); err != nil {
+		t.Fatalf("decode background result: %v (output=%s)", err, output)
+	}
+	if bg.JobID == "" || bg.Status != "running" {
+		t.Fatalf("expected job_id + running, got %#v", bg)
+	}
+	if !jm.HasActiveJobs() {
+		t.Fatalf("expected active job after transition")
+	}
+
+	// Wait for the job to finish (long-sleep is 2s).
+	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	if !ok {
+		t.Fatalf("job not found")
+	}
+	if done.Status != job.StatusDone {
+		t.Fatalf("expected done, got %s", done.Status)
+	}
+	jm.Cleanup()
+}
+
+func TestExecuteForegroundWithWaitCompletes(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	// "hello" finishes immediately; wait_seconds should return the result.
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"hello","wait_seconds":5}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := decodeResult(t, output)
-	if result.TimedOut || result.Stdout != "done" {
+	if result.ExitCode != 0 || result.Stdout != "hello" {
 		t.Fatalf("result = %#v", result)
+	}
+	if jm.HasActiveJobs() {
+		t.Fatalf("expected no background job for fast command")
 	}
 }
 
@@ -99,8 +140,7 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 	tool := newTestTool(t, Config{})
 	for _, raw := range []string{
 		`{"command":"hello","extra":1}`,
-		`{"command":"hello","timeout_seconds":0}`,
-		`{"command":"hello","timeout_seconds":3601}`,
+		`{"command":"hello","wait_seconds":-1}`,
 	} {
 		if _, err := tool.Execute(context.Background(), json.RawMessage(raw)); err == nil {
 			t.Fatalf("Execute(%s) succeeded", raw)
@@ -180,6 +220,8 @@ func TestCommandHelper(t *testing.T) {
 		os.Exit(7)
 	case "sleep":
 		time.Sleep(time.Second)
+	case "long-sleep":
+		time.Sleep(2 * time.Second)
 	case "short-sleep":
 		time.Sleep(100 * time.Millisecond)
 		fmt.Print("done")

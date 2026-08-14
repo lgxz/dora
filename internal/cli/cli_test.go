@@ -991,8 +991,17 @@ func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if _, exists := body["tools"]; exists {
-			t.Fatalf("unexpected tools = %#v", body["tools"])
+		// The job tool is always present, but the bash tool must NOT be
+		// (bash is unavailable).
+		tools, ok := body["tools"].([]any)
+		if !ok {
+			t.Fatalf("expected tools (job tool always present), got none")
+		}
+		for _, tool := range tools {
+			fn := tool.(map[string]any)["function"].(map[string]any)
+			if fn["name"] == "bash" {
+				t.Fatalf("bash tool should be skipped, got %#v", tools)
+			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"no bash needed"}}]}`), nil
 	})}
@@ -1062,7 +1071,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 2 {
+		if len(tools) != 3 {
 			t.Fatalf("tools = %#v", tools)
 		}
 		var names []string
@@ -1070,7 +1079,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell" {
+		if strings.Join(names, ",") != "bash,powershell,job" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil
@@ -1178,8 +1187,16 @@ func TestRunIgnoresEmptyDefaultSkillDirectory(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if _, exists := body["tools"]; exists {
-			t.Fatalf("unexpected tools = %#v", body["tools"])
+		// The job tool is always present, but the skill tool must NOT be.
+		tools, ok := body["tools"].([]any)
+		if !ok {
+			t.Fatalf("expected tools (job tool always present), got none")
+		}
+		for _, tool := range tools {
+			fn := tool.(map[string]any)["function"].(map[string]any)
+			if fn["name"] == "skill" {
+				t.Fatalf("skill tool should be absent, got %#v", tools)
+			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"no skills"}}]}`), nil
 	})}
@@ -1251,11 +1268,19 @@ func TestRunAddsRepeatedCommandSkillDirectories(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 1 {
-			t.Fatalf("tools = %#v", tools)
+		// The job tool is always present; find the skill tool among them.
+		var skillTool map[string]any
+		for _, tool := range tools {
+			fn := tool.(map[string]any)["function"].(map[string]any)
+			if fn["name"] == "skill" {
+				skillTool = fn
+				break
+			}
 		}
-		function := tools[0].(map[string]any)["function"].(map[string]any)
-		description := function["description"].(string)
+		if skillTool == nil {
+			t.Fatalf("skill tool not found in tools = %#v", tools)
+		}
+		description := skillTool["description"].(string)
 		if !strings.Contains(description, "alpha") || !strings.Contains(description, "beta") {
 			t.Fatalf("description = %q", description)
 		}
@@ -1301,8 +1326,16 @@ func TestRunNoSkillsDisablesEverySkillSource(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if _, exists := body["tools"]; exists {
-			t.Fatalf("unexpected tools = %#v", body["tools"])
+		// The job tool is always present, but the skill tool must NOT be.
+		tools, ok := body["tools"].([]any)
+		if !ok {
+			t.Fatalf("expected tools (job tool always present), got none")
+		}
+		for _, tool := range tools {
+			fn := tool.(map[string]any)["function"].(map[string]any)
+			if fn["name"] == "skill" {
+				t.Fatalf("skill tool should be disabled, got %#v", tools)
+			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
 	})}

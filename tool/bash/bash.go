@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/tool/internal/commandexec"
 )
 
@@ -22,6 +23,8 @@ var ErrUnavailable = errors.New("bash: executable unavailable")
 type Config struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
+	// JobManager, when set, enables background execution via wait_seconds.
+	JobManager *job.Manager
 	// Vision advertises the @@path@@ image tag in the tool description.
 	Vision bool
 }
@@ -46,6 +49,7 @@ func New(cfg Config) (*Tool, error) {
 		CommandArgs:    commandArgs,
 		Timeout:        cfg.Timeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
+		JobManager:     cfg.JobManager,
 		Vision:         cfg.Vision,
 	})
 	if err != nil {

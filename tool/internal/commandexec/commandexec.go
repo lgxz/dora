@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/job"
 )
 
 const (
 	defaultTimeout        = 120 * time.Second
 	maxTimeout            = time.Hour
-	maxTimeoutSeconds     = int(maxTimeout / time.Second)
 	defaultMaxOutputBytes = 1 << 20
 )
 
@@ -29,6 +29,10 @@ type Config struct {
 	CommandArgs    func(string) []string
 	Timeout        time.Duration
 	MaxOutputBytes int
+	// JobManager, when set, enables background execution: a command that does
+	// not finish within wait_seconds is adopted as a background job and a
+	// job_id is returned.
+	JobManager *job.Manager
 	// Vision advertises the @@path@@ image tag in the tool description so the
 	// model can attach images for viewing. Requires a vision-capable model.
 	Vision bool
@@ -42,6 +46,7 @@ type Tool struct {
 	commandArgs    func(string) []string
 	timeout        time.Duration
 	maxOutputBytes int
+	jobManager     *job.Manager
 	vision         bool
 }
 
@@ -72,43 +77,36 @@ func New(cfg Config) (*Tool, error) {
 		commandArgs:    cfg.CommandArgs,
 		timeout:        timeout,
 		maxOutputBytes: maxOutputBytes,
+		jobManager:     cfg.JobManager,
 		vision:         cfg.Vision,
 	}, nil
 }
 
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
-	timeoutDescription := fmt.Sprintf(
-		"Maximum execution time for this command. Omit to use the default of %s.",
-		t.timeout,
-	)
 	description := t.description
 	if t.vision {
-		if description != "" {
-			description += " "
-		}
-		description += "To load an image file for viewing, use `echo @@path@@`"
+		description += " To load an image file for viewing, use `echo @@path@@`"
 	}
 	return dora.ToolSpec{
 		Name:        t.name,
 		Description: description,
-		InputSchema: json.RawMessage(fmt.Sprintf(`{
+		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "command": {
       "type": "string",
       "description": "command"
     },
-    "timeout_seconds": {
+    "wait_seconds": {
       "type": "integer",
-      "minimum": 1,
-      "maximum": 3600,
-      "description": %q
+      "minimum": 0,
+      "description": "Max time to wait before transitioning to background. Default 60"
     }
   },
   "required": ["command"],
   "additionalProperties": false
-}`, timeoutDescription)),
+}`),
 	}
 }
 
@@ -120,11 +118,13 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 		return "", err
 	}
 
-	timeout := t.timeout
-	if input.TimeoutSeconds != nil {
-		timeout = time.Duration(*input.TimeoutSeconds) * time.Second
+	// Background mode: wait up to wait_seconds, then adopt as a background job.
+	if t.jobManager != nil && input.WaitSeconds != nil && *input.WaitSeconds > 0 {
+		return t.executeWithBackground(ctx, input)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+
+	// Foreground mode (original behavior).
+	runCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 
 	stdout := newLimitedBuffer(t.maxOutputBytes)
@@ -166,9 +166,69 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	return string(encoded), nil
 }
 
+// executeWithBackground waits up to wait_seconds for the command to finish. If
+// it finishes in time, the result is returned. If not, the running process is
+// adopted as a background job (not restarted) and a job_id is returned.
+func (t *Tool) executeWithBackground(ctx context.Context, input input) (string, error) {
+	waitDuration := time.Duration(*input.WaitSeconds) * time.Second
+
+	// Use an independent context for the process so the foreground wait
+	// timeout does not kill it when transitioning to background.
+	procCtx, procCancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(procCtx, t.binary, t.commandArgs(input.Command)...)
+	out := &job.OutputBuffer{}
+	cmd.Stdout = out.StdoutWriter()
+	cmd.Stderr = out.StderrWriter()
+	cmd.WaitDelay = time.Second
+
+	// Start the process. Wait() is called either in the foreground completion
+	// path or in the Adopt goroutine (never both).
+	if err := cmd.Start(); err != nil {
+		procCancel()
+		return "", fmt.Errorf("%s: start command: %w", t.name, err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case runErr := <-done:
+		procCancel()
+		stdout, stderr := out.Drain()
+		result := commandResult{
+			Stdout:    stdout,
+			Stderr:    stderr,
+			Truncated: false,
+		}
+		switch {
+		case runErr == nil:
+			result.ExitCode = 0
+		default:
+			var exitError *exec.ExitError
+			if !errors.As(runErr, &exitError) {
+				return "", fmt.Errorf("%s: execute command: %w", t.name, runErr)
+			}
+			result.ExitCode = exitError.ExitCode()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("%s: encode result: %w", t.name, err)
+		}
+		return string(encoded), nil
+
+	case <-time.After(waitDuration):
+		// Transition to background: adopt the running process, do not restart.
+		// The Wait() goroutine above fills `done`; Adopt reaps it.
+		j := t.jobManager.Adopt(cmd, procCancel, input.Command, out, done)
+		stdout, stderr := out.Drain()
+		return fmt.Sprintf(`{"job_id": %q, "status": "running", "stdout": %q, "stderr": %q, "message": "Command did not finish within %s. It is now running in the background. Use the job tool to check status."}`,
+			j.ID, stdout, stderr, waitDuration), nil
+	}
+}
+
 type input struct {
-	Command        string `json:"command"`
-	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	Command     string `json:"command"`
+	WaitSeconds *int   `json:"wait_seconds,omitempty"`
 }
 
 func decodeInput(name string, raw json.RawMessage) (input, error) {
@@ -181,11 +241,8 @@ func decodeInput(name string, raw json.RawMessage) (input, error) {
 	if value.Command == "" {
 		return input{}, fmt.Errorf("%s: command is required", name)
 	}
-	if value.TimeoutSeconds != nil && *value.TimeoutSeconds < 1 {
-		return input{}, fmt.Errorf("%s: timeout_seconds must be positive", name)
-	}
-	if value.TimeoutSeconds != nil && *value.TimeoutSeconds > maxTimeoutSeconds {
-		return input{}, fmt.Errorf("%s: timeout_seconds cannot exceed %d", name, maxTimeoutSeconds)
+	if value.WaitSeconds != nil && *value.WaitSeconds < 0 {
+		return input{}, fmt.Errorf("%s: wait_seconds must be non-negative", name)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {

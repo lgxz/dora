@@ -16,6 +16,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/internal/session"
@@ -23,6 +24,7 @@ import (
 	"github.com/lgxz/dora/model/openai"
 	"github.com/lgxz/dora/model/openairesponses"
 	"github.com/lgxz/dora/skill"
+	jobtool "github.com/lgxz/dora/tool/job"
 )
 
 const maxStdinBytes = 16 << 20
@@ -276,6 +278,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	jobManager := job.New()
 	var tools []dora.Tool
 	if !*noSkills {
 		additionalSkillDirectories := append([]string(nil), cfg.Skills.Directories...)
@@ -298,11 +301,17 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 		}
 	}
-	commandTools, err := buildCommandTools(cfg.Tools, cfg.Model.Vision)
+	commandTools, err := buildCommandTools(cfg.Tools, cfg.Model.Vision, jobManager)
 	if err != nil {
 		return err
 	}
 	tools = append(tools, commandTools...)
+
+	// The job tool is a regular tool; it implements ConditionalTool and is
+	// filtered out of the exposed specs while there are no active background
+	// jobs.
+	jobTool := jobtool.New(jobManager)
+	tools = append(tools, jobTool)
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds:        cfg.Agent.MaxRounds,
@@ -312,6 +321,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	defer jobManager.Cleanup()
 	var messages []dora.Message
 	var continuation string
 	if !*fresh {

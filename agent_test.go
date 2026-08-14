@@ -267,6 +267,57 @@ func TestNewRejectsDuplicateTools(t *testing.T) {
 	}
 }
 
+func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
+	jobTool := stubTool{
+		spec: ToolSpec{Name: "job"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return `{"jobs": []}`, nil
+		},
+	}
+
+	// Model: first round calls the job tool, second round returns content.
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			// The job tool is always exposed (like other tools).
+			found := false
+			for _, spec := range request.Tools {
+				if spec.Name == "job" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("job tool should be exposed like other tools")
+			}
+			return Response{ToolCalls: []ToolCall{{
+				ID:   "call-1",
+				Name: "job",
+				Input: json.RawMessage(`{"action":"list"}`),
+			}}}, nil
+		case 2:
+			return Response{Content: "done"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+
+	agent, err := NewWithConfig(model, AgentConfig{MaxRounds: 3}, jobTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := agent.Run(context.Background(), []Message{{Role: RoleUser, Content: "hi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "done" {
+		t.Fatalf("content = %q", result.Content)
+	}
+}
+
 func TestRunFeedsBackMissingToolError(t *testing.T) {
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
