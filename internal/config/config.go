@@ -30,6 +30,9 @@ type Agent struct {
 	// ContextWindow bounds the total text budget (in bytes) for the messages
 	// sent to the model. Zero disables budget-based compaction.
 	ContextWindow int `yaml:"context_window,omitempty"`
+	// SystemPrompt overrides the built-in default agent system prompt. Empty
+	// uses the built-in default.
+	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
 // Model describes one configured model endpoint.

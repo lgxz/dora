@@ -80,10 +80,11 @@ func TestRunAttachesImageFlagToUserMessage(t *testing.T) {
 			t.Fatal(err)
 		}
 		messages := body["messages"].([]any)
-		if len(messages) != 1 {
+		if len(messages) != 2 {
 			t.Fatalf("messages = %#v", messages)
 		}
-		content := messages[0].(map[string]any)["content"].([]any)
+		// messages[0] is the system prompt; messages[1] is the user image.
+		content := messages[1].(map[string]any)["content"].([]any)
 		if len(content) != 2 {
 			t.Fatalf("content = %#v", content)
 		}
@@ -601,23 +602,26 @@ func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 		input := body["input"].([]any)
 		switch calls {
 		case 1:
-			if len(input) != 1 || input[0].(map[string]any)["content"] != "first task" {
+			// system + user
+			if len(input) != 2 || input[1].(map[string]any)["content"] != "first task" {
 				t.Fatalf("first input = %#v", input)
 			}
 			return fakeResponsesOutput(`[{"type":"function_call","call_id":"call-skill","name":"skill","arguments":"{\"name\":\"winuse\"}"}]`), nil
 		case 2:
-			if len(input) != 3 ||
-				input[1].(map[string]any)["type"] != "function_call" ||
-				input[2].(map[string]any)["type"] != "function_call_output" {
+			// system + user + function_call + function_call_output
+			if len(input) != 4 ||
+				input[2].(map[string]any)["type"] != "function_call" ||
+				input[3].(map[string]any)["type"] != "function_call_output" {
 				t.Fatalf("tool continuation input = %#v", input)
 			}
 			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"first answer"}]}]`), nil
 		case 3:
-			if len(input) != 5 ||
-				input[1].(map[string]any)["type"] != "function_call" ||
-				input[2].(map[string]any)["type"] != "function_call_output" ||
-				input[3].(map[string]any)["type"] != "message" ||
-				input[4].(map[string]any)["content"] != "second task" {
+			// system + user + function_call + function_call_output + message + user
+			if len(input) != 6 ||
+				input[2].(map[string]any)["type"] != "function_call" ||
+				input[3].(map[string]any)["type"] != "function_call_output" ||
+				input[4].(map[string]any)["type"] != "message" ||
+				input[5].(map[string]any)["content"] != "second task" {
 				t.Fatalf("resumed input = %#v", input)
 			}
 			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"second answer"}]}]`), nil
@@ -782,7 +786,7 @@ func TestRunContinuesAfterMaximumRounds(t *testing.T) {
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf continued\"}"}}]}}]}`), nil
 		case 2:
 			messages := body["messages"].([]any)
-			if len(messages) != 3 || messages[2].(map[string]any)["role"] != "tool" {
+			if len(messages) != 4 || messages[3].(map[string]any)["role"] != "tool" {
 				t.Fatalf("resumed messages = %#v", messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"finished"}}]}`), nil
@@ -867,7 +871,7 @@ tools:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || stdout.Len() != 0 || snapshot.Revision != 1 || len(snapshot.Messages) != 3 {
+	if calls != 1 || stdout.Len() != 0 || snapshot.Revision != 1 || len(snapshot.Messages) != 4 {
 		t.Fatalf("calls = %d, stdout = %q, snapshot = %#v", calls, stdout.String(), snapshot)
 	}
 }
@@ -945,8 +949,8 @@ func TestRunMaximumHistoryRoundsFlagOverridesConfig(t *testing.T) {
 		// (user + assistant + tool) instead of being compacted.
 		if calls == 2 {
 			messages, ok := body["messages"].([]any)
-			if !ok || len(messages) != 3 {
-				t.Fatalf("messages = %#v, want 3", body["messages"])
+			if !ok || len(messages) != 4 {
+				t.Fatalf("messages = %#v, want 4", body["messages"])
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
 		}
@@ -1551,15 +1555,17 @@ func TestRunContinuesNamedSession(t *testing.T) {
 		messages := body["messages"].([]any)
 		switch calls {
 		case 1:
-			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "first task" {
+			// system + user
+			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "first task" {
 				t.Fatalf("first messages = %#v", messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"first answer"}}]}`), nil
 		case 2:
-			if len(messages) != 3 ||
-				messages[0].(map[string]any)["content"] != "first task" ||
-				messages[1].(map[string]any)["content"] != "first answer" ||
-				messages[2].(map[string]any)["content"] != "continue task" {
+			// system + user + assistant + user
+			if len(messages) != 4 ||
+				messages[1].(map[string]any)["content"] != "first task" ||
+				messages[2].(map[string]any)["content"] != "first answer" ||
+				messages[3].(map[string]any)["content"] != "continue task" {
 				t.Fatalf("continued messages = %#v", messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"second answer"}}]}`), nil
@@ -1622,7 +1628,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 2 || len(snapshot.Messages) != 4 ||
+	if snapshot.Revision != 2 || len(snapshot.Messages) != 5 ||
 		snapshot.Backend.Provider != "openai" || snapshot.Backend.API != "chat_completions" || snapshot.Continuation != "" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
@@ -1682,7 +1688,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Backend.Model != "new-model" || snapshot.Messages[0].Content != "restart" {
+	if snapshot.Backend.Model != "new-model" || snapshot.Messages[1].Content != "restart" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -1750,7 +1756,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Revision != 5 || snapshot.Messages[0].Content != "restart" {
+	if snapshot.Revision != 5 || snapshot.Messages[1].Content != "restart" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -1768,12 +1774,14 @@ func TestRunFreshReplacesSessionOnlyOnSuccess(t *testing.T) {
 		case 1:
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"old answer"}}]}`), nil
 		case 2:
-			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "fresh task" {
+			// system + user
+			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "fresh task" {
 				t.Fatalf("fresh messages = %#v", messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"fresh answer"}}]}`), nil
 		case 3:
-			if len(messages) != 1 || messages[0].(map[string]any)["content"] != "failing task" {
+			// system + user
+			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "failing task" {
 				t.Fatalf("failing messages = %#v", messages)
 			}
 			return &http.Response{
@@ -1829,7 +1837,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if freshSnapshot.Revision != 2 || len(freshSnapshot.Messages) != 2 || freshSnapshot.Messages[0].Content != "fresh task" {
+	if freshSnapshot.Revision != 2 || len(freshSnapshot.Messages) != 3 || freshSnapshot.Messages[1].Content != "fresh task" {
 		t.Fatalf("fresh snapshot = %#v", freshSnapshot)
 	}
 
@@ -1840,7 +1848,7 @@ model:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if afterFailure.Revision != freshSnapshot.Revision || len(afterFailure.Messages) != 2 || afterFailure.Messages[0].Content != "fresh task" {
+	if afterFailure.Revision != freshSnapshot.Revision || len(afterFailure.Messages) != 3 || afterFailure.Messages[1].Content != "fresh task" {
 		t.Fatalf("session changed after failure: %#v", afterFailure)
 	}
 }

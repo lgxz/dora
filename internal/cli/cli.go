@@ -335,6 +335,16 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	for _, path := range imagePaths {
 		imageRefs = append(imageRefs, dora.Image{Path: path})
 	}
+	// Inject the system prompt (config override or built-in default) before
+	// the user prompt. When resuming a session, the snapshot already contains
+	// the system message, so only inject it for a fresh session.
+	if len(messages) == 0 {
+		systemPrompt := defaultSystemPrompt
+		if cfg.Agent.SystemPrompt != "" {
+			systemPrompt = cfg.Agent.SystemPrompt
+		}
+		messages = append(messages, dora.Message{Role: dora.RoleSystem, Content: systemPrompt})
+	}
 	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt, Images: imageRefs})
 	state := dora.State{Messages: messages, Continuation: continuation}
 	var result dora.Result
