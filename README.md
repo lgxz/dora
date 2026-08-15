@@ -3,42 +3,31 @@
 `dora` is a tiny, modular LLM agent kernel for Go. Its core is one loop and
 two interfaces: `Model` and `Tool`.
 
-By default the CLI exposes only the Bash tool on macOS/Linux or the PowerShell
-tool on Windows; when skill directories are present, the skill tool is
-activated automatically, and there are no other tools. The CLI never injects a
-system prompt, sending only the user's prompt as a user message. No
-configuration file is required: setting a single provider API key environment
+No configuration file is required: setting a single provider API key environment
 variable (OpenAI, DeepSeek, or Trustoken) lets dora auto-select that provider
 and run immediately.
 
 See [`docs/architecture.md`](docs/architecture.md) for module boundaries,
 dependencies, interfaces, and runtime flows.
 
-```go
-model := newMyModel()
-weather := newWeatherTool()
-
-agent, err := dora.New(model, weather)
-if err != nil {
-	log.Fatal(err)
-}
-
-result, err := agent.Run(ctx, []dora.Message{
-	{Role: dora.RoleUser, Content: "What's the weather?"},
-})
-if err != nil {
-	log.Fatal(err)
-}
-
-fmt.Println(result.Content)
-```
-
-The agent is stateless. Keep `result.Messages` and pass them to a later call to
-continue a conversation.
-
 [DoraBar](https://github.com/lgxz/DoraBar) is a companion macOS tray/menu-bar
 app for dora, written in Swift. It provides a lightweight menu-bar interface
 for interacting with the dora CLI.
+
+## Benchmark Results
+
+dora is evaluated on [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench-2.1)
+(89 tasks) using the `deepseek-v4-flash` model. The table below tracks the
+mean pass rate across evaluation runs as dora evolves:
+
+| Run | Date | Mean | Passed | Notes |
+|-----|------|------|--------|-------|
+| 1 | 2026-08-12 | 0.573 | 51/89 | Baseline |
+| 2 | 2026-08-13 | 0.483 | 43/89 | Rate-limit affected |
+| 3 | 2026-08-13 | 0.596 | 53/89 |  |
+| 4 | 2026-08-14 | 0.607 | 54/89 | Background job support |
+| 5 | 2026-08-14 | 0.618 | 55/89 | System prompt |
+| 6 | 2026-08-14 | 0.685 | 61/89 | read/write/edit tools |
 
 ## Scope
 
