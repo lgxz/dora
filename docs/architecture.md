@@ -261,13 +261,13 @@ Normal resumption requires the backend to match exactly. `--fresh` ignores the o
 
 A skill is a tool, not text spliced directly into the prompt at startup. This way the model initially sees only the skill name and description, and only calls the `skill` tool to load the full content after deciding it is relevant.
 
-By default, `~/.dora/skills` (or `DORA_HOME/skills`) is discovered, and configuration and the repeatable `--skills-dir` argument can add other parent directories. All sources are converted to absolute paths and deduplicated; `--no-skills` takes precedence over all sources and disables skills entirely. Each direct subdirectory must contain a valid `SKILL.md`:
+By default, `~/.dora/skills` (or `DORA_HOME/skills`) is discovered first, followed by `~/.agents/skills/`. Each default directory is included only when it exists as a directory; an absent default is silently skipped. When `skills.directories` is configured, the defaults are replaced by exactly those directories (each must be an absolute path or start with `~/`). All resulting paths are converted to absolute form and deduplicated; `--no-skills` takes precedence over all sources and disables skills entirely. Each direct subdirectory must contain a valid `SKILL.md`:
 
 - YAML front matter allows only `name` and `description`;
 - the skill name must match the directory name and be globally unique;
 - the file must be a regular file and satisfy the count, size, and description-length limits;
-- when the default directory does not exist, or contains no subdirectory with a `SKILL.md`, the entire tool stays disabled;
-- when an explicitly configured or command-line-specified directory does not exist, or a skill is malformed, startup fails.
+- when no default directory exists, or no directory contains a subdirectory with a `SKILL.md`, the entire tool stays disabled;
+- when an explicitly configured directory does not exist or is not an absolute/`~/` path, or a skill is malformed, startup fails.
 
 The tool execution result contains the skill's absolute directory and the complete `SKILL.md`, so instructions can reference scripts in the same directory. The skill tool itself does not execute files; execution still requires another explicitly enabled tool, such as Bash.
 

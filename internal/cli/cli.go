@@ -86,8 +86,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	showVersion := flags.Bool("version", false, "print version information")
 	performUpdate := flags.Bool("update", false, "update a standalone installation")
 	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
-	var commandSkillDirectories stringListFlag
-	flags.Var(&commandSkillDirectories, "skills-dir", "add a skill parent directory (repeatable)")
 	var imagePaths stringListFlag
 	flags.Var(&imagePaths, "image", "attach an image file to the prompt (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
@@ -281,9 +279,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	jobManager := job.New()
 	var tools []dora.Tool
 	if !*noSkills {
-		additionalSkillDirectories := append([]string(nil), cfg.Skills.Directories...)
-		additionalSkillDirectories = append(additionalSkillDirectories, commandSkillDirectories...)
-		skillDirectories, err := configuredSkillDirectories(additionalSkillDirectories)
+		skillDirectories, err := configuredSkillDirectories(cfg.Skills.Directories)
 		if err != nil {
 			return err
 		}
@@ -483,35 +479,91 @@ func (values *stringListFlag) String() string {
 	return strings.Join(*values, ",")
 }
 
-func configuredSkillDirectories(additional []string) ([]string, error) {
-	defaultDirectory, err := paths.SkillsDir()
-	if err != nil {
-		return nil, err
-	}
-	info, err := os.Stat(defaultDirectory)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("inspect default skill directory %q: %w", defaultDirectory, err)
+// configuredSkillDirectories resolves the skill parent directories to load.
+// When nothing is configured, it uses the dora home skill directory followed
+// by ~/.agents/skills/ (silently skipping any that do not exist). When any
+// directories are configured, only those are used. Configured paths must be
+// absolute or start with ~/; all resulting paths are deduplicated.
+func configuredSkillDirectories(configured []string) ([]string, error) {
+	// resolveDir validates a user-supplied path and expands a leading ~ home.
+	resolveDir := func(directory string) (string, error) {
+		if strings.HasPrefix(directory, "~") {
+			if directory != "~" && !strings.HasPrefix(directory, "~/") {
+				return "", fmt.Errorf("skill directory %q must be an absolute path or start with ~/", directory)
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("find home directory for skill directory %q: %w", directory, err)
+			}
+			if directory == "~" {
+				return home, nil
+			}
+			return filepath.Join(home, directory[2:]), nil
+		}
+		if !filepath.IsAbs(directory) {
+			return "", fmt.Errorf("skill directory %q must be an absolute path or start with ~/", directory)
+		}
+		return filepath.Clean(directory), nil
 	}
 
-	directories := make([]string, 0, len(additional)+1)
-	seen := make(map[string]struct{}, len(additional)+1)
-	if err == nil {
-		if !info.IsDir() {
-			return nil, fmt.Errorf("default skill path %q is not a directory", defaultDirectory)
+	if len(configured) == 0 {
+		directories := make([]string, 0, 2)
+		seen := make(map[string]struct{})
+		addDefaultIfExists := func(directory string) error {
+			info, err := os.Stat(directory)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("inspect skill directory %q: %w", directory, err)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("skill path %q is not a directory", directory)
+			}
+			directory = filepath.Clean(directory)
+			if _, exists := seen[directory]; exists {
+				return nil
+			}
+			seen[directory] = struct{}{}
+			directories = append(directories, directory)
+			return nil
 		}
-		directories = append(directories, defaultDirectory)
-		seen[defaultDirectory] = struct{}{}
-	}
-	for _, directory := range additional {
-		absolute, err := filepath.Abs(directory)
+		defaultDirectory, err := paths.SkillsDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve skill directory %q: %w", directory, err)
+			return nil, err
 		}
-		if _, exists := seen[absolute]; exists {
+		if err := addDefaultIfExists(defaultDirectory); err != nil {
+			return nil, err
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("find home directory: %w", err)
+		}
+		if err := addDefaultIfExists(filepath.Join(home, ".agents", "skills")); err != nil {
+			return nil, err
+		}
+		return directories, nil
+	}
+
+	directories := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, directory := range configured {
+		resolved, err := resolveDir(directory)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[resolved]; exists {
 			continue
 		}
-		seen[absolute] = struct{}{}
-		directories = append(directories, absolute)
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("inspect skill directory %q: %w", resolved, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("skill path %q is not a directory", resolved)
+		}
+		seen[resolved] = struct{}{}
+		directories = append(directories, resolved)
 	}
 	return directories, nil
 }

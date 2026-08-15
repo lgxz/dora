@@ -400,8 +400,8 @@ output, so treat them as sensitive. Do not run two Dora processes against the
 same session name concurrently.
 
 Use `--config`, `--model`, `--base-url`, `--thinking`, `--max-rounds`,
-`--max-history-rounds`, `--skills-dir`, or `--no-skills` to override the
-corresponding configuration for one invocation.
+`--max-history-rounds`, or `--no-skills` to override the corresponding
+configuration for one invocation.
 
 ### Skills
 
@@ -426,11 +426,13 @@ description: Analyze CPU, memory, disk, and busy processes.
 Inspect the machine methodically and summarize actionable findings.
 ```
 
-By default, Dora discovers the `skills` directory at `~/.dora/skills` (or
-`DORA_HOME/skills`), independent of the active `config.yaml` path. No
-configuration is needed.
+By default, Dora discovers skills in `~/.dora/skills` (or `DORA_HOME/skills`)
+followed by `~/.agents/skills/`, independent of the active `config.yaml` path.
+Each default directory is included only if it exists as a directory (an absent
+default is silently skipped). No configuration is needed.
 
-Use `skills.directories` only to add more parent directories:
+Use `skills.directories` to replace the defaults with a specific set of parent
+directories:
 
 ```yaml
 skills:
@@ -438,16 +440,11 @@ skills:
     - /absolute/path/to/additional-skills
 ```
 
-For a one-off run, add one or more parent directories on the command line:
-
-```sh
-dora --skills-dir ./project-skills --skills-dir ~/shared-skills "Run checks"
-```
-
-Command-line directories are merged with the default and configured
-directories, converted to absolute paths, and deduplicated. Use `--no-skills`
-to disable every skill source for one invocation; it takes precedence over
-both `--skills-dir` and `skills.directories`.
+Each configured path must be an absolute path or start with `~/`. Relative
+paths are rejected. Configured directories are converted to their absolute
+form and deduplicated; they are used exactly as listed and are not merged with
+the defaults. Use `--no-skills` to disable every skill source for one
+invocation; it takes precedence over `skills.directories`.
 
 Dora advertises only skill names and descriptions in the `skill` tool schema.
 The absolute skill directory and complete `SKILL.md` are returned when the

@@ -286,7 +286,7 @@ git diff | ./dora "Review this change"
 
 会话名称可包含字母、数字、`.`、`_` 和 `-`。Dora 将每个会话存储为带版本的 JSON 快照，权限为 `0600`。会话 v3 绑定了配置的提供商、API、模型和基础 URL：Chat Completions 从消息恢复，而 Responses 额外持久化其不透明的类型化项续接。在更改会话的后端之前使用 `--fresh`。不支持版本 1 和版本 2 的会话文件。默认目录在每个操作系统上都是 `~/.dora/sessions`。省略 `--session`/`-s` 可保持现有的无状态行为。会话文件可能包含命令和工具输出，因此请将其视为敏感内容。请勿同时对同一个会话名称运行两个 Dora 进程。
 
-使用 `--config`、`--model`、`--base-url`、`--thinking`、`--max-rounds`、`--max-history-rounds`、`--skills-dir` 或 `--no-skills` 可为一次调用覆盖相应的配置。
+使用 `--config`、`--model`、`--base-url`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
 ### 技能（Skills）
 
@@ -309,9 +309,9 @@ description: Analyze CPU, memory, disk, and busy processes.
 Inspect the machine methodically and summarize actionable findings.
 ```
 
-默认情况下，Dora 会在 `~/.dora/skills`（或 `DORA_HOME/skills`）发现 `skills` 目录，与活动的 `config.yaml` 路径无关。无需任何配置。
+默认情况下，Dora 会在 `~/.dora/skills`（或 `DORA_HOME/skills`）之后接着在 `~/.agents/skills/` 发现技能，与活动的 `config.yaml` 路径无关。每个默认目录仅当其作为目录存在时才会被纳入（缺失的默认目录会被静默跳过）。无需任何配置。
 
-仅当需要添加更多父目录时使用 `skills.directories`：
+使用 `skills.directories` 可以将默认目录替换为特定的父目录集合：
 
 ```yaml
 skills:
@@ -319,15 +319,9 @@ skills:
     - /absolute/path/to/additional-skills
 ```
 
-对于一次性运行，可在命令行添加一个或多个父目录：
+每个配置的路径必须是绝对路径或 `~/` 开头。相对路径会被拒绝。配置目录会转换为绝对形式并去重；它们完全按所列内容使用，不会与默认目录合并。使用 `--no-skills` 可为一次调用禁用所有技能来源；它优先于 `skills.directories`。
 
-```sh
-dora --skills-dir ./project-skills --skills-dir ~/shared-skills "Run checks"
-```
-
-命令行目录会与默认目录和配置目录合并，转换为绝对路径并去重。使用 `--no-skills` 可为一次调用禁用所有技能来源；它优先于 `--skills-dir` 和 `skills.directories` 两者。
-
-Dora 仅在 `skill` 工具 schema 中公布技能名称和描述。当模型调用该工具时，会返回技能的绝对目录和完整的 `SKILL.md`，从而允许指令引用诸如 `scripts/check.sh` 之类的文件。技能工具从不执行这些文件；执行仍然需要一个已启用的工具（如 Bash）。名称必须包含小写字母、数字和连字符，并且必须与其目录名匹配。会拒绝重复的名称。缺失或为空的默认目录只会让该工具保持禁用；畸形的已发现技能和缺失的显式配置或命令行目录则属于错误。
+Dora 仅在 `skill` 工具 schema 中公布技能名称和描述。当模型调用该工具时，会返回技能的绝对目录和完整的 `SKILL.md`，从而允许指令引用诸如 `scripts/check.sh` 之类的文件。技能工具从不执行这些文件；执行仍然需要一个已启用的工具（如 Bash）。名称必须包含小写字母、数字和连字符，并且必须与其目录名匹配。会拒绝重复的名称。缺失或为空的默认目录只会让该工具保持禁用；畸形的已发现技能和缺失的显式配置目录则属于错误。
 
 ## 发布（Releasing）
 

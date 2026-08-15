@@ -50,9 +50,11 @@ agent:
   # truncated) so the total stays within this budget. Default: 1048576 (1 MiB).
   # context_window: 1048576
 
-# Dora automatically discovers a skills directory at ~/.dora/skills
-# (or DORA_HOME/skills), independent of this file's location.
-# Add other directories only when needed:
+# Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
+# followed by ~/.agents/skills/, independent of this file's location. Absent
+# default directories are silently skipped. Setting skills.directories replaces
+# the defaults with exactly these parent directories; each path must be an
+# absolute path or start with ~/:
 # skills:
 #   directories:
 #     - /absolute/path/to/additional-skills
