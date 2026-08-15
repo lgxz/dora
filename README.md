@@ -1,5 +1,8 @@
 # dora
 
+[![English](https://img.shields.io/badge/Language-English-blue.svg)](README.md)
+[![简体中文](https://img.shields.io/badge/语言-简体中文-red.svg)](README.zh-CN.md)
+
 `dora` is a tiny, modular LLM agent kernel for Go. Its core is one loop and
 two interfaces: `Model` and `Tool`.
 
