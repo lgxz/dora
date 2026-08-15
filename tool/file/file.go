@@ -84,7 +84,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		lineNo++
 		if lineNo >= start && lineNo <= end {
 			// Prefix each line with its number for reference in edit operations.
-			fmt.Fprintf(&sb, "%d: %s\n", lineNo, scanner.Text())
+			fmt.Fprintf(&sb, "%d:%s\n", lineNo, scanner.Text())
 		}
 		if lineNo >= end {
 			break

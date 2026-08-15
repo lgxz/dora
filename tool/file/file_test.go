@@ -20,7 +20,7 @@ func TestReadTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "1: line1\n2: line2\n3: line3\n"
+	want := "1:line1\n2:line2\n3:line3\n"
 	if out != want {
 		t.Fatalf("out = %q, want %q", out, want)
 	}
@@ -37,7 +37,7 @@ func TestReadToolRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "2: l2\n3: l3\n"
+	want := "2:l2\n3:l3\n"
 	if out != want {
 		t.Fatalf("out = %q, want %q", out, want)
 	}
