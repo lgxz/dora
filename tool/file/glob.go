@@ -84,6 +84,9 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if err != nil {
 			return nil
 		}
+		// doublestar.Match hardcodes '/' as the path separator, so normalize
+		// the OS-specific separators (e.g. '\' on Windows) to '/'.
+		rel = filepath.ToSlash(rel)
 		matched, err := doublestar.Match(input.Pattern, rel)
 		if err != nil {
 			return nil

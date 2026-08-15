@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 func TestReadTool(t *testing.T) {
@@ -381,5 +383,30 @@ func TestGlobToolMissingPath(t *testing.T) {
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.py","path":"/nonexistent"}`))
 	if err == nil {
 		t.Fatal("expected error for missing path")
+	}
+}
+
+// TestGlobToSlashPathSeparator verifies the separator contract the GlobTool
+// fix relies on: doublestar.Match hardcodes '/' as the path separator, so a
+// Windows-style backslash relative path (produced by filepath.Rel on Windows)
+// only matches a forward-slash pattern after filepath.ToSlash. filepath.ToSlash
+// is a no-op on Unix, so this test asserts the underlying doublestar behavior
+// directly instead of constructing a real Windows filesystem tree.
+func TestGlobToSlashPathSeparator(t *testing.T) {
+	// A raw backslash path is treated as a single segment and must not match
+	// the multi-segment "tests/**/*.py" pattern.
+	if matched, err := doublestar.Match("tests/**/*.py", `tests\unit\x.py`); err != nil {
+		t.Fatal(err)
+	} else if matched {
+		t.Fatal("backslash path should not match tests/**/*.py before normalize")
+	}
+	// The same path after filepath.ToSlash ("/"-separated, as produced on
+	// Windows by the GlobTool fix) does match the recursive pattern.
+	matched, err := doublestar.Match("tests/**/*.py", "tests/unit/x.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matched {
+		t.Fatal("slash-normalized path should match tests/**/*.py")
 	}
 }
