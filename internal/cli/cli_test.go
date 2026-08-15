@@ -609,7 +609,7 @@ func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 			if len(input) != 2 || input[1].(map[string]any)["content"] != "first task" {
 				t.Fatalf("first input = %#v", input)
 			}
-			return fakeResponsesOutput(`[{"type":"function_call","call_id":"call-skill","name":"skill","arguments":"{\"name\":\"winuse\"}"}]`), nil
+			return fakeResponsesOutput(`[{"type":"function_call","call_id":"call-skill","name":"skill","arguments":"{\"name\":\"resume-skill\"}"}]`), nil
 		case 2:
 			// system + user + function_call + function_call_output
 			if len(input) != 4 ||
@@ -636,12 +636,12 @@ func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
 
 	root := t.TempDir()
 	t.Setenv("DORA_HOME", root)
-	skillDir := filepath.Join(root, "skills", "winuse")
+	skillDir := filepath.Join(root, "skills", "resume-skill")
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
-name: winuse
+name: resume-skill
 description: Operate native application interfaces.
 ---
 Use the bundled interface tool.
