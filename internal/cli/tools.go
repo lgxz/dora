@@ -13,13 +13,14 @@ import (
 	powershelltool "github.com/lgxz/dora/tool/powershell"
 )
 
-// buildFileTools returns the read/write/edit/grep file tools.
+// buildFileTools returns the read/write/edit/grep/glob file tools.
 func buildFileTools() []dora.Tool {
 	return []dora.Tool{
 		filetool.NewReadTool(),
 		filetool.NewWriteTool(),
 		filetool.NewEditTool(),
 		filetool.NewGrepTool(),
+		filetool.NewGlobTool(),
 	}
 }
 

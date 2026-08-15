@@ -290,3 +290,96 @@ func TestGrepToolMissingPath(t *testing.T) {
 		t.Fatal("expected error for missing path")
 	}
 }
+
+func TestGlobTool(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "utils.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data.txt"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGlobTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.py","path":"`+dir+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "main.py") || !strings.Contains(out, "utils.py") {
+		t.Fatalf("out = %q", out)
+	}
+	if strings.Contains(out, "data.txt") {
+		t.Fatalf("data.txt should not match, out = %q", out)
+	}
+}
+
+func TestGlobToolRecursive(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "models"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models", "trainer.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGlobTool()
+	// **/*.py should match files in all subdirectories.
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "main.py") || !strings.Contains(out, "trainer.py") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGlobToolIgnoreDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".venv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".venv", "lib.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGlobTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "main.py") {
+		t.Fatalf("out = %q", out)
+	}
+	if strings.Contains(out, ".venv") {
+		t.Fatalf(".venv should be ignored, out = %q", out)
+	}
+}
+
+func TestGlobToolNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGlobTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "no matches") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGlobToolMissingPath(t *testing.T) {
+	tool := NewGlobTool()
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.py","path":"/nonexistent"}`))
+	if err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
