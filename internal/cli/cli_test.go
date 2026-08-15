@@ -28,6 +28,9 @@ func TestMain(m *testing.M) {
 func TestRunCallsConfiguredModel(t *testing.T) {
 	// An explicit config path must not depend on the default XDG layout.
 	t.Setenv("XDG_CONFIG_HOME", "relative")
+	// Provider env wins over a config literal api_key, so clear it to assert
+	// that the config file's api_key is used.
+	t.Setenv("OPENAI_API_KEY", "")
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
