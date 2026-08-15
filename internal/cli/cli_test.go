@@ -1075,7 +1075,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 6 {
+		if len(tools) != 7 {
 			t.Fatalf("tools = %#v", tools)
 		}
 		var names []string
@@ -1083,7 +1083,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell,job,read,write,edit" {
+		if strings.Join(names, ",") != "bash,powershell,job,read,write,edit,grep" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil

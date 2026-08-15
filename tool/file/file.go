@@ -1,4 +1,4 @@
-// Package file implements read/write/edit tools for precise file operations.
+// Package file implements read/write/edit/grep tools for precise file operations.
 package file
 
 import (

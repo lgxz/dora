@@ -193,3 +193,100 @@ func TestEditToolNotFound(t *testing.T) {
 		t.Fatalf("expected not found, got %q", out)
 	}
 }
+
+func TestGrepTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(path, []byte("hello world\nfoo bar\nTODO fix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGrepTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"TODO","path":"`+path+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "3:TODO fix") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGrepToolDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("match here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("nothing here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGrepTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"match","path":"`+dir+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a.txt:1:match here") {
+		t.Fatalf("out = %q", out)
+	}
+	if strings.Contains(out, "b.txt") {
+		t.Fatalf("b.txt should not match, out = %q", out)
+	}
+}
+
+func TestGrepToolLiteral(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(path, []byte("a.b\naxb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGrepTool()
+	// Literal match: "a.b" should only match the literal "a.b", not "axb".
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"a.b","path":"`+path+`","regex":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "1:a.b") {
+		t.Fatalf("out = %q", out)
+	}
+	if strings.Contains(out, "axb") {
+		t.Fatalf("literal match should not match axb, out = %q", out)
+	}
+}
+
+func TestGrepToolIgnoreCase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(path, []byte("Hello\nworld\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGrepTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"hello","path":"`+path+`","ignore_case":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "1:Hello") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGrepToolNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGrepTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"missing","path":"`+path+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "no matches") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestGrepToolMissingPath(t *testing.T) {
+	tool := NewGrepTool()
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"x","path":"/nonexistent"}`))
+	if err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
