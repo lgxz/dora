@@ -57,8 +57,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	flags := flag.NewFlagSet("dora", flag.ContinueOnError)
 	flags.SetOutput(streams.Stderr)
 	configPath := flags.String("config", "", "path to YAML configuration")
-	modelName := flags.String("model", "", "override the configured model name")
-	baseURL := flags.String("base-url", "", "override the configured model base URL")
 	thinkingFlag := flags.String("thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
 	visionFlag := flags.Bool("vision", false, "enable image understanding (requires a vision-capable model)")
 	var maxRounds int
@@ -171,12 +169,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if err != nil {
 		return err
-	}
-	if *modelName != "" {
-		cfg.Model.Name = *modelName
-	}
-	if *baseURL != "" {
-		cfg.Model.BaseURL = *baseURL
 	}
 	if *thinkingFlag != "" {
 		switch *thinkingFlag {

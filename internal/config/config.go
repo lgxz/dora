@@ -188,15 +188,26 @@ func (cfg *Config) resolveAndValidate() error {
 	if model.BaseURL == "" {
 		model.BaseURL = preset.baseURL
 	}
+	// Provider-scoped environment variables take precedence over the config
+	// file for the resolved provider's model name and base URL.
+	if value, ok := os.LookupEnv(preset.modelEnv); ok && value != "" {
+		model.Name = value
+	}
+	if value, ok := os.LookupEnv(preset.baseURLEnv); ok && value != "" {
+		model.BaseURL = value
+	}
 	if model.APIKeyEnv == nil {
 		model.APIKeyEnv = &preset.apiKeyEnv
 	}
-	if model.APIKey == "" && *model.APIKeyEnv != "" {
-		value, ok := os.LookupEnv(*model.APIKeyEnv)
-		if !ok || value == "" {
+	if *model.APIKeyEnv != "" {
+		if value, ok := os.LookupEnv(*model.APIKeyEnv); ok && value != "" {
+			// Environment wins over a config-file literal api_key.
+			model.APIKey = value
+		} else if model.APIKey == "" {
+			// No env value and no config literal -> hard error.
 			return fmt.Errorf("environment variable %q is empty or unset", *model.APIKeyEnv)
 		}
-		model.APIKey = value
+		// else: no env value but a config literal exists -> keep the config literal.
 	}
 	if cfg.Tools.Bash.TimeoutSeconds < 0 {
 		return errors.New("tools.bash.timeout_seconds cannot be negative")
@@ -278,25 +289,33 @@ func (model *Model) selectProvider() error {
 }
 
 type modelPreset struct {
-	name      string
-	baseURL   string
-	apiKeyEnv string
+	name       string
+	baseURL    string
+	apiKeyEnv  string
+	modelEnv   string
+	baseURLEnv string
 }
 
 var modelPresets = map[string]modelPreset{
 	"openai": {
-		name:      "gpt-5",
-		baseURL:   "https://api.openai.com/v1",
-		apiKeyEnv: "OPENAI_API_KEY",
+		name:       "gpt-5",
+		baseURL:    "https://api.openai.com/v1",
+		apiKeyEnv:  "OPENAI_API_KEY",
+		modelEnv:   "OPENAI_MODEL",
+		baseURLEnv: "OPENAI_BASE_URL",
 	},
 	"deepseek": {
-		name:      "deepseek-v4-flash",
-		baseURL:   "https://api.deepseek.com",
-		apiKeyEnv: "DEEPSEEK_API_KEY",
+		name:       "deepseek-v4-flash",
+		baseURL:    "https://api.deepseek.com",
+		apiKeyEnv:  "DEEPSEEK_API_KEY",
+		modelEnv:   "DEEPSEEK_MODEL",
+		baseURLEnv: "DEEPSEEK_BASE_URL",
 	},
 	"trust": {
-		name:      "auto",
-		baseURL:   "https://api.trustoken.cn/v1",
-		apiKeyEnv: "TRUST_API_KEY",
+		name:       "auto",
+		baseURL:    "https://api.trustoken.cn/v1",
+		apiKeyEnv:  "TRUST_API_KEY",
+		modelEnv:   "TRUST_MODEL",
+		baseURLEnv: "TRUST_BASE_URL",
 	},
 }

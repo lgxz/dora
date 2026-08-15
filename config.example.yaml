@@ -8,6 +8,13 @@ model:
   # base_url: https://api.deepseek.com
   # api_key_env: DEEPSEEK_API_KEY
   # Other presets: openai, trust
+  #
+  # Environment variables take precedence over this file. Each preset's model
+  # name and base URL can be overridden with provider-scoped variables:
+  #   openai:  OPENAI_MODEL,        OPENAI_BASE_URL
+  #   deepseek:DEEPSEEK_MODEL,      DEEPSEEK_BASE_URL
+  #   trust:   TRUST_MODEL,         TRUST_BASE_URL
+  # The -model and -base-url CLI flags were removed; use these variables instead.
 
   # Overall timeout (seconds) for a non-streaming generation request.
   # Default: 120.

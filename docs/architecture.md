@@ -177,7 +177,7 @@ Current execution semantics:
 1. Parse arguments; `--version` and `-update` complete and exit before reading configuration or the prompt.
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
-4. Apply one-shot overrides such as `--model`, `--base-url`, and `--max-rounds`.
+4. Apply one-shot overrides such as `--max-rounds`; provider-scoped environment variables (for example `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`) override the resolved provider's model name and base URL after provider selection.
 5. If a session is specified, read the snapshot and validate the provider, API, model, and base URL.
 6. Create the concrete model adapter based on `model.api`; the provider is responsible for supplying provider defaults.
 7. Discover skills and create the available tools according to configuration.

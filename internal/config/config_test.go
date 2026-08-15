@@ -87,6 +87,23 @@ func TestLoadSelectsProviderFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentAPIKeyWinsOverConfigLiteral(t *testing.T) {
+	// Repro: env DEEPSEEK_API_KEY set, config provider: trust with a literal
+	// api_key. selectProvider() overrides the provider to deepseek and the
+	// resolved provider's env key takes precedence over the config literal.
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	path := writeConfig(t, "model:\n  provider: trust\n  api_key: trust-literal\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "deepseek" || cfg.Model.APIKey != "deepseek-secret" {
+		t.Fatalf("model = %#v, want provider deepseek with env API key", cfg.Model)
+	}
+}
+
 func TestLoadEnvironmentOverridesConfigProvider(t *testing.T) {
 	clearPresetAPIKeys(t)
 	t.Setenv("TRUST_API_KEY", "trust-secret")
@@ -122,6 +139,84 @@ func TestLoadRejectsMissingProviderWithoutEnvironment(t *testing.T) {
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "no model provider configured") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadEnvironmentOverridesModelForResolvedProvider(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		env      string
+		key      string
+		modelEnv string
+		baseURL  string
+	}{
+		{name: "openai", env: "OPENAI_API_KEY", key: "openai-secret", modelEnv: "OPENAI_MODEL", baseURL: "https://api.openai.com/v1"},
+		{name: "deepseek", env: "DEEPSEEK_API_KEY", key: "deepseek-secret", modelEnv: "DEEPSEEK_MODEL", baseURL: "https://api.deepseek.com"},
+		{name: "trust", env: "TRUST_API_KEY", key: "trust-secret", modelEnv: "TRUST_MODEL", baseURL: "https://api.trustoken.cn/v1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv(test.env, test.key)
+			t.Setenv(test.modelEnv, "env-model")
+			path := writeConfig(t, "model:\n  provider: "+test.name+"\n  name: config-model\n")
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model.Name != "env-model" || cfg.Model.BaseURL != test.baseURL {
+				t.Fatalf("model = %#v, want name %q baseURL %q", cfg.Model, "env-model", test.baseURL)
+			}
+		})
+	}
+}
+
+func TestLoadEnvironmentOverridesBaseURLForResolvedProvider(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		env        string
+		key        string
+		baseURLEnv string
+		baseURL    string
+	}{
+		{name: "openai", env: "OPENAI_API_KEY", key: "openai-secret", baseURLEnv: "OPENAI_BASE_URL", baseURL: "https://api.openai.com/v1"},
+		{name: "deepseek", env: "DEEPSEEK_API_KEY", key: "deepseek-secret", baseURLEnv: "DEEPSEEK_BASE_URL", baseURL: "https://api.deepseek.com"},
+		{name: "trust", env: "TRUST_API_KEY", key: "trust-secret", baseURLEnv: "TRUST_BASE_URL", baseURL: "https://api.trustoken.cn/v1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearPresetAPIKeys(t)
+			t.Setenv(test.env, test.key)
+			t.Setenv(test.baseURLEnv, "https://env.example.com/v1")
+			path := writeConfig(t, "model:\n  provider: "+test.name+"\n  name: "+test.baseURL+"\n  base_url: http://localhost\n")
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model.BaseURL != "https://env.example.com/v1" {
+				t.Fatalf("model = %#v, want baseURL https://env.example.com/v1", cfg.Model)
+			}
+		})
+	}
+}
+
+func TestLoadDoesNotApplyOtherProviderEnvironmentOverride(t *testing.T) {
+	clearPresetAPIKeys(t)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	// Set the trust and openai MODEL/BASE_URL env vars; they must NOT affect
+	// the resolved deepseek provider.
+	t.Setenv("TRUST_MODEL", "trust-model")
+	t.Setenv("TRUST_BASE_URL", "https://trust.example.com/v1")
+	t.Setenv("OPENAI_MODEL", "openai-model")
+	t.Setenv("OPENAI_BASE_URL", "https://openai.example.com/v1")
+	path := writeConfig(t, "model:\n  provider: deepseek\n  name: config-model\n  base_url: http://localhost\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Name != "config-model" || cfg.Model.BaseURL != "http://localhost" {
+		t.Fatalf("model = %#v, want config values preserved", cfg.Model)
 	}
 }
 

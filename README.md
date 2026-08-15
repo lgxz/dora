@@ -149,11 +149,11 @@ Dora reads each provider's API key from a dedicated environment variable. The
 following table lists the supported providers, their environment variables,
 and their default models:
 
-| Provider | Environment variable | Default model |
-| --- | --- | --- |
-| openai | `OPENAI_API_KEY` | `gpt-5` |
-| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` |
-| trust | `TRUST_API_KEY` | `auto` |
+| Provider | API key env | Default model | Model env | Base URL env |
+| --- | --- | --- | --- | --- |
+| openai | `OPENAI_API_KEY` | `gpt-5` | `OPENAI_MODEL` | `OPENAI_BASE_URL` |
+| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `DEEPSEEK_MODEL` | `DEEPSEEK_BASE_URL` |
+| trust | `TRUST_API_KEY` | `auto` | `TRUST_MODEL` | `TRUST_BASE_URL` |
 
 Set the environment variable for the provider you want to use. The commands
 differ by operating system.
@@ -225,6 +225,16 @@ to `chat_completions`, `auto`, `https://api.trustoken.cn/v1`, and
 Responses tool loops replay typed output items locally and do not depend on
 server-side response storage.
 
+Environment variables take precedence over the configuration file: the API key
+environment variable overrides the configured provider, and the provider-scoped
+`<PROVIDER>_MODEL` / `<PROVIDER>_BASE_URL` variables (for example
+`DEEPSEEK_MODEL`, `TRUST_BASE_URL`) override the resolved provider's `name` and
+`base_url`. The `-model` and `-base-url` CLI flags were removed; set
+`OPENAI_MODEL`, `DEEPSEEK_MODEL`, or `TRUST_MODEL` (and the matching
+`*_BASE_URL`) instead to override the model and base URL for one invocation.
+The provider-scoped overrides apply only to the resolved provider and do not
+affect other providers.
+
 ### Third-party OpenAI-compatible providers
 
 To use any third-party provider that speaks the OpenAI Chat Completions
@@ -256,10 +266,11 @@ model:
   api_key_env: OPENROUTER_API_KEY
 ```
 
-For a one-off invocation, override the model and base URL on the command line:
+For a one-off invocation, override the model and base URL with the provider-scoped
+environment variables (which take precedence over the config file):
 
 ```sh
-./dora --model llama3.1 --base-url http://localhost:11434/v1 "prompt"
+OPENAI_MODEL=llama3.1 OPENAI_BASE_URL=http://localhost:11434/v1 ./dora "prompt"
 ```
 
 Literal `api_key` is also supported, but an environment variable keeps secrets
@@ -399,9 +410,12 @@ the existing stateless behavior. Session files can contain commands and tool
 output, so treat them as sensitive. Do not run two Dora processes against the
 same session name concurrently.
 
-Use `--config`, `--model`, `--base-url`, `--thinking`, `--max-rounds`,
+Use `--config`, `--thinking`, `--max-rounds`,
 `--max-history-rounds`, or `--no-skills` to override the corresponding
-configuration for one invocation.
+configuration for one invocation. To override the model name or base URL for
+one invocation, set the provider-scoped environment variables (for example
+`DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`) instead; the `-model` and `-base-url`
+CLI flags were removed.
 
 ### Skills
 
@@ -532,7 +546,7 @@ Attach a local image to the current prompt with the repeatable `--image` flag
 (requires vision to be enabled):
 
 ```sh
-./dora --vision --model gpt-4o --image photo.png "Describe this photo"
+OPENAI_MODEL=gpt-4o ./dora --vision --image photo.png "Describe this photo"
 ```
 
 The model can also surface images itself: when a command tool's stdout contains

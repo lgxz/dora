@@ -113,11 +113,11 @@ make install
 
 Dora 从专用的环境变量读取每个提供商的 API 密钥。下表列出了支持的提供商、它们的环境变量和默认模型：
 
-| 提供商 | 环境变量 | 默认模型 |
-| --- | --- | --- |
-| openai | `OPENAI_API_KEY` | `gpt-5` |
-| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` |
-| trust | `TRUST_API_KEY` | `auto` |
+| 提供商 | API 密钥环境变量 | 默认模型 | 模型环境变量 | 基础 URL 环境变量 |
+| --- | --- | --- | --- | --- |
+| openai | `OPENAI_API_KEY` | `gpt-5` | `OPENAI_MODEL` | `OPENAI_BASE_URL` |
+| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `DEEPSEEK_MODEL` | `DEEPSEEK_BASE_URL` |
+| trust | `TRUST_API_KEY` | `auto` | `TRUST_MODEL` | `TRUST_BASE_URL` |
 
 为你要使用的提供商设置环境变量。命令因操作系统而异。
 
@@ -166,6 +166,8 @@ model:
 
 `deepseek` 预设默认为 `chat_completions` API、`deepseek-v4-flash`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。`openai` 预设默认为 `chat_completions`、`gpt-5`、`https://api.openai.com/v1` 和 `OPENAI_API_KEY`。`trust` 预设默认为 `chat_completions`、`auto`、`https://api.trustoken.cn/v1` 和 `TRUST_API_KEY`。需要时可覆盖任何预设字段，并将 `api: responses` 设为使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
 
+环境变量优先于配置文件：API 密钥环境变量会覆盖配置的提供商，而提供商作用域的 `<PROVIDER>_MODEL` / `<PROVIDER>_BASE_URL` 变量（例如 `DEEPSEEK_MODEL`、`TRUST_BASE_URL`）会覆盖解析后提供商的 `name` 和 `base_url`。`-model` 和 `-base-url` 命令行标志已被移除；请改为设置 `OPENAI_MODEL`、`DEEPSEEK_MODEL` 或 `TRUST_MODEL`（以及对应的 `*_BASE_URL`）来为一次调用覆盖模型和基础 URL。提供商作用域的覆盖仅作用于解析后的提供商，不影响其他提供商。
+
 ### 第三方 OpenAI 兼容提供商
 
 要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请保留 `model.provider: openai` 并覆盖 `base_url`、`name` 和 `api_key_env`（或 `api_key`）。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
@@ -190,10 +192,10 @@ model:
   api_key_env: OPENROUTER_API_KEY
 ```
 
-对于一次性调用，可在命令行上覆盖模型和基础 URL：
+对于一次性调用，可使用提供商作用域的环境变量覆盖模型和基础 URL（它们优先于配置文件）：
 
 ```sh
-./dora --model llama3.1 --base-url http://localhost:11434/v1 "prompt"
+OPENAI_MODEL=llama3.1 OPENAI_BASE_URL=http://localhost:11434/v1 ./dora "prompt"
 ```
 
 也支持字面量 `api_key`，但使用环境变量可以让密钥不落入配置文件中。非空字面量密钥优先于 `api_key_env`。对于无需认证的本地端点，请显式设置 `api_key_env: ""`。
@@ -286,7 +288,7 @@ git diff | ./dora "Review this change"
 
 会话名称可包含字母、数字、`.`、`_` 和 `-`。Dora 将每个会话存储为带版本的 JSON 快照，权限为 `0600`。会话 v3 绑定了配置的提供商、API、模型和基础 URL：Chat Completions 从消息恢复，而 Responses 额外持久化其不透明的类型化项续接。在更改会话的后端之前使用 `--fresh`。不支持版本 1 和版本 2 的会话文件。默认目录在每个操作系统上都是 `~/.dora/sessions`。省略 `--session`/`-s` 可保持现有的无状态行为。会话文件可能包含命令和工具输出，因此请将其视为敏感内容。请勿同时对同一个会话名称运行两个 Dora 进程。
 
-使用 `--config`、`--model`、`--base-url`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
+使用 `--config`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。若要为一次调用覆盖模型名称或基础 URL，请改为设置提供商作用域的环境变量（例如 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`）；`-model` 和 `-base-url` 命令行标志已被移除。
 
 ### 技能（Skills）
 
@@ -374,7 +376,7 @@ Dora 可以向消息附加图像，让多模态（视觉）模型能够"看到"�
 使用可重复的 `--image` 标志将本地图像附加到当前提示（需要已启用视觉功能）：
 
 ```sh
-./dora --vision --model gpt-4o --image photo.png "Describe this photo"
+OPENAI_MODEL=gpt-4o ./dora --vision --image photo.png "Describe this photo"
 ```
 
 模型也可以自己展示图像：当命令工具的 stdout 包含 `@@path@@` 标签时，Dora 会解析它并将该路径的图像附加到工具消息中。命令工具的描述文档中记录了这一约定，以便模型知道可以发出这样的标签。
