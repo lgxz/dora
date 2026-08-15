@@ -14,12 +14,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/lgxz/dora"
 )
 
 // GrepTool searches file contents.
-type GrepTool struct{}
+type GrepTool struct {
+	rgOnce sync.Once
+	rgPath string
+}
 
 // NewGrepTool creates a grep tool.
 func NewGrepTool() *GrepTool { return &GrepTool{} }
@@ -55,8 +59,12 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	// Prefer ripgrep (respects .gitignore, skips hidden/binary files). Fall
-	// back to the built-in walker if rg is unavailable.
-	if _, err := exec.LookPath("rg"); err == nil {
+	// back to the built-in walker if rg is unavailable. The rg availability
+	// check is cached so it only runs once.
+	t.rgOnce.Do(func() {
+		t.rgPath, _ = exec.LookPath("rg")
+	})
+	if t.rgPath != "" {
 		return t.executeWithRG(ctx, input)
 	}
 	return t.executeFallback(ctx, input)
