@@ -84,6 +84,15 @@ func (t *GrepTool) executeWithRG(ctx context.Context, input grepInput) (string, 
 	if input.MaxResults != nil {
 		args = append(args, "--max-count", strconv.Itoa(*input.MaxResults))
 	}
+	// Match the fallback walker's skip semantics: ripgrep only respects the
+	// ignore dirs listed in ignoreDir when a .gitignore/.ignore is present
+	// (e.g. inside a git checkout). Outside one, rg would happily search
+	// node_modules/build/etc., so pass explicit negated globs to keep both
+	// backends consistent about which directories are searched. The
+	// "!name/" form excludes an entire directory subtree.
+	for _, name := range ignoredDirs {
+		args = append(args, "--glob", "!"+name+"/")
+	}
 	args = append(args, input.Path)
 
 	cmd := exec.CommandContext(ctx, "rg", args...)
@@ -195,13 +204,21 @@ func (t *GrepTool) executeFallback(ctx context.Context, input grepInput) (string
 	return sb.String(), nil
 }
 
+// ignoredDirs lists directories that are never searched by the grep and glob
+// tools. Both the fallback walker and the explicit ripgrep --glob exclusions
+// use this single source of truth so the two backends behave identically.
+var ignoredDirs = []string{
+	".git", ".venv", "venv", "node_modules", "__pycache__",
+	".idea", ".vscode", "dist", "build", ".tox", ".mypy_cache",
+	".pytest_cache", ".cache", "target",
+}
+
 // ignoreDir reports whether a directory should be skipped during search.
 func ignoreDir(name string) bool {
-	switch name {
-	case ".git", ".venv", "venv", "node_modules", "__pycache__",
-		".idea", ".vscode", "dist", "build", ".tox", ".mypy_cache",
-		".pytest_cache", ".cache", "target":
-		return true
+	for _, d := range ignoredDirs {
+		if name == d {
+			return true
+		}
 	}
 	return false
 }
