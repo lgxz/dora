@@ -2,18 +2,13 @@
 package progress
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/lgxz/dora"
 )
-
-const maxSummaryRunes = 72
 
 const (
 	blue   = "1;34"
@@ -65,12 +60,12 @@ func (r *Renderer) Observe(update dora.Update) {
 		case dora.RoleAssistant:
 			r.renderAssistantMessage(update.Message)
 		case dora.RoleTool:
-			r.renderToolResult(update.Message.ToolCallID)
+			r.renderToolResult(update.Message)
 		}
 	case dora.UpdateToolStarted:
 		r.startTool(update)
 	case dora.UpdateToolFailed:
-		r.renderToolFailure(update.ToolCall)
+		r.renderToolFailure(update)
 	}
 }
 
@@ -129,82 +124,52 @@ func (r *Renderer) startTool(update dora.Update) {
 	r.tools[call.ID] = run
 }
 
-func (r *Renderer) renderToolResult(id string) {
-	run, ok := r.tools[id]
+func (r *Renderer) renderToolResult(message dora.Message) {
+	run, ok := r.tools[message.ToolCallID]
 	if !ok {
 		return
 	}
-	delete(r.tools, id)
-	r.renderToolLine(run, green, formatDuration(time.Since(run.started)))
+	delete(r.tools, message.ToolCallID)
+	r.renderToolLine(presentTool(run.call, message), formatDuration(time.Since(run.started)))
 }
 
-func (r *Renderer) renderToolFailure(call dora.ToolCall) {
+func (r *Renderer) renderToolFailure(update dora.Update) {
+	call := update.ToolCall
 	run, ok := r.tools[call.ID]
 	delete(r.tools, call.ID)
 	if !ok {
 		run = toolRun{call: call}
 	}
-	r.renderToolLine(run, red, "Hit a snag")
+	duration := "failed"
+	if !run.started.IsZero() {
+		duration = formatDuration(time.Since(run.started))
+	}
+	r.renderToolLine(presentToolFailure(run.call, update.Err), duration)
 }
 
-func (r *Renderer) renderToolLine(run toolRun, statusColor, status string) {
+func (r *Renderer) renderToolLine(presentation toolPresentation, duration string) {
+	statusColor := green
 	marker := "•"
-	if statusColor == red {
+	switch presentation.outcome {
+	case outcomeWarning:
+		statusColor = yellow
+		marker = "△"
+	case outcomeFailure:
+		statusColor = red
 		marker = "△"
 	}
-	// bash and powershell identify themselves by their command text, so the
-	// tool-name prefix is omitted to keep the progress line concise.
-	if run.call.Name == "bash" || run.call.Name == "powershell" {
-		fmt.Fprintf(
-			r.output,
-			"%s %s %s\n",
-			r.paint(statusColor, marker),
-			r.paint(dim, toolSummary(run.call)),
-			r.paint(statusColor, "· "+status),
-		)
-		return
-	}
-	fmt.Fprintf(
-		r.output,
-		"%s %s %s %s\n",
-		r.paint(statusColor, marker),
-		r.paint(yellow, run.call.Name),
-		r.paint(dim, "· "+toolSummary(run.call)),
-		r.paint(statusColor, "· "+status),
-	)
-}
 
-func toolSummary(call dora.ToolCall) string {
-	if call.Name == "skill" {
-		var input struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(call.Input, &input) == nil && input.Name != "" {
-			return input.Name
-		}
+	fmt.Fprint(r.output, r.paint(statusColor, marker))
+	if presentation.name != "" {
+		fmt.Fprint(r.output, " ", r.paint(yellow, presentation.name))
 	}
-	if call.Name == "bash" || call.Name == "powershell" {
-		var input struct {
-			Command string `json:"command"`
-		}
-		if json.Unmarshal(call.Input, &input) == nil && input.Command != "" {
-			return truncate(strings.Join(strings.Fields(input.Command), " "), maxSummaryRunes)
-		}
+	if presentation.summary != "" {
+		fmt.Fprint(r.output, " ", r.paint(dim, presentation.summary))
 	}
-
-	var compact bytes.Buffer
-	if json.Compact(&compact, call.Input) == nil && compact.Len() > 0 {
-		return truncate(compact.String(), maxSummaryRunes)
+	if presentation.result != "" {
+		fmt.Fprint(r.output, " ", r.paint(statusColor, "· "+presentation.result))
 	}
-	return "arguments ready"
-}
-
-func truncate(value string, limit int) string {
-	if utf8.RuneCountInString(value) <= limit {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:limit-1]) + "…"
+	fmt.Fprintln(r.output, " "+r.paint(dim, "· "+duration))
 }
 
 func (r *Renderer) paint(code, value string) string {
