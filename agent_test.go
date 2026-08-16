@@ -57,9 +57,35 @@ func (t stubTool) Execute(ctx context.Context, input json.RawMessage) (ToolResul
 	return ToolResult{Content: content, Images: t.images}, err
 }
 
+type testRunResult struct {
+	Content      string
+	Messages     []Message
+	Continuation string
+}
+
+func runAgent(agent *Agent, ctx context.Context, input []Message) (testRunResult, error) {
+	return runAgentObserved(agent, ctx, input, nil)
+}
+
+func runAgentObserved(agent *Agent, ctx context.Context, input []Message, observer Observer) (testRunResult, error) {
+	var system, user string
+	for _, message := range input {
+		switch message.Role {
+		case RoleSystem:
+			system = message.Content
+		case RoleUser:
+			user = message.Content
+		}
+	}
+	turn := NewTurn(system, user)
+	err := agent.RunObserved(ctx, turn, observer)
+	content, _ := turn.Result()
+	return testRunResult{Content: content, Messages: turn.Messages(), Continuation: turn.Continuation()}, err
+}
+
 func TestRunReturnsFinalResponse(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		if len(request.Messages) != 1 || request.Messages[0].Content != "hello" {
+		if len(request.Messages) != 2 || request.Messages[1].Content != "hello" {
 			t.Fatalf("unexpected messages: %#v", request.Messages)
 		}
 		return Response{Content: "hi"}, nil
@@ -70,7 +96,7 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 	}
 
 	input := []Message{{Role: RoleUser, Content: "hello"}}
-	result, err := agent.Run(context.Background(), input)
+	result, err := runAgent(agent, context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,49 +105,12 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 		t.Fatalf("content = %q, want %q", result.Content, "hi")
 	}
 	want := []Message{
+		{Role: RoleSystem},
 		{Role: RoleUser, Content: "hello"},
 		{Role: RoleAssistant, Content: "hi"},
 	}
 	if !reflect.DeepEqual(result.Messages, want) {
 		t.Fatalf("messages = %#v, want %#v", result.Messages, want)
-	}
-}
-
-func TestAgentConfigContextWindowMustBePositive(t *testing.T) {
-	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{Content: "done"}, nil
-	})
-
-	withDefault, err := NewWithConfig(model, AgentConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if withDefault.contextWindow != defaultContextWindow {
-		t.Fatalf("default context window = %d", withDefault.contextWindow)
-	}
-
-	zero := 0
-	if _, err := NewWithConfig(model, AgentConfig{ContextWindow: &zero}); err == nil || !strings.Contains(err.Error(), "must be positive") {
-		t.Fatalf("zero context window error = %v", err)
-	}
-
-	negative := -1
-	if _, err := NewWithConfig(model, AgentConfig{ContextWindow: &negative}); err == nil || !strings.Contains(err.Error(), "must be positive") {
-		t.Fatalf("negative context window error = %v", err)
-	}
-}
-
-func TestAgentConfigMaxHistoryRoundsExplicitZeroDisablesCompaction(t *testing.T) {
-	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{Content: "done"}, nil
-	})
-	zero := 0
-	agent, err := NewWithConfig(model, AgentConfig{MaxHistoryRounds: &zero})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.maxHistoryRounds != 0 {
-		t.Fatalf("max history rounds = %d", agent.maxHistoryRounds)
 	}
 }
 
@@ -140,10 +129,10 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 				Input: json.RawMessage(`{"city":"Shanghai"}`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 3 {
-				t.Fatalf("message count = %d, want 3", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
-			result := request.Messages[2]
+			result := request.Messages[3]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" || result.Content != "sunny" {
 				t.Fatalf("unexpected tool result: %#v", result)
 			}
@@ -172,7 +161,7 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), []Message{{Role: RoleUser, Content: "weather?"}})
+	result, err := runAgent(agent, context.Background(), []Message{{Role: RoleUser, Content: "weather?"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +216,7 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var deltas string
-	result, err := agent.RunObserved(context.Background(), []Message{{Role: RoleUser, Content: "weather?"}}, ObserverFunc(func(update Update) {
+	result, err := runAgentObserved(agent, context.Background(), []Message{{Role: RoleUser, Content: "weather?"}}, ObserverFunc(func(update Update) {
 		if update.Kind == UpdateContentDelta {
 			deltas += update.Delta
 		}
@@ -240,7 +229,7 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 	}
 }
 
-func TestRunStateResumesAndReturnsContinuation(t *testing.T) {
+func TestRunTurnCarriesContinuation(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		if request.Continuation != "saved-state" {
 			t.Fatalf("continuation = %q", request.Continuation)
@@ -251,44 +240,15 @@ func TestRunStateResumesAndReturnsContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.RunState(context.Background(), State{
-		Messages:     []Message{{Role: RoleUser, Content: "continue"}},
-		Continuation: "saved-state",
-	})
+	turn := NewTurn("", "continue")
+	turn.continuation = "saved-state"
+	err = agent.Run(context.Background(), turn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "done" || result.Continuation != "next-state" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestRunDoesNotMutateCallerMessages(t *testing.T) {
-	inputBytes := json.RawMessage(`{"value":1}`)
-	input := []Message{{
-		Role: RoleAssistant,
-		ToolCalls: []ToolCall{{
-			ID:    "original",
-			Name:  "original",
-			Input: inputBytes,
-		}},
-	}}
-
-	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		request.Messages[0].ToolCalls[0].Input[0] = '['
-		request.Messages[0].ToolCalls[0].Name = "changed"
-		return Response{Content: "done"}, nil
-	})
-	agent, err := New(model)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := agent.Run(context.Background(), input); err != nil {
-		t.Fatal(err)
-	}
-
-	if input[0].ToolCalls[0].Name != "original" || string(inputBytes) != `{"value":1}` {
-		t.Fatalf("caller input was mutated: %#v", input)
+	result, _ := turn.Result()
+	if result != "done" || turn.Continuation() != "next-state" {
+		t.Fatalf("result = %q, continuation = %q", result, turn.Continuation())
 	}
 }
 
@@ -349,7 +309,7 @@ func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Run(context.Background(), []Message{{Role: RoleUser, Content: "hi"}})
+	result, err := runAgent(agent, context.Background(), []Message{{Role: RoleUser, Content: "hi"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,10 +326,10 @@ func TestRunFeedsBackMissingToolError(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "missing"}}}, nil
 		case 2:
-			if len(request.Messages) != 2 {
-				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
-			result := request.Messages[1]
+			result := request.Messages[3]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `tool "missing" not found`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -385,7 +345,7 @@ func TestRunFeedsBackMissingToolError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,10 +366,10 @@ func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
 				Input: json.RawMessage(`{"bad":true}`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 2 {
-				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
-			result := request.Messages[1]
+			result := request.Messages[3]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `tool "fail" failed`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -431,7 +391,7 @@ func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,10 +412,10 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 				Input: json.RawMessage(`not-json`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 2 {
-				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
-			result := request.Messages[1]
+			result := request.Messages[3]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `arguments for tool "weather" were not valid JSON: not-json`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -478,7 +438,7 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,15 +491,15 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 				{ID: "call-fast", Name: "fast", Input: json.RawMessage(`{}`)},
 			}}, nil
 		case 2:
-			if len(request.Messages) != 3 {
-				t.Fatalf("message count = %d, want 3", len(request.Messages))
+			if len(request.Messages) != 5 {
+				t.Fatalf("message count = %d, want 5", len(request.Messages))
 			}
 			// Tool results must appear in the model's call order.
-			if request.Messages[1].ToolCallID != "call-slow" || request.Messages[1].Content != "slow-done" {
-				t.Fatalf("unexpected first tool result: %#v", request.Messages[1])
+			if request.Messages[3].ToolCallID != "call-slow" || request.Messages[3].Content != "slow-done" {
+				t.Fatalf("unexpected first tool result: %#v", request.Messages[3])
 			}
-			if request.Messages[2].ToolCallID != "call-fast" || request.Messages[2].Content != "fast-done" {
-				t.Fatalf("unexpected second tool result: %#v", request.Messages[2])
+			if request.Messages[4].ToolCallID != "call-fast" || request.Messages[4].Content != "fast-done" {
+				t.Fatalf("unexpected second tool result: %#v", request.Messages[4])
 			}
 			return Response{Content: "done"}, nil
 		default:
@@ -556,7 +516,7 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 	// Record the order of Observer events for the tool calls.
 	var events []string
 	start := time.Now()
-	result, err := agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+	result, err := runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		switch update.Kind {
 		case UpdateToolStarted:
 			events = append(events, "start:"+update.ToolCall.Name)
@@ -636,7 +596,7 @@ func TestRunToolStartedCarriesRealStartTime(t *testing.T) {
 	}
 
 	var startedAt time.Time
-	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		if update.Kind == UpdateToolStarted {
 			startedAt = update.StartedAt
 		}
@@ -678,7 +638,7 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 	}
 
 	var failed []Update
-	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		if update.Kind == UpdateToolFailed {
 			failed = append(failed, update)
 		}
@@ -706,7 +666,7 @@ func TestRunStopsAfterMaximumRounds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = agent.Run(context.Background(), nil)
+	_, err = runAgent(agent, context.Background(), nil)
 	if !errors.Is(err, ErrMaxRounds) {
 		t.Fatalf("error = %v, want %v", err, ErrMaxRounds)
 	}
@@ -728,11 +688,11 @@ func TestRunHonorsConfiguredMaximumRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if !errors.Is(err, ErrMaxRounds) || !strings.Contains(err.Error(), "limit 2") || calls != 2 {
 		t.Fatalf("error = %v, calls = %d", err, calls)
 	}
-	if len(result.Messages) != 4 {
+	if len(result.Messages) != 6 {
 		t.Fatalf("messages = %#v, want resumable state", result.Messages)
 	}
 }
@@ -750,7 +710,7 @@ func TestRunRetriesRetryableError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,7 +729,7 @@ func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.Run(context.Background(), nil)
+	_, err = runAgent(agent, context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "persistent") {
 		t.Fatalf("error = %v", err)
 	}
@@ -788,7 +748,7 @@ func TestRunDoesNotRetryNonRetryableError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.Run(context.Background(), nil)
+	_, err = runAgent(agent, context.Background(), nil)
 	if err == nil || calls != 1 {
 		t.Fatalf("error = %v, calls = %d", err, calls)
 	}
@@ -805,7 +765,7 @@ func TestRunDoesNotRetryAfterPartialStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.Run(context.Background(), nil)
+	_, err = runAgent(agent, context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "stream failed after content") {
 		t.Fatalf("error = %v", err)
 	}
@@ -847,7 +807,7 @@ func TestRunRetriesRateLimitUpToMaxRateLimitAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.Run(context.Background(), nil)
+	_, err = runAgent(agent, context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("error = %v", err)
 	}
@@ -865,10 +825,10 @@ func TestRunAttachesToolResultImagesToToolMessage(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			if len(request.Messages) != 2 {
-				t.Fatalf("message count = %d, want 2", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
-			toolMessage := request.Messages[1]
+			toolMessage := request.Messages[3]
 			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
 				t.Fatalf("unexpected tool message: %#v", toolMessage)
 			}
@@ -896,7 +856,7 @@ func TestRunAttachesToolResultImagesToToolMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +873,7 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			toolMessage := request.Messages[1]
+			toolMessage := request.Messages[3]
 			if toolMessage.Content != "plain output" || len(toolMessage.Images) != 0 {
 				t.Fatalf("tool message = %#v", toolMessage)
 			}
@@ -933,7 +893,7 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := agent.Run(context.Background(), nil); err != nil {
+	if _, err := runAgent(agent, context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -951,7 +911,7 @@ func TestRunForwardsStructuredImageWithCommandJSONOutput(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			toolMessage := request.Messages[1]
+			toolMessage := request.Messages[3]
 			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
 				t.Fatalf("unexpected tool message: %#v", toolMessage)
 			}
@@ -975,7 +935,7 @@ func TestRunForwardsStructuredImageWithCommandJSONOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +954,7 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			toolMessage := request.Messages[1]
+			toolMessage := request.Messages[3]
 			if len(toolMessage.Images) != 0 {
 				t.Fatalf("images = %#v", toolMessage.Images)
 			}
@@ -1017,33 +977,11 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := agent.Run(context.Background(), nil)
+	result, err := runAgent(agent, context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Content != "seen" || calls != 2 {
 		t.Fatalf("result = %#v, calls = %d", result, calls)
-	}
-}
-
-func TestRunDoesNotMutateCallerImages(t *testing.T) {
-	input := []Message{{
-		Role:    RoleUser,
-		Content: "look",
-		Images:  []Image{{Path: "/tmp/a.png"}},
-	}}
-	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		request.Messages[0].Images[0].Path = "changed"
-		return Response{Content: "done"}, nil
-	})
-	agent, err := New(model)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := agent.Run(context.Background(), input); err != nil {
-		t.Fatal(err)
-	}
-	if input[0].Images[0].Path != "/tmp/a.png" {
-		t.Fatalf("caller image was mutated: %#v", input[0].Images)
 	}
 }

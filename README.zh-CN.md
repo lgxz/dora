@@ -215,7 +215,7 @@ client:
 
 `max_tokens` 限制模型在一次响应中生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这两个键属于 model catalog，没有对应的命令行标志。
 
-`context_window` 属于 model profile。由于 Dora 目前不会对请求进行 token 统计，它使用消息内容的字节数近似该模型的上下文容量。默认值为 1048576（1 MiB），历史轮次会被压缩以尽量保持在此预算内，配置值必须为正数。该估算不包含精确分词、工具 schema 或视觉 token。压缩策略与该属性相互独立；将 `agent.max_history_rounds` 设置为 `0` 可禁用历史压缩。
+`context_window` 属于 model profile。由于 Dora 目前不会对请求进行 token 统计，它使用消息内容的字节数近似该模型的上下文容量。默认值为 1048576（1 MiB），配置值必须为正数。该估算不包含精确分词、工具 schema 或视觉 token。
 
 `thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium` 或 `high` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。
 不同提供商的支持情况各异，不支持的值会被静默忽略而不是报错：
@@ -243,13 +243,7 @@ agent:
 ./dora --max-rounds 96 "Complete a long task"
 ```
 
-默认情况下，Dora 每次迭代会向模型发送最近 32 轮，并压缩更早的历史，避免长时间的工具循环无界地增长上下文。使用 `--max-history-rounds` 为一次调用覆盖保留的轮数（使用 `0` 可禁用压缩并发送全部历史）：
-
-```sh
-./dora --max-history-rounds 64 "Complete a long task"
-```
-
-当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止并保存命名会话的部分状态。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `dora: maximum rounds exceeded`。
+当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止，但不会持久化这个未完成的 turn。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `dora: maximum rounds exceeded`。
 
 运行一次性提示，或将指令与管道输入结合：
 
@@ -276,22 +270,18 @@ git diff | ./dora "Review this change"
 
 ### 会话
 
-使用会话名称可以在多次 CLI 调用之间继续同一个对话：
+传入一个 SQLite 文件，可以跨多次 CLI 调用保留已完成的 turns：
 
 ```sh
-./dora -s system-status "Analyze this machine's system status"
-./dora -s system-status "Continue with the busiest processes"
+./dora -s ./system-status.sqlite "Analyze this machine's system status"
+./dora -s ./system-status.sqlite "Continue with the busiest processes"
 ```
 
-使用 `--fresh` 在同一个会话名称下重新开始。本次运行会忽略已有历史，并且仅在新任务成功后替换历史；如果运行失败，之前的会话保持不变：
+每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。指定的 session 数据库已经包含 completed turns 时，Dora 才会加入 `history` 工具：模型可以用 `list` 列出已完成的 turns 及各自的 round 数量，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库不会暴露该工具。一个 round 是一条 assistant tool-call 消息及其对应的全部 tool 结果消息。只有获得最终 assistant 结果的 turn 才会一次性原子追加；provider continuation 只在当前 turn 运行期间保存在内存中。
 
-```sh
-./dora -s system-status --fresh "Analyze this machine from scratch"
-```
+SQLite 数据库包含 `turns` 和 `messages` 表，记录 system prompt、用户输入、最终结果、后端元数据及中间工具 rounds。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持。省略 `--session`/`-s` 时 turn 不持久化。Session 数据库可能包含命令和工具输出，因此请将其视为敏感内容。
 
-会话名称可包含字母、数字、`.`、`_` 和 `-`。Dora 将每个会话存储为带版本的 JSON 快照，权限为 `0600`。会话 v5 绑定了配置的提供商、profile、API、模型和基础 URL：Chat Completions 从消息恢复，而 Responses 额外持久化其不透明的类型化项续接。在更改会话的后端之前使用 `--fresh`。不支持旧版会话格式。默认目录在每个操作系统上都是 `~/.dora/sessions`。省略 `--session`/`-s` 可保持现有的无状态行为。会话文件可能包含命令和工具输出，因此请将其视为敏感内容。请勿同时对同一个会话名称运行两个 Dora 进程。
-
-使用 `--config`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
+使用 `--config`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
 ### 技能（Skills）
 

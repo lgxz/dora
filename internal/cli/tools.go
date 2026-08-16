@@ -8,10 +8,53 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/job"
+	"github.com/lgxz/dora/model/registry"
+	"github.com/lgxz/dora/session"
+	"github.com/lgxz/dora/skill"
 	bashtool "github.com/lgxz/dora/tool/bash"
 	filetool "github.com/lgxz/dora/tool/file"
+	historytool "github.com/lgxz/dora/tool/history"
+	jobtool "github.com/lgxz/dora/tool/job"
 	powershelltool "github.com/lgxz/dora/tool/powershell"
 )
+
+func buildTools(cfg config.Config, selection registry.Selection, manager *job.Manager, history session.Reader, historyAvailable, noSkills bool) ([]dora.Tool, error) {
+	var tools []dora.Tool
+	if historyAvailable {
+		historyTool, err := historytool.New(history)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, historyTool)
+	}
+	if !noSkills {
+		skillDirectories, err := configuredSkillDirectories(cfg.Skills.Directories)
+		if err != nil {
+			return nil, err
+		}
+		if len(skillDirectories) > 0 {
+			skills, err := skill.New(skill.Config{Directories: skillDirectories})
+			if errors.Is(err, skill.ErrNoSkills) {
+				skills = nil
+				err = nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			if skills != nil {
+				tools = append(tools, skills)
+			}
+		}
+	}
+	commandTools, err := buildCommandTools(cfg.Tools, selection.Vision, manager)
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, commandTools...)
+	tools = append(tools, jobtool.New(manager, selection.Vision))
+	tools = append(tools, buildFileTools()...)
+	return tools, nil
+}
 
 // buildFileTools returns the read/write/edit/grep/glob file tools.
 func buildFileTools() []dora.Tool {

@@ -14,8 +14,8 @@ const (
 // or URL should be set: Path refers to a local file that adapters read and
 // encode, while URL is used directly as the image source.
 type Image struct {
-	Path string // local file path (mutually exclusive with URL)
-	URL  string // remote image URL (mutually exclusive with Path)
+	Path string `json:"path,omitempty"` // local file path (mutually exclusive with URL)
+	URL  string `json:"url,omitempty"`  // remote image URL (mutually exclusive with Path)
 }
 
 // Message is one entry in a conversation.
@@ -24,9 +24,9 @@ type Image struct {
 // is populated on tool messages so a model can match a result to its request.
 // Images holds images attached to the message for multimodal models.
 type Message struct {
-	Role       Role
-	Content    string
-	Images     []Image
-	ToolCalls  []ToolCall
-	ToolCallID string
+	Role       Role       `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	Images     []Image    `json:"images,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }

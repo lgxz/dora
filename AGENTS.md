@@ -13,12 +13,12 @@ limitations. Read [`README.md`](README.md) for user-facing setup and usage.
 ### Agent kernel (`package dora`)
 
 - `agent.go`: immutable Agent construction and the model/tool execution loop.
+- `turn.go`: mutable current-turn state and complete assistant/tool rounds.
 - `model.go`: `Model`, optional `StreamingModel`, and model request/response
   types.
 - `tool.go`: `Tool`, `ToolSpec`, and `ToolCall`.
 - `message.go`: provider-neutral conversation roles and messages.
 - `observer.go`: semantic progress updates and the `Observer` interface.
-- `result.go`: resumable `State` input and complete `Result` output.
 
 The kernel contains no CLI, configuration, filesystem, HTTP protocol, or
 terminal implementation.
@@ -62,8 +62,9 @@ root `dora` package.
 
 - `internal/config/`: strict YAML decoding, environment lookup, and validation.
 - `internal/paths/`: cross-platform XDG configuration, skill, and session paths.
-- `internal/session/`: versioned JSON session snapshots, atomic replacement,
-  and revision conflict detection.
+- `session/`: completed-turn persistence interfaces and query records.
+- `session/sqlite/`: append-only SQLite storage for completed turns.
+- `tool/history/`: paginated history access exposed to the model.
 - `internal/update/`: standalone-install provenance checks, GitHub release
   discovery, checksum validation, and rollback-capable executable replacement.
 - `internal/progress/`: concise terminal rendering of `dora.Observer` updates.

@@ -43,24 +43,12 @@ func New(output io.Writer, terminal, color bool) *Renderer {
 	return &Renderer{output: output, terminal: terminal, color: color, tools: make(map[string]toolRun)}
 }
 
-// Session reports whether a named conversation is new or being continued.
-func (r *Renderer) Session(name string, resumed bool) {
+// Session reports the SQLite history file used by this turn.
+func (r *Renderer) Session(path string) {
 	if r == nil || r.output == nil {
 		return
 	}
-	action := "Starting task"
-	if resumed {
-		action = "Resuming task"
-	}
-	fmt.Fprintf(r.output, "%s %s \"%s\"\n", r.paint(blue, "⌁"), action, name)
-}
-
-// FreshSession reports that an existing name is starting without its history.
-func (r *Renderer) FreshSession(name string) {
-	if r == nil || r.output == nil {
-		return
-	}
-	fmt.Fprintf(r.output, "%s Restarting task \"%s\"\n", r.paint(blue, "⌁"), name)
+	fmt.Fprintf(r.output, "%s Session \"%s\"\n", r.paint(blue, "⌁"), path)
 }
 
 // Observe implements dora.Observer.

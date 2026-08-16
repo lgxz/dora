@@ -27,7 +27,7 @@ type ToolSpec struct {
 
 // ToolCall is a model request to execute a named tool.
 type ToolCall struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }

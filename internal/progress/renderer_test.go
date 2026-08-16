@@ -105,18 +105,8 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 func TestRendererShowsSessionState(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
-	renderer.Session("system-status", false)
-	renderer.Session("system-status", true)
-	if !strings.Contains(output.String(), "Starting task \"system-status\"") ||
-		!strings.Contains(output.String(), "Resuming task \"system-status\"") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestRendererShowsFreshSession(t *testing.T) {
-	var output bytes.Buffer
-	New(&output, false, false).FreshSession("system-status")
-	if !strings.Contains(output.String(), "Restarting task \"system-status\"") {
+	renderer.Session("system-status.sqlite")
+	if !strings.Contains(output.String(), "Session \"system-status.sqlite\"") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

@@ -14,8 +14,9 @@ import (
 	"testing"
 
 	"github.com/lgxz/dora"
-	"github.com/lgxz/dora/internal/session"
 	"github.com/lgxz/dora/internal/update"
+	"github.com/lgxz/dora/session"
+	sqlitesession "github.com/lgxz/dora/session/sqlite"
 	bashtool "github.com/lgxz/dora/tool/bash"
 	"gopkg.in/yaml.v3"
 )
@@ -609,106 +610,6 @@ model:
 	}
 }
 
-func TestRunResumesResponsesContinuationWithoutReloadingSkill(t *testing.T) {
-	var calls int
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls++
-		var body map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		input := body["input"].([]any)
-		switch calls {
-		case 1:
-			// system + user
-			if len(input) != 2 || input[1].(map[string]any)["content"] != "first task" {
-				t.Fatalf("first input = %#v", input)
-			}
-			return fakeResponsesOutput(`[{"type":"function_call","call_id":"call-skill","name":"skill","arguments":"{\"name\":\"resume-skill\"}"}]`), nil
-		case 2:
-			// system + user + function_call + function_call_output
-			if len(input) != 4 ||
-				input[2].(map[string]any)["type"] != "function_call" ||
-				input[3].(map[string]any)["type"] != "function_call_output" {
-				t.Fatalf("tool continuation input = %#v", input)
-			}
-			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"first answer"}]}]`), nil
-		case 3:
-			// system + user + function_call + function_call_output + message + user
-			if len(input) != 6 ||
-				input[2].(map[string]any)["type"] != "function_call" ||
-				input[3].(map[string]any)["type"] != "function_call_output" ||
-				input[4].(map[string]any)["type"] != "message" ||
-				input[5].(map[string]any)["content"] != "second task" {
-				t.Fatalf("resumed input = %#v", input)
-			}
-			return fakeResponsesOutput(`[{"type":"message","content":[{"type":"output_text","text":"second answer"}]}]`), nil
-		default:
-			t.Fatalf("model called %d times", calls)
-			return nil, nil
-		}
-	})}
-
-	root := t.TempDir()
-	t.Setenv("DORA_HOME", root)
-	skillDir := filepath.Join(root, "skills", "resume-skill")
-	if err := os.MkdirAll(skillDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
-name: resume-skill
-description: Operate native application interfaces.
----
-Use the bundled interface tool.
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(root, "config.yaml")
-	if err := writeTestConfig(t, configPath, `
-model:
-  provider: openai
-  api: responses
-  name: test-model
-  base_url: https://example.test/v1
-`); err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(root, "sessions")
-	run := func(prompt string) (string, error) {
-		var output bytes.Buffer
-		err := Run(context.Background(), []string{"-q", "-s", "wechat", "--config", configPath, prompt}, IO{
-			Stdin:           strings.NewReader(""),
-			Stdout:          &output,
-			Stderr:          io.Discard,
-			StdinIsTerminal: true,
-			HTTPClient:      httpClient,
-			SessionDir:      sessionDir,
-		})
-		return output.String(), err
-	}
-	if output, err := run("first task"); err != nil || output != "first answer\n" {
-		t.Fatalf("first output = %q, error = %v", output, err)
-	}
-	if output, err := run("second task"); err != nil || output != "second answer\n" {
-		t.Fatalf("second output = %q, error = %v", output, err)
-	}
-	if calls != 3 {
-		t.Fatalf("model calls = %d, want 3", calls)
-	}
-	store, err := session.New(sessionDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := store.Load("wechat")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Revision != 2 || snapshot.Continuation == "" ||
-		snapshot.Backend.Provider != "openai" || snapshot.Backend.API != "responses" {
-		t.Fatalf("snapshot = %#v", snapshot)
-	}
-}
-
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 type updaterFunc func(context.Context) (update.Result, error)
@@ -848,53 +749,6 @@ tools:
 	}
 }
 
-func TestRunDeclinesMaximumRoundsAndSavesSession(t *testing.T) {
-	var calls int
-	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		calls++
-		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf saved\"}"}}]}}]}`), nil
-	})}
-	root := t.TempDir()
-	configPath := filepath.Join(root, "config.yaml")
-	if err := writeTestConfig(t, configPath, `
-model:
-  provider: openai
-  name: test-model
-  base_url: https://example.test/v1
-agent:
-  max_rounds: 1
-tools:
-  bash:
-    enabled: true
-`); err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(root, "sessions")
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "-s", "limited", "--config", configPath, "run it"}, IO{
-		Stdin:            strings.NewReader("no\n"),
-		Stdout:           &stdout,
-		Stderr:           io.Discard,
-		StdinIsTerminal:  true,
-		TerminalProgress: true,
-		HTTPClient:       httpClient,
-		SessionDir:       sessionDir,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store, err := session.New(sessionDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := store.Load("limited")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 || stdout.Len() != 0 || snapshot.Revision != 1 || len(snapshot.Messages) != 4 {
-		t.Fatalf("calls = %d, stdout = %q, snapshot = %#v", calls, stdout.String(), snapshot)
-	}
-}
-
 func TestRunDoesNotPromptAfterMaximumRoundsWithoutTerminalInput(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf limited\"}"}}]}}]}`), nil
@@ -940,69 +794,6 @@ func TestRunRejectsNonPositiveMaximumRoundsFlag(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "positive integer") {
 		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestRunRejectsNegativeMaximumHistoryRoundsFlag(t *testing.T) {
-	err := Run(context.Background(), []string{"--max-history-rounds", "-1", "hello"}, IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          io.Discard,
-		Stderr:          io.Discard,
-		StdinIsTerminal: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "non-negative integer") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestRunMaximumHistoryRoundsFlagOverridesConfig(t *testing.T) {
-	var calls int
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls++
-		var body map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		// The config sets max_history_rounds to 1, but the flag overrides it to
-		// 0, so the second model call should still receive the full history
-		// (user + assistant + tool) instead of being compacted.
-		if calls == 2 {
-			messages, ok := body["messages"].([]any)
-			if !ok || len(messages) != 4 {
-				t.Fatalf("messages = %#v, want 4", body["messages"])
-			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
-		}
-		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf ok\"}"}}]}}]}`), nil
-	})}
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := writeTestConfig(t, configPath, `
-model:
-  provider: openai
-  name: test-model
-  base_url: https://example.test/v1
-agent:
-  max_history_rounds: 1
-tools:
-  bash:
-    enabled: true
-`); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--max-history-rounds", "0", "--config", configPath, "run it"}, IO{
-		Stdin:            strings.NewReader(""),
-		Stdout:           &stdout,
-		Stderr:           io.Discard,
-		StdinIsTerminal:  true,
-		TerminalProgress: true,
-		HTTPClient:       httpClient,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 2 {
-		t.Fatalf("calls = %d", calls)
 	}
 }
 
@@ -1783,7 +1574,8 @@ model:
 	}
 }
 
-func TestRunContinuesNamedSession(t *testing.T) {
+// writeTestConfig converts the former flat test fixtures into the catalog-only
+func TestRunStoresIndependentTurnsInSQLiteSession(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
@@ -1792,163 +1584,26 @@ func TestRunContinuesNamedSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		messages := body["messages"].([]any)
-		switch calls {
-		case 1:
-			// system + user
-			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "first task" {
-				t.Fatalf("first messages = %#v", messages)
-			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"first answer"}}]}`), nil
-		case 2:
-			// system + user + assistant + user
-			if len(messages) != 4 ||
-				messages[1].(map[string]any)["content"] != "first task" ||
-				messages[2].(map[string]any)["content"] != "first answer" ||
-				messages[3].(map[string]any)["content"] != "continue task" {
-				t.Fatalf("continued messages = %#v", messages)
-			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"second answer"}}]}`), nil
-		default:
-			t.Fatalf("model called %d times", calls)
-			return nil, nil
+		if len(messages) != 2 {
+			t.Fatalf("call %d loaded history into model messages: %#v", calls, messages)
 		}
+		if messages[1].(map[string]any)["content"] != []string{"first", "second"}[calls-1] {
+			t.Fatalf("call %d messages = %#v", calls, messages)
+		}
+		foundHistory := false
+		for _, raw := range body["tools"].([]any) {
+			function := raw.(map[string]any)["function"].(map[string]any)
+			if function["name"] == "history" {
+				foundHistory = true
+			}
+		}
+		if foundHistory != (calls > 1) {
+			t.Fatalf("call %d history tool present = %v", calls, foundHistory)
+		}
+		return fakeJSONResponse(fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"answer %d"}}]}`, calls)), nil
 	})}
 
 	root := t.TempDir()
-	configPath := filepath.Join(root, "config.yaml")
-	configContents := `
-model:
-  provider: openai
-  name: test-model
-  base_url: https://example.test/v1
-`
-	if err := writeTestConfig(t, configPath, configContents); err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(root, "sessions")
-
-	var firstProgress bytes.Buffer
-	firstOutput := bytes.Buffer{}
-	if err := Run(context.Background(), []string{"-s", "system", "--config", configPath, "first task"}, IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          &firstOutput,
-		Stderr:          &firstProgress,
-		StdinIsTerminal: true,
-		HTTPClient:      httpClient,
-		SessionDir:      sessionDir,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(firstProgress.String(), "Starting task \"system\"") {
-		t.Fatalf("first progress = %q", firstProgress.String())
-	}
-
-	var secondProgress bytes.Buffer
-	secondOutput := bytes.Buffer{}
-	if err := Run(context.Background(), []string{"--session", "system", "--config", configPath, "continue task"}, IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          &secondOutput,
-		Stderr:          &secondProgress,
-		StdinIsTerminal: true,
-		HTTPClient:      httpClient,
-		SessionDir:      sessionDir,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if secondOutput.String() != "second answer\n" || !strings.Contains(secondProgress.String(), "Resuming task \"system\"") {
-		t.Fatalf("second output = %q, progress = %q", secondOutput.String(), secondProgress.String())
-	}
-
-	store, err := session.New(sessionDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := store.Load("system")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Revision != 2 || len(snapshot.Messages) != 5 ||
-		snapshot.Backend.Provider != "openai" || snapshot.Backend.API != "chat_completions" || snapshot.Continuation != "" {
-		t.Fatalf("snapshot = %#v", snapshot)
-	}
-}
-
-func TestRunRejectsSessionBackendMismatchUnlessFresh(t *testing.T) {
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "sessions")
-	store, err := session.New(sessionDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save("task", 0, session.Snapshot{
-		Backend: session.Backend{
-			Provider: "openai",
-			Profile:  "old-profile",
-			API:      "chat_completions",
-			Model:    "shared-model",
-			BaseURL:  "https://example.test/v1",
-		},
-		Messages: []dora.Message{{Role: dora.RoleUser, Content: "old"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(root, "config.yaml")
-	if err := writeTestConfig(t, configPath, `
-providers:
-  - name: openai
-    base_url: https://example.test/v1
-    models:
-      - name: new-profile
-        model: shared-model
-client:
-  provider: openai
-  profile: new-profile
-`); err != nil {
-		t.Fatal(err)
-	}
-	requestCount := 0
-	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		requestCount++
-		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"fresh"}}]}`), nil
-	})}
-	streams := IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          io.Discard,
-		Stderr:          io.Discard,
-		StdinIsTerminal: true,
-		HTTPClient:      httpClient,
-		SessionDir:      sessionDir,
-	}
-	err = Run(context.Background(), []string{"-q", "-s", "task", "--config", configPath, "continue"}, streams)
-	if err == nil || !strings.Contains(err.Error(), "use --fresh") || requestCount != 0 {
-		t.Fatalf("error = %v, requests = %d", err, requestCount)
-	}
-	if err := Run(context.Background(), []string{"-q", "-s", "task", "--fresh", "--config", configPath, "restart"}, streams); err != nil {
-		t.Fatal(err)
-	}
-	if requestCount != 1 {
-		t.Fatalf("requests = %d", requestCount)
-	}
-	snapshot, err := store.Load("task")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Backend.Profile != "new-profile" || snapshot.Backend.Model != "shared-model" || snapshot.Messages[1].Content != "restart" {
-		t.Fatalf("snapshot = %#v", snapshot)
-	}
-}
-
-func TestRunFreshReplacesVersionOneOnlyOnSuccess(t *testing.T) {
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "sessions")
-	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	sessionPath := filepath.Join(sessionDir, "old.json")
-	oldContents := `{"version":1,"revision":4,"messages":[{"role":"user","content":"old"}]}`
-	if err := os.WriteFile(sessionPath, []byte(oldContents), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	configPath := filepath.Join(root, "config.yaml")
 	if err := writeTestConfig(t, configPath, `
 model:
@@ -1958,159 +1613,38 @@ model:
 `); err != nil {
 		t.Fatal(err)
 	}
-	requests := 0
-	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		requests++
-		if requests == 1 {
-			return &http.Response{
-				StatusCode: http.StatusBadRequest,
-				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
-				Header:     make(http.Header),
-			}, nil
-		}
-		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"new"}}]}`), nil
-	})}
-	run := func() error {
-		return Run(context.Background(), []string{"-q", "-s", "old", "--fresh", "--config", configPath, "restart"}, IO{
-			Stdin:           strings.NewReader(""),
-			Stdout:          io.Discard,
-			Stderr:          io.Discard,
-			StdinIsTerminal: true,
-			HTTPClient:      httpClient,
-			SessionDir:      sessionDir,
-		})
-	}
-	if err := run(); err == nil {
-		t.Fatal("expected first run to fail")
-	}
-	afterFailure, err := os.ReadFile(sessionPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(afterFailure) != oldContents {
-		t.Fatalf("version 1 session changed after failure: %s", afterFailure)
-	}
-	if err := run(); err != nil {
-		t.Fatal(err)
-	}
-	store, err := session.New(sessionDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := store.Load("old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Revision != 5 || snapshot.Messages[1].Content != "restart" {
-		t.Fatalf("snapshot = %#v", snapshot)
-	}
-}
-
-func TestRunFreshReplacesSessionOnlyOnSuccess(t *testing.T) {
-	var calls int
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls++
-		var body map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+	sessionPath := filepath.Join(root, "turns.sqlite")
+	for _, prompt := range []string{"first", "second"} {
+		if err := Run(context.Background(), []string{"-q", "--no-skills", "--session", sessionPath, "--config", configPath, prompt}, IO{
+			Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+			StdinIsTerminal: true, HTTPClient: httpClient,
+		}); err != nil {
 			t.Fatal(err)
 		}
-		messages := body["messages"].([]any)
-		switch calls {
-		case 1:
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"old answer"}}]}`), nil
-		case 2:
-			// system + user
-			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "fresh task" {
-				t.Fatalf("fresh messages = %#v", messages)
-			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"fresh answer"}}]}`), nil
-		case 3:
-			// system + user
-			if len(messages) != 2 || messages[1].(map[string]any)["content"] != "failing task" {
-				t.Fatalf("failing messages = %#v", messages)
-			}
-			return &http.Response{
-				StatusCode: http.StatusBadRequest,
-				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`)),
-				Header:     make(http.Header),
-			}, nil
-		default:
-			t.Fatalf("model called %d times", calls)
-			return nil, nil
-		}
-	})}
-
-	root := t.TempDir()
-	configPath := filepath.Join(root, "config.yaml")
-	if err := writeTestConfig(t, configPath, `
-model:
-  provider: openai
-  name: test-model
-  base_url: https://example.test/v1
-`); err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(root, "sessions")
-	run := func(args ...string) (string, error) {
-		var progress bytes.Buffer
-		err := Run(context.Background(), append([]string{"--config", configPath}, args...), IO{
-			Stdin:           strings.NewReader(""),
-			Stdout:          io.Discard,
-			Stderr:          &progress,
-			StdinIsTerminal: true,
-			HTTPClient:      httpClient,
-			SessionDir:      sessionDir,
-		})
-		return progress.String(), err
-	}
-	if _, err := run("-s", "replaceable", "old task"); err != nil {
-		t.Fatal(err)
-	}
-	progress, err := run("-s", "replaceable", "--fresh", "fresh task")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(progress, "Restarting task \"replaceable\"") {
-		t.Fatalf("progress = %q", progress)
 	}
 
-	store, err := session.New(sessionDir)
+	store, err := sqlitesession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	freshSnapshot, err := store.Load("replaceable")
+	defer store.Close()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if freshSnapshot.Revision != 2 || len(freshSnapshot.Messages) != 3 || freshSnapshot.Messages[1].Content != "fresh task" {
-		t.Fatalf("fresh snapshot = %#v", freshSnapshot)
-	}
-
-	if _, err := run("-s", "replaceable", "--fresh", "failing task"); err == nil {
-		t.Fatal("expected model error")
-	}
-	afterFailure, err := store.Load("replaceable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if afterFailure.Revision != freshSnapshot.Revision || len(afterFailure.Messages) != 3 || afterFailure.Messages[1].Content != "fresh task" {
-		t.Fatalf("session changed after failure: %#v", afterFailure)
+	if page.Total != 2 || len(page.Turns) != 2 || page.Turns[0].User != "second" || page.Turns[1].User != "first" ||
+		page.Turns[0].Result != "answer 2" || page.Turns[0].RoundCount != 0 {
+		t.Fatalf("page = %#v", page)
 	}
 }
 
-func TestRunFreshRequiresNamedSession(t *testing.T) {
-	err := Run(context.Background(), []string{"--fresh", "hello"}, IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          io.Discard,
-		Stderr:          io.Discard,
-		StdinIsTerminal: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "requires --session") {
+func TestRunRejectsRemovedFreshFlag(t *testing.T) {
+	err := Run(context.Background(), []string{"--fresh", "hello"}, IO{Stderr: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-// writeTestConfig converts the former flat test fixtures into the catalog-only
 // schema. Production config loading intentionally provides no such legacy
 // conversion; this helper keeps the behavioral CLI tests focused on Run.
 func writeTestConfig(t *testing.T, path, contents string) error {

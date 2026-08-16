@@ -34,10 +34,6 @@ type Config struct {
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
-	// MaxHistoryRounds bounds the number of recent rounds sent to the model
-	// each iteration. Nil uses the default; zero disables compaction and sends
-	// the full history.
-	MaxHistoryRounds *int `yaml:"max_history_rounds,omitempty"`
 	// SystemPrompt overrides the built-in default agent system prompt. Empty
 	// uses the built-in default.
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
@@ -220,9 +216,6 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")
-	}
-	if cfg.Agent.MaxHistoryRounds != nil && *cfg.Agent.MaxHistoryRounds < 0 {
-		return errors.New("agent.max_history_rounds cannot be negative")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

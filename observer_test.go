@@ -32,7 +32,7 @@ func TestRunObservedReportsConversationProgress(t *testing.T) {
 	}
 
 	var updates []Update
-	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		updates = append(updates, update)
 	}))
 	if err != nil {
@@ -70,7 +70,7 @@ func TestObserverCannotMutateConversation(t *testing.T) {
 				Input: json.RawMessage(`{"value":1}`),
 			}}}, nil
 		}
-		call := request.Messages[0].ToolCalls[0]
+		call := request.Messages[2].ToolCalls[0]
 		if call.Name != "echo" || string(call.Input) != `{"value":1}` {
 			t.Fatalf("history was mutated: %#v", call)
 		}
@@ -87,7 +87,7 @@ func TestObserverCannotMutateConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = agent.RunObserved(context.Background(), nil, ObserverFunc(func(update Update) {
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		if len(update.Message.ToolCalls) > 0 {
 			update.Message.ToolCalls[0].Name = "changed"
 			update.Message.ToolCalls[0].Input[0] = '['

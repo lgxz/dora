@@ -9,7 +9,7 @@ Dora is a small, composable LLM agent. The core design principles are:
 - The core loop depends only on a small set of interfaces, not on any concrete model, tool, CLI, or storage implementation.
 - Each package has a single primary responsibility; cross-package access happens through explicit interfaces or data structures.
 - The CLI is the composition root, responsible for selecting and assembling implementations; the core packages do not read configuration or environment variables.
-- Session state is explicitly passed in and retrieved by the caller; `Agent` itself holds no mutable state across tasks.
+- One mutable `Turn` is explicitly passed to the Agent; `Agent` itself holds no mutable state across tasks.
 - All external operations accept `context.Context`, supporting cancellation and timeouts.
 
 ## Overall Structure
@@ -20,7 +20,7 @@ flowchart TD
 
     CLI --> Config["internal/config<br/>YAML config"]
     CLI --> Paths["internal/paths<br/>~/.dora paths"]
-    CLI --> Session["internal/session<br/>session snapshots"]
+    CLI --> Session["session/sqlite<br/>completed turn history"]
     CLI --> Update["internal/update<br/>standalone self-update"]
     CLI --> Progress["internal/progress<br/>terminal progress"]
     CLI --> Core["dora<br/>Agent core"]
@@ -28,6 +28,7 @@ flowchart TD
     CLI --> Skill["skill<br/>Skill tool"]
     CLI --> Bash["tool/bash<br/>Bash tool"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell tool"]
+    CLI --> History["tool/history<br/>explicit history queries"]
 
     Registry --> OpenAI["model/openai<br/>Chat Completions"]
     Registry --> Responses["model/openairesponses<br/>Responses API"]
@@ -43,7 +44,8 @@ flowchart TD
     PowerShell -->|"Tool"| Core
     CommandExec -->|"Tool"| Core
     Progress -->|"Observer"| Core
-    Session -->|"Message / State"| Core
+    Session --> History
+    History -->|"Tool"| Core
 ```
 
 Key constraints on dependency direction:
@@ -59,11 +61,12 @@ Key constraints on dependency direction:
 | --- | --- | --- |
 | `dora` | Domain abstractions for the agent loop, messages, models, tools, and observers | `New`, `NewWithConfig`, `Agent.Run*`, `Model`, `Tool`, `Observer` |
 | `cmd/dora` | Process startup, signal handling, terminal capability detection, final error output | `main` |
-| `internal/cli` | Argument parsing, dependency assembly, session restore and save, input/output orchestration | `Run(context.Context, []string, IO)` |
+| `internal/cli` | Argument parsing, dependency assembly, turn execution and completed-turn commit | `Run(context.Context, []string, IO)` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
-| `internal/paths` | Resolves the unified `~/.dora` default paths on all platforms | `ConfigFile`, `SessionsDir`, `SkillsDir` |
-| `internal/session` | Persists named sessions, validates version and concurrent revision | `New`, `Store.Load`, `Store.Revision`, `Store.Save` |
+| `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
+| `session` | Defines completed-turn history contracts and query records | `Reader`, `Store` |
+| `session/sqlite` | Appends completed turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
@@ -73,6 +76,7 @@ Key constraints on dependency direction:
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory and under timeout and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, timeout, cancellation, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/imageoutput` | Converts the command tools' `@@path@@` convention into structured image results | `Parse` |
 
@@ -125,22 +129,25 @@ The Observer synchronously receives semantic events such as `thinking`, content 
 
 Callbacks run on the Agent's current goroutine, so implementations should return quickly. `internal/progress.Renderer` is the Observer used by the CLI.
 
-### State and Result
+### Turn and Round
 
 ```go
-type State struct {
-    Messages     []Message
-    Continuation string
+type Round struct {
+    Assistant Message
+    Tools     []Message
 }
 
-type Result struct {
-    Content      string
-    Messages     []Message
-    Continuation string
-}
+turn := dora.NewTurn(systemPrompt, userInput)
+err := agent.Run(ctx, turn)
+result, complete := turn.Result()
 ```
 
-`State` is the complete input state for a run, and `Result` returns the complete state that can be used directly for the next run. `Continuation` is owned by the provider; both the Agent and session storage treat it as an opaque string.
+`Turn` is the Agent's mutable run state. It begins with exactly one system and
+one user message, appends only complete rounds, and ends with a final assistant
+result without tool calls. A round contains one assistant message with one or
+more tool calls and all corresponding tool messages in call order. Provider
+continuation is opaque and exists only in the live Turn; it is not persisted.
+All exported accessors return defensive copies.
 
 ## Agent Loop
 
@@ -152,7 +159,7 @@ sequenceDiagram
     participant T as Tool
     participant O as Observer
 
-    C->>A: RunState(state)
+    C->>A: Run(turn)
     loop up to MaxRounds rounds
         A->>O: thinking
         A->>M: Request(messages, tools, continuation)
@@ -160,7 +167,8 @@ sequenceDiagram
         M-->>A: Response(content, tool calls, continuation)
         A->>O: assistant message
         alt no tool calls
-            A-->>C: Result
+            A->>A: turn.Complete(result)
+            A-->>C: nil
         else tool calls present
             loop execute each in returned order
                 A->>O: tool started
@@ -174,14 +182,14 @@ sequenceDiagram
 
 Current execution semantics:
 
-- The Agent is immutable; run history is kept in local variables.
+- The Agent is immutable; mutable messages and continuation belong to the supplied Turn.
 - Input messages, tool calls, and output state are all defensively copied.
 - Tool packages translate tool-specific output conventions into `ToolResult`; the Agent only forwards its content and images into the provider-neutral message history.
 - When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
-- If the model keeps calling tools, after reaching `MaxRounds` it returns both `ErrMaxRounds` and a resumable `Result` containing the completed tool output; the default limit is 256. When both stdin and stderr are connected to a terminal, the CLI asks whether to continue the next segment from that state; when the user declines, it saves the partial state of the named session and stops normally. Non-interactive runs keep reporting the error directly, avoiding waiting for input in pipelines or automated tasks.
-- The current CLI does not inject a system prompt. `Message` and both API adapters support the `system` role, so library callers can pass one in themselves.
+- If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Declining does not persist the incomplete Turn. Non-interactive runs report the error directly.
+- The CLI creates every Turn with either the configured or concise built-in system prompt. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 
 ## CLI Run Flow
 
@@ -191,16 +199,16 @@ Current execution semantics:
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
 4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry.
-5. If a session is specified, read the snapshot and validate the provider, profile, API, model, and base URL.
+5. If `--session` specifies a SQLite file, open it. When it already contains completed turns, register a history tool backed by its Reader interface; never load old turns into the model request.
 6. Create the concrete model adapter based on the selected profile's effective API and model.
-7. Discover skills and create the available tools according to configuration.
-8. Construct a stateless `dora.Agent`.
-9. Compose `State` from the historical messages and the current user message, then run the Agent.
-10. On success, atomically save the session; write the final text to stdout verbatim.
+7. Discover skills and create the other available tools according to configuration.
+8. Construct a stateless `dora.Agent` and a fresh `dora.Turn`.
+9. Run the Agent, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
+10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. Failed or declined Turns are not written.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts.
 
-`cli.IO` injects the standard streams, build version, stdin/stdout/stderr terminal capabilities, stdout width and color, HTTP client, test updater, and session directory as dependencies, allowing the CLI to be tested without depending on process-global state.
+`cli.IO` injects the standard streams, build version, terminal capabilities, HTTP client, and test updater, allowing the CLI to be tested without depending on process-global state.
 
 `internal/update` only updates binaries marked by the standalone installer writing a marker in the same directory. It fetches the latest stable Release from GitHub, selects the archive for the running platform, verifies the SHA-256 using `checksums.txt`, and stages and runs the new version's `--version` in the same directory. After successful verification, it switches the binary via a same-directory rename; on installation failure it attempts a rollback and uses an exclusive marker to reject concurrent updates. Development builds, manual copies, and package-manager installations are not modified.
 
@@ -208,7 +216,7 @@ The CLI's standard output carries only the final result; run progress and errors
 
 ### Chat Completions
 
-`model/openai` converts Dora messages and tool structures into `/chat/completions` requests. It always requests an SSE stream, aggregates text and chunked tool arguments into a complete response, and implements `StreamingModel`; cross-task resumption relies on the complete message history, and `Continuation` is empty.
+`model/openai` converts Dora messages and tool structures into `/chat/completions` requests. It always requests an SSE stream, aggregates text and chunked tool arguments into a complete response, and implements `StreamingModel`; `Continuation` is empty.
 
 ### Responses API
 
@@ -253,22 +261,36 @@ tool-call validity. Invalid arguments are fed back to the model as a recoverable
 
 ## Session
 
-`internal/session` saves one named task in a single versioned JSON file:
+The `session` package is a provider-neutral persistence contract. The CLI's
+concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
+the SQLite database itself. There is no default session directory and no
+automatic loading of prior messages.
 
-```text
-~/.dora/sessions/<name>.json
-```
+The database uses schema version 1 and two tables:
 
-The snapshot contains:
+- `turns`: one row per successfully completed invocation, including plain-text
+  `system`, `user`, and final `result`, backend identity, round count, and
+  commit time;
+- `messages`: intermediate assistant/tool messages keyed by `turn_id`,
+  `round_index`, and `position`. Tool calls and images are JSON columns because
+  they are structured fields of a message.
 
-- the format version and a monotonically increasing revision;
-- the backend identity composed of provider, profile, API, model, and base URL;
-- the provider-neutral complete messages;
-- the provider-specific continuation.
+`CommitTurn` inserts the turn and all messages in one transaction. Incomplete
+Turns are rejected, so there is no status column. Provider continuation is
+intentionally not stored. SQLite allocates the turn ID and foreign keys bind
+every message to its turn.
 
-Saving uses a same-directory temporary file, `fsync`, and an atomic rename, with directory permissions `0700` and file permissions `0600`. `Save` uses the expected revision to detect concurrent overwrites but does not provide cross-process locking; when two processes operate on the same named session simultaneously, one of them will eventually receive a conflict error.
+`tool/history` is registered only when the selected session database already
+contains at least one completed turn. An empty database exposes no history
+tool. `list` returns completed turns newest first and includes the number of
+rounds in each turn. `get` selects one turn by ID and returns a chronological
+page of complete rounds; both actions accept `offset` and `limit`. History tool
+calls and their results are ordinary messages in the current Turn and are
+persisted with it on completion.
 
-Normal resumption requires the backend to match exactly. `--fresh` ignores the old content and replaces the file with the new format and backend after the task succeeds. Older session formats do not support resumption, but they can be explicitly replaced via `--fresh`.
+New database files are created with mode `0600`. The old versioned JSON session
+format, `--fresh`, migration, and compatibility adapters are deliberately not
+implemented.
 
 ## Skills
 
@@ -307,7 +329,7 @@ Bash and PowerShell remain separate public tools with separate shell-launch poli
 
 ## Configuration and Paths
 
-`internal/config` uses strict YAML decoding for a provider/model-profile catalog: unknown fields, multiple documents, duplicate names, invalid API types, and negative limits all report errors. `builtin_providers.yaml` is embedded into the binary and defines the built-in `deepseek` and `trust` catalogs, including base URLs and default profiles. Within `providers[].models`, `name` uniquely identifies a profile while `model` is the provider-facing model identifier; `model` defaults to `name`, and different profiles may target the same model. A profile's positive `context_window` approximates its intrinsic model context capacity in message-content bytes and is passed to the Agent's history compactor; omission defaults to 1 MiB. Compaction policy remains independent, and `agent.max_history_rounds: 0` disables it. Explicit user catalog fields override connection defaults, while user model lists replace rather than merge with built-in models. Each provider's API key environment variable is derived by uppercasing its name, replacing non-alphanumeric characters with underscores, and appending `_API_KEY`; a non-empty process value overrides the config-local `env` fallback, and normalization collisions or unknown config env names are rejected. These fallbacks never mutate the process environment. `DORA_MODEL=provider/profile` atomically overrides the client selector and splits only at the first slash, allowing slashes in profile names. Without an explicit selector, a sole keyed provider is selected automatically; multiple keyed providers are ambiguous, and the first profile is the provider default. Only the no-config, no-key `Default()` path injects the DeepSeek selector. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
+`internal/config` uses strict YAML decoding for a provider/model-profile catalog: unknown fields, multiple documents, duplicate names, invalid API types, and negative limits all report errors. `builtin_providers.yaml` is embedded into the binary and defines the built-in `deepseek` and `trust` catalogs, including base URLs and default profiles. Within `providers[].models`, `name` uniquely identifies a profile while `model` is the provider-facing model identifier; `model` defaults to `name`, and different profiles may target the same model. A profile's positive `context_window` records its approximate context capacity; omission defaults to 1 MiB. Explicit user catalog fields override connection defaults, while user model lists replace rather than merge with built-in models. Each provider's API key environment variable is derived by uppercasing its name, replacing non-alphanumeric characters with underscores, and appending `_API_KEY`; a non-empty process value overrides the config-local `env` fallback, and normalization collisions or unknown config env names are rejected. These fallbacks never mutate the process environment. `DORA_MODEL=provider/profile` atomically overrides the client selector and splits only at the first slash, allowing slashes in profile names. Without an explicit selector, a sole keyed provider is selected automatically; multiple keyed providers are ambiguous, and the first profile is the provider default. Only the no-config, no-key `Default()` path injects the DeepSeek selector. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
 
 `internal/paths` uses a unified `~/.dora` layout on all operating systems:
 
@@ -315,7 +337,6 @@ Bash and PowerShell remain separate public tools with separate shell-launch poli
 | --- | --- |
 | Optional configuration | `~/.dora/config.yaml` |
 | Skills | `~/.dora/skills` |
-| Sessions | `~/.dora/sessions` |
 
 The `DORA_HOME` environment variable can override the home directory and must be an absolute path. An explicit `--config` does not depend on the default configuration path and can fully override it.
 
@@ -338,14 +359,14 @@ The `DORA_HOME` environment variable can override the home directory and must be
 
 ### Adding a new run interface
 
-A new UI can call the root-package Agent directly and implement its own `Observer`. It does not need to depend on the terminal renderer and can decide for itself how to store `State`.
+A new UI can call the root-package Agent directly, create a `Turn`, and implement its own `Observer`. It does not need to depend on the terminal renderer and can implement the `session.Store` contract itself.
 
 ## Current Boundaries
 
 - The Agent loop is single-goroutine, but the tool calls within one model response are executed concurrently (results are collected by index and emitted in order).
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
-- Sessions are complete JSON snapshots rather than append-only logs, with a maximum of 64 MiB.
-- Sessions have no cross-process locking; they only prevent silent overwrites via revision.
+- Session history is append-only at the turn level; individual turns are committed once after completion.
+- SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI is the composition root; as providers and tools grow, a factory/registry could be extracted, but at the current scale keeping an explicit switch is simpler.
-- There is currently no built-in system prompt, event bus, interactive REPL, or background daemon.
+- There is currently no event bus, interactive REPL, or background daemon.

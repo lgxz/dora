@@ -46,10 +46,6 @@ client:
 
 agent:
   max_rounds: 256
-  # Bound the number of recent rounds sent to the model each iteration.
-  # Default: 32. With compaction enabled, max_rounds can be raised to allow
-  # longer tool loops without unbounded context growth.
-  # max_history_rounds: 32
 
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
 # followed by ~/.agents/skills/, independent of this file's location. Absent

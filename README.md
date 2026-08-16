@@ -300,11 +300,9 @@ no command-line flags for them.
 
 `context_window` belongs to a model profile and approximates that model's
 context capacity using message-content bytes because Dora does not currently
-tokenize requests. It defaults to 1048576 (1 MiB). Historical rounds are
-compressed to stay within this budget, and configured values must be positive.
-This estimate does not include exact tokenization, tool schemas, or vision
-tokens. Compaction policy is independent: set `agent.max_history_rounds` to
-`0` to disable history compaction.
+tokenize requests. It defaults to 1048576 (1 MiB), and configured values must
+be positive. This estimate does not include exact tokenization, tool schemas,
+or vision tokens.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when
@@ -343,21 +341,11 @@ Override it for one invocation with `--max-rounds`:
 ./dora --max-rounds 96 "Complete a long task"
 ```
 
-By default Dora sends the most recent 32 rounds to the model each iteration and
-compresses older history so a long tool loop does not grow the context without
-bound. Override the number of retained rounds for one invocation with
-`--max-history-rounds` (use `0` to disable compaction and send the full
-history):
-
-```sh
-./dora --max-history-rounds 64 "Complete a long task"
-```
-
 When the limit is reached with both stdin and stderr attached to a terminal,
 Dora asks whether to continue for another segment. Confirming resumes from the
-completed tool output without replaying work. Declining stops normally and
-saves the partial state of a named session. With piped or redirected I/O, Dora
-does not prompt and returns `dora: maximum rounds exceeded` instead.
+completed tool output without replaying work. Declining stops normally without
+persisting the incomplete turn. With piped or redirected I/O, Dora does not
+prompt and returns `dora: maximum rounds exceeded` instead.
 
 Run a one-shot prompt or combine an instruction with piped input:
 
@@ -387,35 +375,31 @@ the layout without ANSI colors; progress remains visible on stderr.
 
 ### Sessions
 
-Use a session name to continue the same conversation across CLI invocations:
+Pass a SQLite file to retain completed turns across CLI invocations:
 
 ```sh
-./dora -s system-status "Analyze this machine's system status"
-./dora -s system-status "Continue with the busiest processes"
+./dora -s ./system-status.sqlite "Analyze this machine's system status"
+./dora -s ./system-status.sqlite "Continue with the busiest processes"
 ```
 
-Start over under the same session name with `--fresh`. Existing history is
-ignored for this run and replaced only after the new task succeeds; if the run
-fails, the previous session remains intact:
+Every invocation is a fresh, independent turn. Previous messages are never
+loaded into the model context automatically. When the selected session database
+already contains completed turns, Dora adds a `history` tool: the model can
+`list` completed turns, see each turn's round count, and `get` chronological
+round pages using `turn_id`, `offset`, and `limit`. An empty database does not
+expose the tool. A round is one assistant tool-call message plus all
+corresponding tool result messages. Only a successfully completed turn is
+appended atomically; provider continuation is kept only while that turn runs.
 
-```sh
-./dora -s system-status --fresh "Analyze this machine from scratch"
-```
+The SQLite database contains `turns` and `messages` tables and records the
+system prompt, user input, final result, backend metadata, and intermediate
+tool rounds. Newly created files use `0600` permissions. The old named JSON
+session format, `--fresh`, and automatic migration are not supported. Omit
+`--session`/`-s` for an ephemeral turn. Session databases can contain commands
+and tool output, so treat them as sensitive.
 
-Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
-session as a versioned JSON snapshot with `0600` permissions. Session v5 binds
-the configured provider, profile, API, model, and base URL: Chat Completions resumes
-from messages, while Responses additionally persists its opaque typed-item
-continuation. Use `--fresh` before changing a session's backend. Older session
-formats are not supported. The default directory is
-`~/.dora/sessions` on every operating system. Omit `--session`/`-s` to keep
-the existing stateless behavior. Session files can contain commands and tool
-output, so treat them as sensitive. Do not run two Dora processes against the
-same session name concurrently.
-
-Use `--config`, `--thinking`, `--max-rounds`,
-`--max-history-rounds`, or `--no-skills` to override the corresponding
-configuration for one invocation.
+Use `--config`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
+corresponding configuration for one invocation.
 
 ### Skills
 

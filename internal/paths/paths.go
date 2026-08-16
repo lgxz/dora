@@ -17,16 +17,6 @@ func ConfigFile() (string, error) {
 	return filepath.Join(home, "config.yaml"), nil
 }
 
-// SessionsDir returns Dora's default directory for named sessions. It lives at
-// <doraHome>/sessions.
-func SessionsDir() (string, error) {
-	home, err := doraHome()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, "sessions"), nil
-}
-
 // SkillsDir returns Dora's default directory for skills. It lives at
 // <doraHome>/skills.
 func SkillsDir() (string, error) {

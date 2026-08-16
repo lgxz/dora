@@ -10,19 +10,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/internal/paths"
-	"github.com/lgxz/dora/internal/progress"
-	"github.com/lgxz/dora/internal/session"
 	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/model/registry"
-	"github.com/lgxz/dora/skill"
-	jobtool "github.com/lgxz/dora/tool/job"
+	"github.com/lgxz/dora/session"
 )
 
 const maxStdinBytes = 16 << 20
@@ -46,140 +42,33 @@ type IO struct {
 	TerminalProgress bool
 	ColorProgress    bool
 	HTTPClient       *http.Client
-	SessionDir       string
 	Updater          updater
 }
 
 // Run executes the dora command.
 func Run(ctx context.Context, args []string, streams IO) error {
-	flags := flag.NewFlagSet("dora", flag.ContinueOnError)
-	flags.SetOutput(streams.Stderr)
-	configPath := flags.String("config", "", "path to YAML configuration")
-	thinkingFlag := flags.String("thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
-	var maxRounds int
-	var maxRoundsSet bool
-	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed <= 0 {
-			return errors.New("must be a positive integer")
-		}
-		maxRounds = parsed
-		maxRoundsSet = true
-		return nil
-	})
-	var maxHistoryRounds int
-	var maxHistoryRoundsSet bool
-	flags.Func("max-history-rounds", "override the number of recent rounds sent to the model each iteration (0 disables compaction)", func(value string) error {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			return errors.New("must be a non-negative integer")
-		}
-		maxHistoryRounds = parsed
-		maxHistoryRoundsSet = true
-		return nil
-	})
-	showVersion := flags.Bool("version", false, "print version information")
-	performUpdate := flags.Bool("update", false, "update a standalone installation")
-	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
-	noSkills := flags.Bool("no-skills", false, "disable all skills")
-	var quiet bool
-	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
-	flags.BoolVar(&quiet, "q", false, "hide run progress (shorthand)")
-	var sessionName string
-	flags.StringVar(&sessionName, "session", "", "continue a named session")
-	flags.StringVar(&sessionName, "s", "", "continue a named session (shorthand)")
-	fresh := flags.Bool("fresh", false, "start fresh and replace the named session on success")
-	flags.Usage = func() {
-		fmt.Fprintf(streams.Stderr, "Usage: dora [options] <prompt>\n")
-		fmt.Fprintf(streams.Stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
+	opts, err := parseOptions(args, streams.Stderr)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if *showVersion {
-		version := streams.Version
-		if version == "" {
-			version = "dora dev (commit none, built unknown)"
-		}
-		_, err := fmt.Fprintln(streams.Stdout, version)
-		return err
-	}
-	if *performUpdate {
-		if len(flags.Args()) != 0 {
-			return errors.New("-update does not accept a prompt")
-		}
-		updater := streams.Updater
-		if updater == nil {
-			updater = update.New(update.Config{
-				CurrentVersion: streams.BuildVersion,
-				HTTPClient:     streams.HTTPClient,
-				Force:          *forceUpdate,
-			})
-		}
-		if _, err := fmt.Fprintln(streams.Stderr, "dora: checking for updates"); err != nil {
-			return err
-		}
-		result, err := updater.Update(ctx)
-		if err != nil {
-			return err
-		}
-		if result.Updated {
-			_, err = fmt.Fprintf(streams.Stdout, "Updated dora %s -> %s\n", result.Current, result.Latest)
-		} else {
-			_, err = fmt.Fprintf(streams.Stdout, "dora %s is already up to date\n", result.Current)
-		}
-		return err
-	}
-	configExplicit := *configPath != ""
-	if *configPath == "" {
-		defaultConfig, err := paths.ConfigFile()
-		if err != nil {
-			return err
-		}
-		*configPath = defaultConfig
-	}
-	if *fresh && sessionName == "" {
-		return errors.New("--fresh requires --session or -s")
-	}
-
-	prompt, err := readPrompt(flags.Args(), streams.Stdin, streams.StdinIsTerminal)
-	if err != nil {
-		flags.Usage()
+	if handled, err := handleImmediate(ctx, opts, streams); handled {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
-	if !configExplicit && errors.Is(err, os.ErrNotExist) {
-		cfg, err = config.Default()
-	}
+	prompt, err := readPrompt(opts.promptArgs, streams.Stdin, streams.StdinIsTerminal)
 	if err != nil {
+		opts.usage()
 		return err
 	}
-	reg, err := registry.New(registryFromConfig(cfg, streams.HTTPClient))
+	cfg, reg, err := loadRuntimeConfig(opts, streams.HTTPClient)
 	if err != nil {
 		return err
-	}
-	if *thinkingFlag != "" {
-		switch *thinkingFlag {
-		case "off", "minimal", "low", "medium", "high":
-		default:
-			return errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high"`)
-		}
-		value := *thinkingFlag
-		reg.SetThinking(&value)
-	}
-	if maxRoundsSet {
-		cfg.Agent.MaxRounds = maxRounds
-	}
-	if maxHistoryRoundsSet {
-		cfg.Agent.MaxHistoryRounds = &maxHistoryRounds
 	}
 	sel := reg.Selection()
-	backend := session.Backend{
+	metadata := session.Metadata{
 		Provider: sel.Provider,
 		Profile:  sel.Profile,
 		API:      sel.API,
@@ -187,161 +76,44 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		BaseURL:  sel.BaseURL,
 	}
 
-	var sessionStore *session.Store
-	var snapshot session.Snapshot
-	if sessionName != "" {
-		sessionDir := streams.SessionDir
-		if sessionDir == "" {
-			sessionDir, err = paths.SessionsDir()
-			if err != nil {
-				return err
-			}
-		}
-		sessionStore, err = session.New(sessionDir)
-		if err != nil {
-			return err
-		}
-		snapshot, err = sessionStore.Load(sessionName)
-		if *fresh && errors.Is(err, session.ErrUnsupportedVersion) {
-			revision, revisionErr := sessionStore.Revision(sessionName)
-			if revisionErr != nil {
-				return revisionErr
-			}
-			snapshot = session.Snapshot{Revision: revision}
-			err = nil
-		}
-		if err != nil {
-			return err
-		}
-		if snapshot.Revision > 0 && !*fresh && snapshot.Backend != backend {
-			return fmt.Errorf(
-				"session %q belongs to %s profile %q (%s model %q at %s); use --fresh to replace it",
-				sessionName,
-				snapshot.Backend.Provider,
-				snapshot.Backend.Profile,
-				snapshot.Backend.API,
-				snapshot.Backend.Model,
-				snapshot.Backend.BaseURL,
-			)
-		}
+	sessionStore, historyAvailable, err := openSession(ctx, opts.sessionPath)
+	if err != nil {
+		return err
 	}
-
+	if sessionStore != nil {
+		defer sessionStore.Close()
+	}
 	model, err := reg.Model()
 	if err != nil {
 		return err
 	}
 	jobManager := job.New()
-	var tools []dora.Tool
-	if !*noSkills {
-		skillDirectories, err := configuredSkillDirectories(cfg.Skills.Directories)
-		if err != nil {
-			return err
-		}
-		if len(skillDirectories) > 0 {
-			skills, err := skill.New(skill.Config{Directories: skillDirectories})
-			if errors.Is(err, skill.ErrNoSkills) {
-				skills = nil
-				err = nil
-			}
-			if err != nil {
-				return err
-			}
-			if skills != nil {
-				tools = append(tools, skills)
-			}
-		}
-	}
-	commandTools, err := buildCommandTools(cfg.Tools, sel.Vision, jobManager)
+	defer jobManager.Cleanup()
+	tools, err := buildTools(cfg, sel, jobManager, sessionStore, historyAvailable, opts.noSkills)
 	if err != nil {
 		return err
 	}
-	tools = append(tools, commandTools...)
-
-	// The job tool is a regular tool like the others.
-	jobTool := jobtool.New(jobManager, sel.Vision)
-	tools = append(tools, jobTool)
-
-	// File tools (read/write/edit) for precise file operations.
-	tools = append(tools, buildFileTools()...)
-
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
-		MaxRounds:        cfg.Agent.MaxRounds,
-		MaxHistoryRounds: cfg.Agent.MaxHistoryRounds,
-		ContextWindow:    sel.ContextWindow,
+		MaxRounds: cfg.Agent.MaxRounds,
 	}, tools...)
 	if err != nil {
 		return err
 	}
-	defer jobManager.Cleanup()
-	var messages []dora.Message
-	var continuation string
-	if !*fresh {
-		messages = append(messages, snapshot.Messages...)
-		continuation = snapshot.Continuation
+	turn := buildTurn(cfg, prompt)
+	completed, err := runTurn(ctx, agent, turn, buildObserver(streams, opts.quiet, opts.sessionPath), streams)
+	if err != nil {
+		return err
 	}
-	// Inject the system prompt (config override or built-in default) before
-	// the user prompt. When resuming a session, the snapshot already contains
-	// the system message, so only inject it for a fresh session.
-	if len(messages) == 0 {
-		systemPrompt := defaultSystemPrompt
-		if cfg.Agent.SystemPrompt != "" {
-			systemPrompt = cfg.Agent.SystemPrompt
-		}
-		messages = append(messages, dora.Message{Role: dora.RoleSystem, Content: systemPrompt})
+	if !completed {
+		return nil
 	}
-	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
-	state := dora.State{Messages: messages, Continuation: continuation}
-	var result dora.Result
-	var observer dora.Observer
-	if !quiet {
-		renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
-		if sessionName != "" {
-			if *fresh && snapshot.Revision > 0 {
-				renderer.FreshSession(sessionName)
-			} else {
-				renderer.Session(sessionName, snapshot.Revision > 0)
-			}
-		}
-		observer = renderer
-	}
-	input := bufio.NewReader(streams.Stdin)
-	completed := false
-	for {
-		result, err = agent.RunStateObserved(ctx, state, observer)
-		if err == nil {
-			completed = true
-			break
-		}
-		if !errors.Is(err, dora.ErrMaxRounds) ||
-			!streams.StdinIsTerminal || !streams.TerminalProgress {
+	if sessionStore != nil {
+		if _, err := sessionStore.CommitTurn(ctx, turn, metadata); err != nil {
 			return err
 		}
-		state = dora.State{Messages: result.Messages, Continuation: result.Continuation}
-		keepGoing, promptErr := confirmContinue(input, streams.Stderr)
-		if promptErr != nil {
-			return promptErr
-		}
-		if !keepGoing {
-			break
-		}
 	}
-
-	var saveErr error
-	if sessionStore != nil {
-		saveErr = sessionStore.Save(sessionName, snapshot.Revision, session.Snapshot{
-			Backend:      backend,
-			Messages:     result.Messages,
-			Continuation: result.Continuation,
-		})
-	}
-	var outputErr error
-	if completed {
-		outputErr = writeAnswer(streams, result.Content)
-	}
-	if saveErr != nil {
-		return saveErr
-	}
-	return outputErr
+	result, _ := turn.Result()
+	return writeAnswer(streams, result)
 }
 
 func writeAnswer(streams IO, content string) error {

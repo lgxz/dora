@@ -12,14 +12,6 @@ import (
 
 const defaultMaxRounds = 256
 
-// defaultMaxHistoryRounds bounds the number of recent rounds sent to the model
-// when compaction is enabled.
-const defaultMaxHistoryRounds = 32
-
-// defaultContextWindow bounds the total text budget (in bytes) for the
-// messages sent to the model when budget-based compaction is enabled.
-const defaultContextWindow = 1 << 20
-
 // maxModelAttempts bounds the number of times a single model call is retried
 // after a generic retryable failure.
 const maxModelAttempts = 3
@@ -42,26 +34,12 @@ type Agent struct {
 	tools     map[string]Tool
 	specs     []ToolSpec
 	maxRounds int
-	// maxHistoryRounds bounds the number of recent rounds sent to the model
-	// each iteration. Zero disables compaction and sends the full history.
-	maxHistoryRounds int
-	// contextWindow bounds the total text budget (in bytes) for the messages
-	// sent to the model. Zero disables budget-based compaction.
-	contextWindow int
 }
 
 // AgentConfig controls safeguards for the model-tool loop. A zero
 // MaxRounds uses the default limit.
 type AgentConfig struct {
 	MaxRounds int
-	// MaxHistoryRounds bounds the number of recent rounds sent to the model
-	// each iteration. Nil uses the default; zero disables compaction and sends
-	// the full history.
-	MaxHistoryRounds *int
-	// ContextWindow bounds the total text budget (in bytes) for the messages
-	// sent to the model. Nil uses the default and configured values must be
-	// positive.
-	ContextWindow *int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -77,32 +55,15 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if cfg.MaxRounds < 0 {
 		return nil, errors.New("dora: MaxRounds cannot be negative")
 	}
-	if cfg.MaxHistoryRounds != nil && *cfg.MaxHistoryRounds < 0 {
-		return nil, errors.New("dora: MaxHistoryRounds cannot be negative")
-	}
-	if cfg.ContextWindow != nil && *cfg.ContextWindow <= 0 {
-		return nil, errors.New("dora: ContextWindow must be positive")
-	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
 	}
-	maxHistoryRounds := defaultMaxHistoryRounds
-	if cfg.MaxHistoryRounds != nil {
-		maxHistoryRounds = *cfg.MaxHistoryRounds
-	}
-	contextWindow := defaultContextWindow
-	if cfg.ContextWindow != nil {
-		contextWindow = *cfg.ContextWindow
-	}
-
 	a := &Agent{
-		model:            model,
-		tools:            make(map[string]Tool, len(tools)),
-		specs:            make([]ToolSpec, 0, len(tools)),
-		maxRounds:        maxRounds,
-		maxHistoryRounds: maxHistoryRounds,
-		contextWindow:    contextWindow,
+		model:     model,
+		tools:     make(map[string]Tool, len(tools)),
+		specs:     make([]ToolSpec, 0, len(tools)),
+		maxRounds: maxRounds,
 	}
 
 	for _, tool := range tools {
@@ -125,42 +86,34 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	return a, nil
 }
 
-// Run invokes the model until it returns a response without tool calls.
-// Messages supplied by the caller are copied and never modified.
-func (a *Agent) Run(ctx context.Context, messages []Message) (Result, error) {
-	return a.RunObserved(ctx, messages, nil)
+// Run invokes the model on turn until it returns a final response without tool
+// calls. The turn owns all mutable run state.
+func (a *Agent) Run(ctx context.Context, turn *Turn) error {
+	return a.RunObserved(ctx, turn, nil)
 }
 
-// RunState resumes a conversation with optional opaque model continuation.
-func (a *Agent) RunState(ctx context.Context, state State) (Result, error) {
-	return a.RunStateObserved(ctx, state, nil)
-}
-
-// RunObserved is Run with synchronous progress notifications. The observer is
-// optional and cannot modify the Agent's conversation history.
-func (a *Agent) RunObserved(ctx context.Context, messages []Message, observer Observer) (Result, error) {
-	return a.RunStateObserved(ctx, State{Messages: messages}, observer)
-}
-
-// RunStateObserved is RunState with synchronous progress notifications.
-func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Observer) (Result, error) {
+// RunObserved is Run with synchronous progress notifications.
+func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) error {
 	if a == nil || a.model == nil {
-		return Result{}, errors.New("dora: agent is not initialized")
+		return errors.New("dora: agent is not initialized")
 	}
-
-	history := cloneMessages(state.Messages)
-	continuation := state.Continuation
+	if turn == nil {
+		return errors.New("dora: turn is nil")
+	}
+	if turn.Completed() {
+		return errors.New("dora: turn is already complete")
+	}
 
 	for range a.maxRounds {
 		if err := ctx.Err(); err != nil {
-			return Result{}, err
+			return err
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
 		request := Request{
-			Messages:     cloneMessages(a.requestMessages(history)),
+			Messages:     turn.Messages(),
 			Tools:        a.specs,
-			Continuation: continuation,
+			Continuation: turn.Continuation(),
 		}
 		var response Response
 		var err error
@@ -174,24 +127,21 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 			response, err = a.generateWithRetry(ctx, request, nil)
 		}
 		if err != nil {
-			return Result{}, fmt.Errorf("dora: generate response: %w", err)
+			return fmt.Errorf("dora: generate response: %w", err)
 		}
-		continuation = response.Continuation
 
 		assistant := Message{
 			Role:      RoleAssistant,
 			Content:   response.Content,
 			ToolCalls: cloneToolCalls(response.ToolCalls),
 		}
-		history = append(history, assistant)
 		notify(observer, Update{Kind: UpdateMessageAdded, Message: assistant})
 
 		if len(response.ToolCalls) == 0 {
-			return Result{
-				Content:      response.Content,
-				Messages:     cloneMessages(history),
-				Continuation: continuation,
-			}, nil
+			if err := turn.Complete(response.Content, response.Continuation); err != nil {
+				return err
+			}
+			return nil
 		}
 
 		// Execute all tool calls in parallel, but preserve the model's call
@@ -213,6 +163,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		}
 		results := make([]toolExecution, len(response.ToolCalls))
 		var wg sync.WaitGroup
+		toolMessages := make([]Message, 0, len(response.ToolCalls))
 		for i, call := range response.ToolCalls {
 			wg.Add(1)
 			go func(i int, call ToolCall) {
@@ -245,7 +196,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 			if result.err != nil {
 				if result.invalidJSON {
 					notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
-					history = append(history, Message{
+					toolMessages = append(toolMessages, Message{
 						Role:       RoleTool,
 						ToolCallID: call.ID,
 						Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
@@ -253,7 +204,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 					continue
 				}
 				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
-				feedToolError(&history, call, result.err)
+				toolMessages = append(toolMessages, toolErrorMessage(call, result.err))
 				continue
 			}
 
@@ -263,15 +214,15 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 				ToolCallID: call.ID,
 				Images:     cloneImages(result.result.Images),
 			}
-			history = append(history, toolMessage)
+			toolMessages = append(toolMessages, toolMessage)
 			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
+		}
+		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages}, response.Continuation); err != nil {
+			return err
 		}
 	}
 
-	return Result{
-		Messages:     cloneMessages(history),
-		Continuation: continuation,
-	}, fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
+	return fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
 }
 
 // generateWithRetry invokes the model, retrying retryable failures with
@@ -342,15 +293,13 @@ func notify(observer Observer, update Update) {
 	observer.Observe(update)
 }
 
-// feedToolError appends a RoleTool message describing a failed tool call so the
-// model can correct itself, and is used instead of aborting the run. The error
-// is correlated to the original call via call.ID.
-func feedToolError(history *[]Message, call ToolCall, err error) {
-	*history = append(*history, Message{
+// toolErrorMessage describes a failed tool call so the model can correct it.
+func toolErrorMessage(call ToolCall, err error) Message {
+	return Message{
 		Role:       RoleTool,
 		ToolCallID: call.ID,
 		Content:    fmt.Sprintf("Error: tool %q failed: %v. Please correct your arguments and try again.", call.Name, err),
-	})
+	}
 }
 
 func cloneMessage(message Message) Message {

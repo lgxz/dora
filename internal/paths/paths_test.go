@@ -35,35 +35,6 @@ func TestConfigFileFallsBackToHomeDotDora(t *testing.T) {
 	}
 }
 
-func TestSessionsDirUsesDoraHome(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("DORA_HOME", root)
-
-	path, err := SessionsDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(root, "sessions")
-	if path != want {
-		t.Fatalf("path = %q, want %q", path, want)
-	}
-}
-
-func TestSessionsDirFallsBackToHomeDotDora(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("DORA_HOME", "")
-
-	path, err := SessionsDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(home, ".dora", "sessions")
-	if path != want {
-		t.Fatalf("path = %q, want %q", path, want)
-	}
-}
-
 func TestRejectsRelativeDoraHome(t *testing.T) {
 	t.Setenv("DORA_HOME", "relative")
 
