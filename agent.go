@@ -6,11 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/lgxz/dora/imageutil"
 )
 
 const defaultMaxRounds = 256
@@ -58,11 +55,13 @@ type Agent struct {
 type AgentConfig struct {
 	MaxRounds int
 	// MaxHistoryRounds bounds the number of recent rounds sent to the model
-	// each iteration. Zero disables compaction and sends the full history.
-	MaxHistoryRounds int
+	// each iteration. Nil uses the default; zero disables compaction and sends
+	// the full history.
+	MaxHistoryRounds *int
 	// ContextWindow bounds the total text budget (in bytes) for the messages
-	// sent to the model. Zero disables budget-based compaction.
-	ContextWindow int
+	// sent to the model. Nil uses the default and configured values must be
+	// positive.
+	ContextWindow *int
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -78,23 +77,23 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if cfg.MaxRounds < 0 {
 		return nil, errors.New("dora: MaxRounds cannot be negative")
 	}
-	if cfg.MaxHistoryRounds < 0 {
+	if cfg.MaxHistoryRounds != nil && *cfg.MaxHistoryRounds < 0 {
 		return nil, errors.New("dora: MaxHistoryRounds cannot be negative")
 	}
-	if cfg.ContextWindow < 0 {
-		return nil, errors.New("dora: ContextWindow cannot be negative")
+	if cfg.ContextWindow != nil && *cfg.ContextWindow <= 0 {
+		return nil, errors.New("dora: ContextWindow must be positive")
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
 	}
-	maxHistoryRounds := cfg.MaxHistoryRounds
-	if maxHistoryRounds == 0 {
-		maxHistoryRounds = defaultMaxHistoryRounds
+	maxHistoryRounds := defaultMaxHistoryRounds
+	if cfg.MaxHistoryRounds != nil {
+		maxHistoryRounds = *cfg.MaxHistoryRounds
 	}
-	contextWindow := cfg.ContextWindow
-	if contextWindow == 0 {
-		contextWindow = defaultContextWindow
+	contextWindow := defaultContextWindow
+	if cfg.ContextWindow != nil {
+		contextWindow = *cfg.ContextWindow
 	}
 
 	a := &Agent{
@@ -201,8 +200,8 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 		// collected by index. Observer events are emitted serially by the main
 		// goroutine after all goroutines finish, so the progress renderer's
 		// non-concurrent map is never written concurrently.
-		type toolResult struct {
-			output string
+		type toolExecution struct {
+			result ToolResult
 			err    error
 			// startedAt records the real time the tool began executing, so the
 			// progress renderer can report an accurate duration even though the
@@ -212,7 +211,7 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 			// the main goroutine can emit the dedicated recovery message.
 			invalidJSON bool
 		}
-		results := make([]toolResult, len(response.ToolCalls))
+		results := make([]toolExecution, len(response.ToolCalls))
 		var wg sync.WaitGroup
 		for i, call := range response.ToolCalls {
 			wg.Add(1)
@@ -229,12 +228,12 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 					return
 				}
 				results[i].startedAt = time.Now()
-				output, err := tool.Execute(ctx, cloneBytes(call.Input))
+				result, err := tool.Execute(ctx, cloneBytes(call.Input))
 				if err != nil {
 					results[i].err = fmt.Errorf("execute tool %q: %w", call.Name, err)
 					return
 				}
-				results[i].output = output
+				results[i].result = result
 			}(i, call)
 		}
 		wg.Wait()
@@ -258,19 +257,11 @@ func (a *Agent) RunStateObserved(ctx context.Context, state State, observer Obse
 				continue
 			}
 
-			paths, notes := imageutil.ParseTags(result.output)
-			images := make([]Image, 0, len(paths))
-			for _, path := range paths {
-				images = append(images, Image{Path: path})
-			}
 			toolMessage := Message{
 				Role:       RoleTool,
-				Content:    result.output,
+				Content:    result.result.Content,
 				ToolCallID: call.ID,
-				Images:     images,
-			}
-			if len(notes) > 0 {
-				toolMessage.Content += "\n\n" + strings.Join(notes, "\n")
+				Images:     cloneImages(result.result.Images),
 			}
 			history = append(history, toolMessage)
 			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})

@@ -13,6 +13,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
+	"github.com/lgxz/dora/tool/internal/imageoutput"
 )
 
 const (
@@ -112,10 +113,10 @@ func (t *Tool) Spec() dora.ToolSpec {
 
 // Execute implements dora.Tool. Command failures are returned as structured
 // output so the model can inspect stderr and decide how to proceed.
-func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeInput(t.name, raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 
 	// Background mode: wait up to wait_seconds, then adopt as a background job.
@@ -136,7 +137,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 
 	runErr := command.Run()
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 
 	result := commandResult{
@@ -154,22 +155,22 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	default:
 		var exitError *exec.ExitError
 		if !errors.As(runErr, &exitError) {
-			return "", fmt.Errorf("%s: execute command: %w", t.name, runErr)
+			return dora.ToolResult{}, fmt.Errorf("%s: execute command: %w", t.name, runErr)
 		}
 		result.ExitCode = exitError.ExitCode()
 	}
 
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("%s: encode result: %w", t.name, err)
+		return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
 	}
-	return string(encoded), nil
+	return t.result(string(encoded)), nil
 }
 
 // executeWithBackground waits up to wait_seconds for the command to finish. If
 // it finishes in time, the result is returned. If not, the running process is
 // adopted as a background job (not restarted) and a job_id is returned.
-func (t *Tool) executeWithBackground(ctx context.Context, input input) (string, error) {
+func (t *Tool) executeWithBackground(ctx context.Context, input input) (dora.ToolResult, error) {
 	waitDuration := time.Duration(*input.WaitSeconds) * time.Second
 
 	// Use an independent context for the process so the foreground wait
@@ -185,7 +186,7 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input) (string, 
 	// path or in the Adopt goroutine (never both).
 	if err := cmd.Start(); err != nil {
 		procCancel()
-		return "", fmt.Errorf("%s: start command: %w", t.name, err)
+		return dora.ToolResult{}, fmt.Errorf("%s: start command: %w", t.name, err)
 	}
 
 	done := make(chan error, 1)
@@ -206,24 +207,31 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input) (string, 
 		default:
 			var exitError *exec.ExitError
 			if !errors.As(runErr, &exitError) {
-				return "", fmt.Errorf("%s: execute command: %w", t.name, runErr)
+				return dora.ToolResult{}, fmt.Errorf("%s: execute command: %w", t.name, runErr)
 			}
 			result.ExitCode = exitError.ExitCode()
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil {
-			return "", fmt.Errorf("%s: encode result: %w", t.name, err)
+			return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
 		}
-		return string(encoded), nil
+		return t.result(string(encoded)), nil
 
 	case <-time.After(waitDuration):
 		// Transition to background: adopt the running process, do not restart.
 		// The Wait() goroutine above fills `done`; Adopt reaps it.
 		j := t.jobManager.Adopt(cmd, procCancel, input.Command, out, done)
 		stdout, stderr := out.Drain()
-		return fmt.Sprintf(`{"job_id": %q, "status": "running", "stdout": %q, "stderr": %q, "message": "Command did not finish within %s. It is now running in the background. Use the job tool to check status."}`,
-			j.ID, stdout, stderr, waitDuration), nil
+		return t.result(fmt.Sprintf(`{"job_id": %q, "status": "running", "stdout": %q, "stderr": %q, "message": "Command did not finish within %s. It is now running in the background. Use the job tool to check status."}`,
+			j.ID, stdout, stderr, waitDuration)), nil
 	}
+}
+
+func (t *Tool) result(content string) dora.ToolResult {
+	if t.vision {
+		return imageoutput.Parse(content)
+	}
+	return dora.ToolResult{Content: content}
 }
 
 type input struct {

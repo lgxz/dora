@@ -24,7 +24,8 @@ func TestGlobTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.py","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.py","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,8 @@ func TestGlobToolRecursive(t *testing.T) {
 	}
 	tool := NewGlobTool()
 	// **/*.py should match files in all subdirectories.
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +72,8 @@ func TestGlobToolIgnoreDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.py","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,8 @@ func TestGlobToolNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +147,8 @@ func TestGlobMaxResults(t *testing.T) {
 		}
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`","max_results":3}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`","max_results":3}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +167,8 @@ func TestGlobMaxResultsDefault(t *testing.T) {
 		}
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +236,8 @@ func TestGlobDefaultPath(t *testing.T) {
 	tool := NewGlobTool()
 	// glob.go itself exists in the package directory, so searching "." (the
 	// test working directory = the package dir) must find it.
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"glob.go"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"glob.go"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +259,8 @@ func TestGlobCharacterClass(t *testing.T) {
 		}
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"[ab].log","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"[ab].log","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +281,8 @@ func TestGlobBraceExpansion(t *testing.T) {
 		}
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"config.{yaml,yml}","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"config.{yaml,yml}","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +305,8 @@ func TestGlobSingleStarDoesNotCrossDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"*.go","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +333,8 @@ func TestGlobIgnoreDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.go","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"**/*.go","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +356,8 @@ func TestGlobHiddenDotFile(t *testing.T) {
 		}
 	}
 	tool := NewGlobTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":".env","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":".env","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}

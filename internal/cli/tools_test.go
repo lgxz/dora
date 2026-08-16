@@ -97,8 +97,8 @@ func (tool namedTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{Name: string(tool), InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (namedTool) Execute(context.Context, json.RawMessage) (string, error) {
-	return "", nil
+func (namedTool) Execute(context.Context, json.RawMessage) (dora.ToolResult, error) {
+	return dora.ToolResult{}, nil
 }
 
 func toolNames(tools []dora.Tool) string {

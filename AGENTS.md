@@ -35,12 +35,19 @@ implementations are wired together.
 
 ### Model providers
 
+- `model/provider/`: shared HTTP transport, retry, SSE, and error
+  infrastructure used by all model adapters.
 - `model/openai/`: OpenAI-compatible Chat Completions adapter.
 - `model/openairesponses/`: streaming Responses API adapter and opaque
   continuation handling.
+- `model/registry/`: assembles a `dora.Model` from a catalog of providers and
+  models. Selects an explicit or sole provider+model,
+  translates the neutral "thinking" control into each adapter's wire format,
+  and instantiates the concrete adapter. This is the model composition point;
+  `internal/cli` delegates model assembly to it.
 
-Both packages translate their wire protocol to and from the types in the root
-`dora` package.
+All four packages translate their wire protocol to and from the types in the
+root `dora` package.
 
 ### Tools and skills
 

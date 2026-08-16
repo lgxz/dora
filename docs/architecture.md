@@ -24,12 +24,15 @@ flowchart TD
     CLI --> Update["internal/update<br/>standalone self-update"]
     CLI --> Progress["internal/progress<br/>terminal progress"]
     CLI --> Core["dora<br/>Agent core"]
-    CLI --> OpenAI["model/openai<br/>Chat Completions"]
-    CLI --> Responses["model/openairesponses<br/>Responses API"]
+    CLI --> Registry["model/registry<br/>provider/profile assembly"]
     CLI --> Skill["skill<br/>Skill tool"]
     CLI --> Bash["tool/bash<br/>Bash tool"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell tool"]
 
+    Registry --> OpenAI["model/openai<br/>Chat Completions"]
+    Registry --> Responses["model/openairesponses<br/>Responses API"]
+    OpenAI --> Provider["model/provider<br/>shared HTTP/SSE transport"]
+    Responses --> Provider
     Bash --> CommandExec["tool/internal/commandexec<br/>command execution kernel"]
     PowerShell --> CommandExec
 
@@ -48,7 +51,7 @@ Key constraints on dependency direction:
 - The root package `dora` does not import any concrete implementation package within the project.
 - Model adapters and tool packages depend on the interfaces and data structures in `dora`.
 - `internal/*` serves only the Dora application and cannot be imported directly from outside the module.
-- `internal/cli` knows all concrete implementations and is currently the only composition root.
+- `internal/cli` knows all concrete implementations and is the composition root; model assembly is delegated to `model/registry`.
 
 ## Directories and Modules
 
@@ -58,16 +61,20 @@ Key constraints on dependency direction:
 | `cmd/dora` | Process startup, signal handling, terminal capability detection, final error output | `main` |
 | `internal/cli` | Argument parsing, dependency assembly, session restore and save, input/output orchestration | `Run(context.Context, []string, IO)` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
+| `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves the unified `~/.dora` default paths on all platforms | `ConfigFile`, `SessionsDir`, `SkillsDir` |
 | `internal/session` | Persists named sessions, validates version and concurrent revision | `New`, `Store.Load`, `Store.Revision`, `Store.Save` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
+| `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
 | `model/openai` | OpenAI-compatible Chat Completions SSE protocol adapter | `New`, `Client.GenerateStream` |
 | `model/openairesponses` | Responses API, SSE stream, and provider continuation adapter | `New`, `Client.GenerateStream` |
+| `model/registry` | Assembles a `dora.Model` from a provider/profile catalog; selects, translates thinking, instantiates adapters | `New`, `Registry.Model`, `Registry.Selection` |
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory and under timeout and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, timeout, cancellation, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/internal/imageoutput` | Converts the command tools' `@@path@@` convention into structured image results | `Parse` |
 
 ## Core Interfaces
 
@@ -93,11 +100,16 @@ type StreamingModel interface {
 ```go
 type Tool interface {
     Spec() ToolSpec
-    Execute(context.Context, json.RawMessage) (string, error)
+    Execute(context.Context, json.RawMessage) (ToolResult, error)
+}
+
+type ToolResult struct {
+    Content string
+    Images  []Image
 }
 ```
 
-`Spec` exposes the name, description, and JSON Schema to the model. `Execute` receives only the model-generated JSON arguments and returns a text result. The core Agent does not know the concrete type of a tool.
+`Spec` exposes the name, description, and JSON Schema to the model. `Execute` receives only the model-generated JSON arguments and returns content plus optional images for the resulting tool message. The core Agent does not know the concrete type of a tool and does not parse tool-specific output conventions or access image files.
 
 Within the same Agent, tool names must be non-empty and unique. Tool definitions are copied when the Agent is constructed, preventing the caller from later modifying their JSON Schemas.
 
@@ -153,7 +165,7 @@ sequenceDiagram
             loop execute each in returned order
                 A->>O: tool started
                 A->>T: Execute(input)
-                T-->>A: output
+                T-->>A: ToolResult(content, images)
                 A->>O: tool message
             end
         end
@@ -164,6 +176,7 @@ Current execution semantics:
 
 - The Agent is immutable; run history is kept in local variables.
 - Input messages, tool calls, and output state are all defensively copied.
+- Tool packages translate tool-specific output conventions into `ToolResult`; the Agent only forwards its content and images into the provider-neutral message history.
 - When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
@@ -177,9 +190,9 @@ Current execution semantics:
 1. Parse arguments; `--version` and `-update` complete and exit before reading configuration or the prompt.
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
-4. Apply one-shot overrides such as `--max-rounds`; provider-scoped environment variables (for example `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`) override the resolved provider's model name and base URL after provider selection.
-5. If a session is specified, read the snapshot and validate the provider, API, model, and base URL.
-6. Create the concrete model adapter based on `model.api`; the provider is responsible for supplying provider defaults.
+4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry.
+5. If a session is specified, read the snapshot and validate the provider, profile, API, model, and base URL.
+6. Create the concrete model adapter based on the selected profile's effective API and model.
 7. Discover skills and create the available tools according to configuration.
 8. Construct a stateless `dora.Agent`.
 9. Compose `State` from the historical messages and the current user message, then run the Agent.
@@ -249,13 +262,13 @@ tool-call validity. Invalid arguments are fed back to the model as a recoverable
 The snapshot contains:
 
 - the format version and a monotonically increasing revision;
-- the backend identity composed of provider, API, model, and base URL;
+- the backend identity composed of provider, profile, API, model, and base URL;
 - the provider-neutral complete messages;
 - the provider-specific continuation.
 
 Saving uses a same-directory temporary file, `fsync`, and an atomic rename, with directory permissions `0700` and file permissions `0600`. `Save` uses the expected revision to detect concurrent overwrites but does not provide cross-process locking; when two processes operate on the same named session simultaneously, one of them will eventually receive a conflict error.
 
-Normal resumption requires the backend to match exactly. `--fresh` ignores the old content and replaces the file with the new format and backend after the task succeeds. Session v1 does not support resumption, but it can be explicitly replaced via `--fresh`.
+Normal resumption requires the backend to match exactly. `--fresh` ignores the old content and replaces the file with the new format and backend after the task succeeds. Older session formats do not support resumption, but they can be explicitly replaced via `--fresh`.
 
 ## Skills
 
@@ -294,7 +307,7 @@ Bash and PowerShell remain separate public tools with separate shell-launch poli
 
 ## Configuration and Paths
 
-`internal/config` provides built-in provider presets and uses strict YAML decoding to override defaults: unknown fields, multiple documents, invalid providers, invalid API types, and negative limits all report errors. When no provider is specified, the configuration layer directly reuses the API key environment variable mapping from the preset: if only one environment variable is non-empty, the corresponding provider is selected; if several are non-empty, an explicit selection is required; if all are empty, it falls back to DeepSeek. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. The `openai`, `deepseek`, and `trust` providers supply their own endpoint, model, and API key environment variable defaults; explicit fields override the defaults. The API key can be configured directly or read at runtime from a specified environment variable, with a non-empty direct configuration taking precedence. When the default configuration path does not exist, the CLI uses the built-in configuration directly; an explicit `--config` does not silently fall back.
+`internal/config` uses strict YAML decoding for a provider/model-profile catalog: unknown fields, multiple documents, duplicate names, invalid API types, and negative limits all report errors. `builtin_providers.yaml` is embedded into the binary and defines the built-in `deepseek` and `trust` catalogs, including base URLs and default profiles. Within `providers[].models`, `name` uniquely identifies a profile while `model` is the provider-facing model identifier; `model` defaults to `name`, and different profiles may target the same model. A profile's positive `context_window` approximates its intrinsic model context capacity in message-content bytes and is passed to the Agent's history compactor; omission defaults to 1 MiB. Compaction policy remains independent, and `agent.max_history_rounds: 0` disables it. Explicit user catalog fields override connection defaults, while user model lists replace rather than merge with built-in models. Each provider's API key environment variable is derived by uppercasing its name, replacing non-alphanumeric characters with underscores, and appending `_API_KEY`; a non-empty process value overrides the config-local `env` fallback, and normalization collisions or unknown config env names are rejected. These fallbacks never mutate the process environment. `DORA_MODEL=provider/profile` atomically overrides the client selector and splits only at the first slash, allowing slashes in profile names. Without an explicit selector, a sole keyed provider is selected automatically; multiple keyed providers are ambiguous, and the first profile is the provider default. Only the no-config, no-key `Default()` path injects the DeepSeek selector. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
 
 `internal/paths` uses a unified `~/.dora` layout on all operating systems:
 
@@ -310,7 +323,7 @@ The `DORA_HOME` environment variable can override the home directory and must be
 
 ### Adding a model provider
 
-1. An OpenAI-protocol-compatible provider only needs to register the provider and its default endpoint, model, and API key environment variable in a configuration preset.
+1. A common OpenAI-protocol-compatible provider can register built-in connection defaults; models remain explicit catalog entries.
 2. A new protocol requires implementing `dora.StreamingModel` in a separate `model/<protocol>` package.
 3. Encapsulate protocol-specific state in `Continuation`; do not leak it into the Agent core.
 4. Create the implementation in the composition logic of `internal/cli`.

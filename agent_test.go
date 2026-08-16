@@ -47,12 +47,14 @@ func (f streamingModelFunc) GenerateStream(ctx context.Context, request Request,
 type stubTool struct {
 	spec    ToolSpec
 	execute func(context.Context, json.RawMessage) (string, error)
+	images  []Image
 }
 
 func (t stubTool) Spec() ToolSpec { return t.spec }
 
-func (t stubTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
-	return t.execute(ctx, input)
+func (t stubTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+	content, err := t.execute(ctx, input)
+	return ToolResult{Content: content, Images: t.images}, err
 }
 
 func TestRunReturnsFinalResponse(t *testing.T) {
@@ -82,6 +84,44 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result.Messages, want) {
 		t.Fatalf("messages = %#v, want %#v", result.Messages, want)
+	}
+}
+
+func TestAgentConfigContextWindowMustBePositive(t *testing.T) {
+	model := modelFunc(func(context.Context, Request) (Response, error) {
+		return Response{Content: "done"}, nil
+	})
+
+	withDefault, err := NewWithConfig(model, AgentConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withDefault.contextWindow != defaultContextWindow {
+		t.Fatalf("default context window = %d", withDefault.contextWindow)
+	}
+
+	zero := 0
+	if _, err := NewWithConfig(model, AgentConfig{ContextWindow: &zero}); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("zero context window error = %v", err)
+	}
+
+	negative := -1
+	if _, err := NewWithConfig(model, AgentConfig{ContextWindow: &negative}); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("negative context window error = %v", err)
+	}
+}
+
+func TestAgentConfigMaxHistoryRoundsExplicitZeroDisablesCompaction(t *testing.T) {
+	model := modelFunc(func(context.Context, Request) (Response, error) {
+		return Response{Content: "done"}, nil
+	})
+	zero := 0
+	agent, err := NewWithConfig(model, AgentConfig{MaxHistoryRounds: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.maxHistoryRounds != 0 {
+		t.Fatalf("max history rounds = %d", agent.maxHistoryRounds)
 	}
 }
 
@@ -292,8 +332,8 @@ func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 				t.Fatalf("job tool should be exposed like other tools")
 			}
 			return Response{ToolCalls: []ToolCall{{
-				ID:   "call-1",
-				Name: "job",
+				ID:    "call-1",
+				Name:  "job",
 				Input: json.RawMessage(`{"action":"list"}`),
 			}}}, nil
 		case 2:
@@ -816,7 +856,7 @@ func TestRunRetriesRateLimitUpToMaxRateLimitAttempts(t *testing.T) {
 	}
 }
 
-func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
+func TestRunAttachesToolResultImagesToToolMessage(t *testing.T) {
 	path := writeTempPNG(t)
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
@@ -846,7 +886,8 @@ func TestRunAttachesParsedImagesToToolMessage(t *testing.T) {
 		}
 	})
 	tool := stubTool{
-		spec: ToolSpec{Name: "snap"},
+		spec:   ToolSpec{Name: "snap"},
+		images: []Image{{Path: path}},
 		execute: func(context.Context, json.RawMessage) (string, error) {
 			return "captured @@" + path + "@@", nil
 		},
@@ -900,10 +941,7 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 	}
 }
 
-func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
-	// Command tools wrap their output in a JSON object whose stdout field
-	// carries the actual output. The @@path@@ tag survives JSON encoding
-	// unchanged, so it is parsed directly from the JSON string.
+func TestRunForwardsStructuredImageWithCommandJSONOutput(t *testing.T) {
 	path := writeTempPNG(t)
 	jsonOutput := fmt.Sprintf(`{"exit_code":0,"stdout":"@@%s@@\n","stderr":"","timed_out":false,"truncated":false}`, path)
 	var calls int
@@ -927,7 +965,8 @@ func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
 		}
 	})
 	tool := stubTool{
-		spec: ToolSpec{Name: "snap"},
+		spec:   ToolSpec{Name: "snap"},
+		images: []Image{{Path: path}},
 		execute: func(context.Context, json.RawMessage) (string, error) {
 			return jsonOutput, nil
 		},
@@ -945,10 +984,9 @@ func TestRunParsesImageTagInsideCommandJSONStdout(t *testing.T) {
 	}
 }
 
-func TestRunReportsInvalidImagePathToModel(t *testing.T) {
-	// A @@path@@ tag pointing at a missing file must not attach an image and
-	// must surface a note so the model can correct the path.
+func TestRunDoesNotInterpretImageTags(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.png")
+	content := "captured @@" + missing + "@@"
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
@@ -960,7 +998,7 @@ func TestRunReportsInvalidImagePathToModel(t *testing.T) {
 			if len(toolMessage.Images) != 0 {
 				t.Fatalf("images = %#v", toolMessage.Images)
 			}
-			if !strings.Contains(toolMessage.Content, "could not be attached") {
+			if toolMessage.Content != content {
 				t.Fatalf("content = %q", toolMessage.Content)
 			}
 			return Response{Content: "seen"}, nil
@@ -972,7 +1010,7 @@ func TestRunReportsInvalidImagePathToModel(t *testing.T) {
 	tool := stubTool{
 		spec: ToolSpec{Name: "snap"},
 		execute: func(context.Context, json.RawMessage) (string, error) {
-			return "captured @@" + missing + "@@", nil
+			return content, nil
 		},
 	}
 	agent, err := New(model, tool)
@@ -990,9 +1028,9 @@ func TestRunReportsInvalidImagePathToModel(t *testing.T) {
 
 func TestRunDoesNotMutateCallerImages(t *testing.T) {
 	input := []Message{{
-		Role:   RoleUser,
+		Role:    RoleUser,
 		Content: "look",
-		Images: []Image{{Path: "/tmp/a.png"}},
+		Images:  []Image{{Path: "/tmp/a.png"}},
 	}}
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		request.Messages[0].Images[0].Path = "changed"

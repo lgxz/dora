@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,9 @@ import (
 func TestExecuteReturnsCommandOutput(t *testing.T) {
 	tool := newTestTool(t, Config{})
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"hello"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"hello"}`))
+
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +48,42 @@ func TestSpecOmitsImageNoteWithoutVision(t *testing.T) {
 	}
 }
 
+func TestExecuteReturnsStructuredImagesWhenVisionEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shot.png")
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestTool(t, Config{Vision: true})
+	result, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"command":%q}`, "image:"+path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Images) != 1 || result.Images[0].Path != path {
+		t.Fatalf("images = %#v", result.Images)
+	}
+	decoded := decodeResult(t, result.Content)
+	if decoded.Stdout != "@@"+path+"@@" {
+		t.Fatalf("stdout = %q", decoded.Stdout)
+	}
+}
+
+func TestExecuteDoesNotParseImagesWithoutVision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shot.png")
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestTool(t, Config{})
+	result, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"command":%q}`, "image:"+path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Images) != 0 {
+		t.Fatalf("images = %#v", result.Images)
+	}
+}
+
 func TestNewRejectsInvalidLimits(t *testing.T) {
 	for _, cfg := range []Config{
 		{Timeout: -time.Second},
@@ -61,7 +100,9 @@ func TestNewRejectsInvalidLimits(t *testing.T) {
 func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 	tool := newTestTool(t, Config{})
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"fail"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"fail"}`))
+
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +115,9 @@ func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 func TestExecuteTimesOut(t *testing.T) {
 	tool := newTestTool(t, Config{Timeout: 20 * time.Millisecond})
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep"}`))
+
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +132,8 @@ func TestExecuteTransitionsToBackground(t *testing.T) {
 	tool := newTestTool(t, Config{JobManager: jm})
 
 	// "long-sleep" sleeps 5s; wait_seconds=1 should transition to background.
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep","wait_seconds":1}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep","wait_seconds":1}`))
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +167,8 @@ func TestExecuteForegroundWithWaitCompletes(t *testing.T) {
 	tool := newTestTool(t, Config{JobManager: jm})
 
 	// "hello" finishes immediately; wait_seconds should return the result.
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"hello","wait_seconds":5}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"hello","wait_seconds":5}`))
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +196,9 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 func TestExecuteTruncatesOutput(t *testing.T) {
 	tool := newTestTool(t, Config{MaxOutputBytes: 4})
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"output"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"output"}`))
+
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +259,13 @@ func TestCommandHelper(t *testing.T) {
 		return
 	}
 
-	switch os.Args[separator+1] {
+	command := os.Args[separator+1]
+	if strings.HasPrefix(command, "image:") {
+		fmt.Print("@@" + strings.TrimPrefix(command, "image:") + "@@")
+		os.Exit(0)
+	}
+
+	switch command {
 	case "hello":
 		fmt.Print("hello")
 	case "fail":

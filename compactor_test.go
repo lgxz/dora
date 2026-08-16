@@ -120,7 +120,8 @@ func TestAgentRequestMessagesUsesCompaction(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	agent, err := NewWithConfig(model, AgentConfig{MaxHistoryRounds: 1}, tool)
+	keepRounds := 1
+	agent, err := NewWithConfig(model, AgentConfig{MaxHistoryRounds: &keepRounds}, tool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestCompactMessagesBudgetExhaustedKeepsCurrentOnly(t *testing.T) {
 		t.Fatalf("got %#v", got)
 	}
 }
-	func TestCompactRoundCurrentRoundUnchanged(t *testing.T) {
+func TestCompactRoundCurrentRoundUnchanged(t *testing.T) {
 	// The current (last) round is appended unchanged by compactMessages.
 	history := []Message{
 		{Role: RoleUser, Content: "u1"},

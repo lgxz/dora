@@ -52,10 +52,10 @@ func (t *GrepTool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeGrepInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 
 	// Prefer ripgrep (respects .gitignore, skips hidden/binary files). Fall
@@ -65,9 +65,11 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		t.rgPath, _ = exec.LookPath("rg")
 	})
 	if t.rgPath != "" {
-		return t.executeWithRG(ctx, input)
+		content, err := t.executeWithRG(ctx, input)
+		return dora.ToolResult{Content: content}, err
 	}
-	return t.executeFallback(ctx, input)
+	content, err := t.executeFallback(ctx, input)
+	return dora.ToolResult{Content: content}, err
 }
 
 // executeWithRG searches using ripgrep.

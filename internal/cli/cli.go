@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -21,8 +20,7 @@ import (
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/internal/session"
 	"github.com/lgxz/dora/internal/update"
-	"github.com/lgxz/dora/model/openai"
-	"github.com/lgxz/dora/model/openairesponses"
+	"github.com/lgxz/dora/model/registry"
 	"github.com/lgxz/dora/skill"
 	jobtool "github.com/lgxz/dora/tool/job"
 )
@@ -58,7 +56,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	flags.SetOutput(streams.Stderr)
 	configPath := flags.String("config", "", "path to YAML configuration")
 	thinkingFlag := flags.String("thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
-	visionFlag := flags.Bool("vision", false, "enable image understanding (requires a vision-capable model)")
 	var maxRounds int
 	var maxRoundsSet bool
 	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
@@ -84,8 +81,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	showVersion := flags.Bool("version", false, "print version information")
 	performUpdate := flags.Bool("update", false, "update a standalone installation")
 	forceUpdate := flags.Bool("force", false, "force update, bypassing the standalone-install marker and version checks")
-	var imagePaths stringListFlag
-	flags.Var(&imagePaths, "image", "attach an image file to the prompt (repeatable)")
 	noSkills := flags.Bool("no-skills", false, "disable all skills")
 	var quiet bool
 	flags.BoolVar(&quiet, "quiet", false, "hide run progress")
@@ -105,12 +100,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		return err
 	}
-	visionSet := false
-	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "vision" {
-			visionSet = true
-		}
-	})
 	if *showVersion {
 		version := streams.Version
 		if version == "" {
@@ -170,6 +159,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	reg, err := registry.New(registryFromConfig(cfg, streams.HTTPClient))
+	if err != nil {
+		return err
+	}
 	if *thinkingFlag != "" {
 		switch *thinkingFlag {
 		case "off", "minimal", "low", "medium", "high":
@@ -177,22 +170,21 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high"`)
 		}
 		value := *thinkingFlag
-		cfg.Model.Thinking = &value
-	}
-	if visionSet {
-		cfg.Model.Vision = *visionFlag
+		reg.SetThinking(&value)
 	}
 	if maxRoundsSet {
 		cfg.Agent.MaxRounds = maxRounds
 	}
 	if maxHistoryRoundsSet {
-		cfg.Agent.MaxHistoryRounds = maxHistoryRounds
+		cfg.Agent.MaxHistoryRounds = &maxHistoryRounds
 	}
+	sel := reg.Selection()
 	backend := session.Backend{
-		Provider: cfg.Model.Provider,
-		API:      cfg.Model.API,
-		Model:    cfg.Model.Name,
-		BaseURL:  strings.TrimRight(cfg.Model.BaseURL, "/"),
+		Provider: sel.Provider,
+		Profile:  sel.Profile,
+		API:      sel.API,
+		Model:    sel.Model,
+		BaseURL:  sel.BaseURL,
 	}
 
 	var sessionStore *session.Store
@@ -223,9 +215,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		if snapshot.Revision > 0 && !*fresh && snapshot.Backend != backend {
 			return fmt.Errorf(
-				"session %q belongs to %s %s model %q at %s; use --fresh to replace it",
+				"session %q belongs to %s profile %q (%s model %q at %s); use --fresh to replace it",
 				sessionName,
 				snapshot.Backend.Provider,
+				snapshot.Backend.Profile,
 				snapshot.Backend.API,
 				snapshot.Backend.Model,
 				snapshot.Backend.BaseURL,
@@ -233,38 +226,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 
-	var model dora.Model
-	switch cfg.Model.API {
-	case "chat_completions":
-		reasoningEffort, thinking := mapChatThinking(cfg.Model)
-		model, err = openai.New(openai.Config{
-			BaseURL:           cfg.Model.BaseURL,
-			APIKey:            cfg.Model.APIKey,
-			Model:             cfg.Model.Name,
-			HTTPClient:        streams.HTTPClient,
-			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
-			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
-			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
-			MaxTokens:         cfg.Model.MaxTokens,
-			Temperature:       cfg.Model.Temperature,
-			ReasoningEffort:   reasoningEffort,
-			Thinking:          thinking,
-		})
-	case "responses":
-		reasoning := mapResponsesThinking(cfg.Model)
-		model, err = openairesponses.New(openairesponses.Config{
-			BaseURL:           cfg.Model.BaseURL,
-			APIKey:            cfg.Model.APIKey,
-			Model:             cfg.Model.Name,
-			HTTPClient:        streams.HTTPClient,
-			ConnectTimeout:    time.Duration(cfg.Model.ConnectTimeoutSeconds) * time.Second,
-			StreamIdleTimeout: time.Duration(cfg.Model.StreamIdleTimeoutSeconds) * time.Second,
-			Timeout:           time.Duration(cfg.Model.TimeoutSeconds) * time.Second,
-			MaxTokens:         cfg.Model.MaxTokens,
-			Temperature:       cfg.Model.Temperature,
-			Reasoning:         reasoning,
-		})
-	}
+	model, err := reg.Model()
 	if err != nil {
 		return err
 	}
@@ -289,14 +251,14 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 		}
 	}
-	commandTools, err := buildCommandTools(cfg.Tools, cfg.Model.Vision, jobManager)
+	commandTools, err := buildCommandTools(cfg.Tools, sel.Vision, jobManager)
 	if err != nil {
 		return err
 	}
 	tools = append(tools, commandTools...)
 
 	// The job tool is a regular tool like the others.
-	jobTool := jobtool.New(jobManager)
+	jobTool := jobtool.New(jobManager, sel.Vision)
 	tools = append(tools, jobTool)
 
 	// File tools (read/write/edit) for precise file operations.
@@ -305,7 +267,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds:        cfg.Agent.MaxRounds,
 		MaxHistoryRounds: cfg.Agent.MaxHistoryRounds,
-		ContextWindow:    cfg.Agent.ContextWindow,
+		ContextWindow:    sel.ContextWindow,
 	}, tools...)
 	if err != nil {
 		return err
@@ -317,13 +279,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		messages = append(messages, snapshot.Messages...)
 		continuation = snapshot.Continuation
 	}
-	if len(imagePaths) > 0 && !cfg.Model.Vision {
-		return errors.New("--image requires a vision-capable model; enable it with --vision or model.vision: true")
-	}
-	imageRefs := make([]dora.Image, 0, len(imagePaths))
-	for _, path := range imagePaths {
-		imageRefs = append(imageRefs, dora.Image{Path: path})
-	}
 	// Inject the system prompt (config override or built-in default) before
 	// the user prompt. When resuming a session, the snapshot already contains
 	// the system message, so only inject it for a fresh session.
@@ -334,7 +289,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		messages = append(messages, dora.Message{Role: dora.RoleSystem, Content: systemPrompt})
 	}
-	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt, Images: imageRefs})
+	messages = append(messages, dora.Message{Role: dora.RoleUser, Content: prompt})
 	state := dora.State{Messages: messages, Continuation: continuation}
 	var result dora.Result
 	var observer dora.Observer
@@ -394,46 +349,41 @@ func writeAnswer(streams IO, content string) error {
 	return err
 }
 
-// mapChatThinking maps the config model.thinking value onto the Chat
-// Completions reasoning_effort and thinking controls according to the provider
-// policy. Values a provider does not support are ignored (not sent).
-func mapChatThinking(model config.Model) (*string, *openai.ThinkingControl) {
-	if model.Thinking == nil {
-		return nil, nil
-	}
-	value := *model.Thinking
-	if value == "off" {
-		switch model.Provider {
-		case "deepseek":
-			return nil, openai.NewThinkingControl("disabled")
-		default:
-			// openai/trust do not support off on Chat Completions; ignore.
-			return nil, nil
+// registryFromConfig converts the resolved provider catalog into the
+// registry's neutral input types.
+func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Config {
+	providers := make([]registry.ProviderConfig, len(cfg.Providers))
+	for i, p := range cfg.Providers {
+		models := make([]registry.ModelConfig, len(p.Models))
+		for j, m := range p.Models {
+			models[j] = registry.ModelConfig{
+				Name:          m.Name,
+				Model:         m.Model,
+				API:           m.API,
+				Thinking:      m.Thinking,
+				MaxTokens:     m.MaxTokens,
+				ContextWindow: m.ContextWindow,
+				Temperature:   m.Temperature,
+				Vision:        m.Vision,
+			}
+		}
+		providers[i] = registry.ProviderConfig{
+			Name:                     p.Name,
+			BaseURL:                  p.BaseURL,
+			APIKey:                   p.APIKey,
+			API:                      p.API,
+			TimeoutSeconds:           p.TimeoutSeconds,
+			ConnectTimeoutSeconds:    p.ConnectTimeoutSeconds,
+			StreamIdleTimeoutSeconds: p.StreamIdleTimeoutSeconds,
+			HTTPClient:               httpClient,
+			Models:                   models,
 		}
 	}
-	if value == "minimal" && model.Provider == "deepseek" {
-		// DeepSeek does not support minimal on Chat Completions; ignore.
-		return nil, nil
+	return registry.Config{
+		Providers:        providers,
+		SelectedProvider: cfg.Client.Provider,
+		SelectedProfile:  cfg.Client.Profile,
 	}
-	return &value, nil
-}
-
-// mapResponsesThinking maps the config model.thinking value onto the Responses
-// API reasoning control according to the provider policy. Values a provider
-// does not support are ignored (not sent).
-func mapResponsesThinking(model config.Model) *openairesponses.ReasoningControl {
-	if model.Thinking == nil {
-		return nil
-	}
-	value := *model.Thinking
-	if value == "off" {
-		return openairesponses.NewReasoningControl("none")
-	}
-	if value == "minimal" && model.Provider == "deepseek" {
-		// DeepSeek does not support minimal on the Responses API; ignore.
-		return nil
-	}
-	return openairesponses.NewReasoningControl(value)
 }
 
 func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {
@@ -458,17 +408,6 @@ func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {
 			return false, err
 		}
 	}
-}
-
-type stringListFlag []string
-
-func (values *stringListFlag) Set(value string) error {
-	*values = append(*values, value)
-	return nil
-}
-
-func (values *stringListFlag) String() string {
-	return strings.Join(*values, ",")
 }
 
 // configuredSkillDirectories resolves the skill parent directories to load.

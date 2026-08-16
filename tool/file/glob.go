@@ -44,10 +44,10 @@ func (t *GlobTool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeGlobInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 
 	root := input.Path
@@ -56,10 +56,10 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return "", fmt.Errorf("glob: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("glob: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("glob: %s is not a directory", root)
+		return dora.ToolResult{}, fmt.Errorf("glob: %s is not a directory", root)
 	}
 
 	maxResults := defaultGlobMaxResults
@@ -101,12 +101,12 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("glob: walk: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("glob: walk: %w", err)
 	}
 	if count == 0 {
-		return "(no matches)\n", nil
+		return dora.ToolResult{Content: "(no matches)\n"}, nil
 	}
-	return sb.String(), nil
+	return dora.ToolResult{Content: sb.String()}, nil
 }
 
 type globInput struct {

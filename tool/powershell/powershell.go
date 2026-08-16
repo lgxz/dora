@@ -73,9 +73,9 @@ func (t *Tool) Spec() dora.ToolSpec {
 
 // Execute implements dora.Tool. Command failures are returned as structured
 // output so the model can inspect stderr and decide how to proceed.
-func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	if t == nil {
-		return "", errors.New("powershell: tool is not initialized")
+		return dora.ToolResult{}, errors.New("powershell: tool is not initialized")
 	}
 	return t.core.Execute(ctx, raw)
 }

@@ -5,7 +5,7 @@
 
 `dora` 是一个小巧、模块化的 Go 语言 LLM Agent 内核。其核心是一个循环和两个接口：`Model` 和 `Tool`。
 
-无需配置文件：只需设置单个提供商的 API 密钥环境变量（OpenAI、DeepSeek 或 Trustoken），dora 便会自动选择该提供商并立即运行。
+使用内建 provider 时无需配置文件：设置所选 provider 的 API 密钥（例如 `DEEPSEEK_API_KEY`），并可通过 `DORA_MODEL=provider/profile` 选择 profile，即可立即运行。
 
 有关模块边界、依赖、接口和运行时流程，请参阅 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -111,20 +111,13 @@ make install
 
 ### API 密钥
 
-Dora 从专用的环境变量读取每个提供商的 API 密钥。下表列出了支持的提供商、它们的环境变量和默认模型：
-
-| 提供商 | API 密钥环境变量 | 默认模型 | 模型环境变量 | 基础 URL 环境变量 |
-| --- | --- | --- | --- | --- |
-| openai | `OPENAI_API_KEY` | `gpt-5` | `OPENAI_MODEL` | `OPENAI_BASE_URL` |
-| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `DEEPSEEK_MODEL` | `DEEPSEEK_BASE_URL` |
-| trust | `TRUST_API_KEY` | `auto` | `TRUST_MODEL` | `TRUST_BASE_URL` |
-
-为你要使用的提供商设置环境变量。命令因操作系统而异。
+Dora 根据每个 provider 名称派生 API 密钥环境变量：名称转为大写，非字母数字字符替换为 `_`，再追加 `_API_KEY`。例如 `deepseek`、`trust` 和 `open-router` 分别使用 `DEEPSEEK_API_KEY`、`TRUST_API_KEY` 和 `OPEN_ROUTER_API_KEY`。非空的真实进程环境变量会覆盖配置文件 `env` 下的同名值。配置值只作为 Dora 内部 fallback，不会导出给子进程。`DORA_MODEL=provider/profile` 同时选择 catalog 中的 provider 和 profile，并覆盖 `client.provider` 与 `client.profile`。它只按第一个 `/` 分割，因此 profile 部分本身可以包含 `/`。
 
 macOS / Linux，临时（仅当前终端）：
 
 ```sh
-export OPENAI_API_KEY="sk-..."
+export TRUST_API_KEY="sk-..."
+export DORA_MODEL="trust/deepseek-v4-flash"
 ```
 
 macOS / Linux，永久：将上面的 `export` 行追加到 `~/.zshrc`（zsh）或 `~/.bashrc`（bash），然后重新加载：
@@ -136,92 +129,102 @@ source ~/.zshrc
 Windows PowerShell，临时（仅当前会话）：
 
 ```powershell
-$env:OPENAI_API_KEY = "sk-..."
+$env:TRUST_API_KEY = "sk-..."
+$env:DORA_MODEL = "trust/deepseek-v4-flash"
 ```
 
 Windows PowerShell，永久（对当前用户持久生效）：
 
 ```powershell
-[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("TRUST_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("DORA_MODEL", "trust/deepseek-v4-flash", "User")
 ```
 
 Windows CMD，临时（仅当前会话）：
 
 ```cmd
-set OPENAI_API_KEY=sk-...
+set TRUST_API_KEY=sk-...
+set DORA_MODEL=trust/deepseek-v4-flash
 ```
 
-当你为多个提供商都设置了密钥时，请在 `~/.dora/config.yaml` 中显式指定 `model.provider`；否则 Dora 会报告歧义错误。只设置一个密钥可以让 Dora 自动选择该提供商。
-
-当只设置了一个受支持提供商的 API 密钥时，Dora 无需配置文件即可运行，并自动选择该提供商。例如，`DEEPSEEK_API_KEY` 选择 `deepseek`，`OPENAI_API_KEY` 选择 `openai`，`TRUST_API_KEY` 选择 `trust`。如果设置了多个提供商密钥，请显式配置 `model.provider`。如果都没有设置，Dora 保留 `deepseek` 作为回退，并报告缺少 `DEEPSEEK_API_KEY`。
+`DORA_MODEL` 的 provider 和 profile 两部分都不能为空。未设置或设置为空时，使用配置文件中的 `client` selector。两者都没有时，Dora 自动选择唯一具有非空 API key 的 provider；多个 provider 都有 key 时会报歧义；没有 key 时只有唯一 provider 才能自动选择。未指定 profile 时使用所选 provider 的第一个 model profile。没有配置文件且没有 key 时，仍使用内建的 DeepSeek 默认值。
 
 要自定义默认值，请创建 `~/.dora/config.yaml`。Dora 在每个操作系统（包括 macOS）上都使用这个 `~/.dora/` 布局。设置 `DORA_HOME` 环境变量为绝对路径可覆盖 home 目录。你也可以把文件放在任何位置并通过 `--config path/to/config.yaml` 指定；显式请求的文件必须存在。
 
 ```yaml
-model:
-  provider: deepseek
+env:
+  DEEPSEEK_API_KEY: sk-...
 ```
 
-显式提供商始终优先于基于环境的选择。当配置文件存在但省略了 `model.provider` 时，同样适用自动选择逻辑。
+这个最小配置直接使用内嵌的 DeepSeek catalog，自动选择唯一具有 key 的 DeepSeek，并使用它的第一个 profile。将其替换为 `TRUST_API_KEY` 会自动选择 Trust。如果同时配置两个 key，则需要增加 `client` 或设置 `DORA_MODEL`：
 
-`deepseek` 预设默认为 `chat_completions` API、`deepseek-v4-flash`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。`openai` 预设默认为 `chat_completions`、`gpt-5`、`https://api.openai.com/v1` 和 `OPENAI_API_KEY`。`trust` 预设默认为 `chat_completions`、`auto`、`https://api.trustoken.cn/v1` 和 `TRUST_API_KEY`。需要时可覆盖任何预设字段，并将 `api: responses` 设为使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
+```yaml
+env:
+  DEEPSEEK_API_KEY: sk-deepseek...
+  TRUST_API_KEY: sk-trust...
+client:
+  provider: trust
+  profile: deepseek-v4-flash
+```
 
-环境变量优先于配置文件：API 密钥环境变量会覆盖配置的提供商，而提供商作用域的 `<PROVIDER>_MODEL` / `<PROVIDER>_BASE_URL` 变量（例如 `DEEPSEEK_MODEL`、`TRUST_BASE_URL`）会覆盖解析后提供商的 `name` 和 `base_url`。`-model` 和 `-base-url` 命令行标志已被移除；请改为设置 `OPENAI_MODEL`、`DEEPSEEK_MODEL` 或 `TRUST_MODEL`（以及对应的 `*_BASE_URL`）来为一次调用覆盖模型和基础 URL。提供商作用域的覆盖仅作用于解析后的提供商，不影响其他提供商。
+嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].models` 中。每项的 `name` 是由 `client.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
 
 ### 第三方 OpenAI 兼容提供商
 
-要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请保留 `model.provider: openai` 并覆盖 `base_url`、`name` 和 `api_key_env`（或 `api_key`）。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
+要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 models。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
 
-对于无需认证的自托管 Ollama 端点，设置 `api_key_env: ""` 以禁用 API 密钥：
-
-```yaml
-model:
-  provider: openai
-  name: llama3.1
-  base_url: http://localhost:11434/v1
-  api_key_env: ""
-```
-
-对于需要密钥的托管式 OpenAI 兼容服务（如 OpenRouter 或 Groq），将 `api_key_env` 指向自定义环境变量：
+对于无需认证的自托管 Ollama 端点，请不要设置 `OLLAMA_API_KEY`：
 
 ```yaml
-model:
-  provider: openai
-  name: openrouter/auto
-  base_url: https://openrouter.ai/api/v1
-  api_key_env: OPENROUTER_API_KEY
+providers:
+  - name: ollama
+    base_url: http://localhost:11434/v1
+    models:
+      - name: llama3.1
 ```
 
-对于一次性调用，可使用提供商作用域的环境变量覆盖模型和基础 URL（它们优先于配置文件）：
+对于需要密钥的托管式 OpenAI 兼容服务（如 OpenRouter 或 Groq），分别将密钥导出为 `OPENROUTER_API_KEY` 或 `GROQ_API_KEY`，也可以在配置文件 `env` 下使用相同名称：
 
-```sh
-OPENAI_MODEL=llama3.1 OPENAI_BASE_URL=http://localhost:11434/v1 ./dora "prompt"
+```yaml
+providers:
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - name: openrouter/auto
+env:
+  OPENROUTER_API_KEY: sk-...
 ```
 
-也支持字面量 `api_key`，但使用环境变量可以让密钥不落入配置文件中。非空字面量密钥优先于 `api_key_env`。对于无需认证的本地端点，请显式设置 `api_key_env: ""`。
+对于无需认证的本地端点，同时省略真实环境变量和配置 fallback。如果两个 provider 名称归一化后得到相同的环境变量，配置校验会报错。包含 key 的配置文件属于敏感信息，应妥善保护。
 
 使用 `max_tokens` 和 `temperature` 控制每个响应的输出预算和采样：
 
 ```yaml
-model:
-  provider: openai
-  name: openrouter/auto
-  base_url: https://openrouter.ai/api/v1
-  api_key_env: OPENROUTER_API_KEY
-  max_tokens: 32768
-  temperature: 0.7
+providers:
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - name: balanced
+        model: openrouter/auto
+        max_tokens: 32768
+        temperature: 0.7
+client:
+  provider: openrouter
+  profile: balanced
 ```
 
-`max_tokens` 限制模型在一次响应中生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这两个键仅在 `model.` 中设置时才生效；它们没有对应的命令行标志。
+`max_tokens` 限制模型在一次响应中生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这两个键属于 model catalog，没有对应的命令行标志。
 
-`thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium` 或 `high` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。`deepseek` 预设是例外，默认为 `off`；请显式设置 `thinking` 来覆盖。
+`context_window` 属于 model profile。由于 Dora 目前不会对请求进行 token 统计，它使用消息内容的字节数近似该模型的上下文容量。默认值为 1048576（1 MiB），历史轮次会被压缩以尽量保持在此预算内，配置值必须为正数。该估算不包含精确分词、工具 schema 或视觉 token。压缩策略与该属性相互独立；将 `agent.max_history_rounds` 设置为 `0` 可禁用历史压缩。
+
+`thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium` 或 `high` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。
 不同提供商的支持情况各异，不支持的值会被静默忽略而不是报错：
 
 - **openai**：在 Responses API 上会发送 `off`→`none`、`minimal`、`low`、`medium` 和 `high` 全部值；在 Chat Completions 上 `minimal`–`high` 会以 `reasoning_effort` 发送，但 `off` 不受支持（gpt-5 的下限是 `minimal`），并会被忽略。
 - **deepseek**：在两个 API 上都会发送 `low`/`medium`/`high`，`minimal` 不受支持并被忽略，而 `off` 在 Chat Completions 上以 `thinking.type: disabled` 发送，在 Responses 上以 `reasoning.effort: none` 发送。
 - **trust**：在两个 API 上都按尽力而为的方式处理，类似 OpenAI。
 
-由于一个设置可能被直接丢弃，请将 `thinking` 视为提示而非保证。对于一次性调用，`--thinking` 会用 `off`、`minimal`、`low`、`medium` 或 `high` 之一覆盖配置的 `model.thinking`：
+由于一个设置可能被直接丢弃，请将 `thinking` 视为提示而非保证。对于一次性调用，`--thinking` 会用 `off`、`minimal`、`low`、`medium` 或 `high` 之一覆盖所选模型的设置：
 
 ```sh
 ./dora --thinking high "Solve a hard problem"
@@ -286,9 +289,9 @@ git diff | ./dora "Review this change"
 ./dora -s system-status --fresh "Analyze this machine from scratch"
 ```
 
-会话名称可包含字母、数字、`.`、`_` 和 `-`。Dora 将每个会话存储为带版本的 JSON 快照，权限为 `0600`。会话 v3 绑定了配置的提供商、API、模型和基础 URL：Chat Completions 从消息恢复，而 Responses 额外持久化其不透明的类型化项续接。在更改会话的后端之前使用 `--fresh`。不支持版本 1 和版本 2 的会话文件。默认目录在每个操作系统上都是 `~/.dora/sessions`。省略 `--session`/`-s` 可保持现有的无状态行为。会话文件可能包含命令和工具输出，因此请将其视为敏感内容。请勿同时对同一个会话名称运行两个 Dora 进程。
+会话名称可包含字母、数字、`.`、`_` 和 `-`。Dora 将每个会话存储为带版本的 JSON 快照，权限为 `0600`。会话 v5 绑定了配置的提供商、profile、API、模型和基础 URL：Chat Completions 从消息恢复，而 Responses 额外持久化其不透明的类型化项续接。在更改会话的后端之前使用 `--fresh`。不支持旧版会话格式。默认目录在每个操作系统上都是 `~/.dora/sessions`。省略 `--session`/`-s` 可保持现有的无状态行为。会话文件可能包含命令和工具输出，因此请将其视为敏感内容。请勿同时对同一个会话名称运行两个 Dora 进程。
 
-使用 `--config`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。若要为一次调用覆盖模型名称或基础 URL，请改为设置提供商作用域的环境变量（例如 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`）；`-model` 和 `-base-url` 命令行标志已被移除。
+使用 `--config`、`--thinking`、`--max-rounds`、`--max-history-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
 ### 技能（Skills）
 
@@ -371,14 +374,8 @@ PowerShell 也在 Dora 的当前目录中启动，需要时可在命令内部使
 
 ## 图像理解
 
-Dora 可以向消息附加图像，让多模态（视觉）模型能够"看到"它们。图像理解取决于配置的模型：默认的 DeepSeek 模型可能不支持视觉，因此请显式使用 `--vision` 或在配置中设置 `model.vision: true` 来启用它，并选择支持视觉的模型（例如 OpenAI 的 `gpt-4o` 类模型）。
+Dora 将视觉能力视为 model profile 的固有属性。只有模型确实支持图像时，才在对应 catalog 项中设置 `vision: true`；CLI 不再提供覆盖或直接附加图片的标志。
 
-使用可重复的 `--image` 标志将本地图像附加到当前提示（需要已启用视觉功能）：
-
-```sh
-OPENAI_MODEL=gpt-4o ./dora --vision --image photo.png "Describe this photo"
-```
-
-模型也可以自己展示图像：当命令工具的 stdout 包含 `@@path@@` 标签时，Dora 会解析它并将该路径的图像附加到工具消息中。命令工具的描述文档中记录了这一约定，以便模型知道可以发出这样的标签。
+当命令工具的 stdout 包含 `@@path@@` 标签时，对于支持视觉的 profile，Dora 会解析它并将该路径的图像附加到工具消息中。命令工具的描述文档中记录了这一约定，以便模型知道可以发出这样的标签。
 
 图像会消耗模型上下文：每个附加的图像都会被编码为视觉 token，计入模型的上下文窗口，因此大图或多图可能耗尽小的上下文窗口。Dora 将每个图像文件限制为 4 MiB，并拒绝非图像文件。当 `@@path@@` 标签指向缺失、非图像或过大的文件时，Dora 不会附加它，而是向模型报告错误，以便其更正路径。

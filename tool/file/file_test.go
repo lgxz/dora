@@ -16,7 +16,8 @@ func TestReadTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewReadTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,8 @@ func TestReadToolRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewReadTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","offset":2,"limit":2}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","offset":2,"limit":2}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +52,8 @@ func TestReadToolBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewReadTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +77,8 @@ func TestReadToolEmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewReadTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +94,8 @@ func TestReadToolOffsetBeyondFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewReadTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","offset":10}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","offset":10}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +108,8 @@ func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "test.txt")
 	tool := NewWriteTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","content":"hello"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","content":"hello"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +151,8 @@ func TestEditTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewEditTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"baz"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"baz"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +172,8 @@ func TestEditToolReplaceAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewEditTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"baz","replace_all":true}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"baz","replace_all":true}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +193,8 @@ func TestEditToolNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewEditTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"missing","new_string":"x"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"missing","new_string":"x"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}

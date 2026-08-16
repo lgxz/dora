@@ -46,14 +46,14 @@ func (t *ReadTool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeReadInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 	f, err := os.Open(input.Path)
 	if err != nil {
-		return "", fmt.Errorf("read: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("read: %w", err)
 	}
 	defer f.Close()
 
@@ -61,11 +61,11 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	head := make([]byte, 1024)
 	n, _ := io.ReadFull(f, head)
 	if isBinary(head[:n]) {
-		return "(binary file; use the bash tool to inspect it)", nil
+		return dora.ToolResult{Content: "(binary file; use the bash tool to inspect it)"}, nil
 	}
 	// Rewind to the start for line scanning.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("read: seek: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("read: seek: %w", err)
 	}
 
 	// Stream lines, collecting the requested range. Stop after the range so
@@ -91,15 +91,15 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read: scan: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("read: scan: %w", err)
 	}
 	if lineNo == 0 {
-		return "(empty file)", nil
+		return dora.ToolResult{Content: "(empty file)"}, nil
 	}
 	if sb.Len() == 0 {
-		return fmt.Sprintf("(offset %d is beyond the file's %d lines)", start, lineNo), nil
+		return dora.ToolResult{Content: fmt.Sprintf("(offset %d is beyond the file's %d lines)", start, lineNo)}, nil
 	}
-	return sb.String(), nil
+	return dora.ToolResult{Content: sb.String()}, nil
 }
 
 type readInput struct {
@@ -158,19 +158,19 @@ func (t *WriteTool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeWriteInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 	created := false
 	if _, err := os.Stat(input.Path); os.IsNotExist(err) {
 		created = true
 	}
 	if err := writeFile(input.Path, []byte(input.Content), input.Append); err != nil {
-		return "", fmt.Errorf("write: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("write: %w", err)
 	}
-	return fmt.Sprintf("bytes_written: %d, created: %v", len(input.Content), created), nil
+	return dora.ToolResult{Content: fmt.Sprintf("bytes_written: %d, created: %v", len(input.Content), created)}, nil
 }
 
 type writeInput struct {
@@ -221,14 +221,14 @@ func (t *EditTool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeEditInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 	data, err := os.ReadFile(input.Path)
 	if err != nil {
-		return "", fmt.Errorf("edit: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("edit: %w", err)
 	}
 	content := string(data)
 	var newContent string
@@ -243,13 +243,13 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 	}
 	if count == 0 {
-		return "old_string not found in file", nil
+		return dora.ToolResult{Content: "old_string not found in file"}, nil
 	}
 	if err := writeFile(input.Path, []byte(newContent), false); err != nil {
-		return "", fmt.Errorf("edit: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("edit: %w", err)
 	}
 	bytesChanged := len(newContent) - len(content)
-	return fmt.Sprintf("replacements: %d, bytes_changed: %d", count, bytesChanged), nil
+	return dora.ToolResult{Content: fmt.Sprintf("replacements: %d, bytes_changed: %d", count, bytesChanged)}, nil
 }
 
 type editInput struct {

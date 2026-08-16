@@ -28,7 +28,9 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"Write-Output 'hello'"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"Write-Output 'hello'"}`))
+
+	output := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}

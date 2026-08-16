@@ -32,7 +32,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		{Role: dora.RoleAssistant, Content: "done"},
 	}
 
-	backend := Backend{Provider: "openai", API: "responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
+	backend := Backend{Provider: "openai", Profile: "gpt-test", API: "responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
 	if err := store.Save("system-status", 0, Snapshot{
 		Backend:      backend,
 		Messages:     messages,
@@ -78,12 +78,28 @@ func TestStoreDetectsRevisionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := Snapshot{Backend: Backend{Provider: "openai", API: "chat_completions", Model: "test", BaseURL: "http://localhost"}}
+	next := Snapshot{Backend: Backend{Provider: "openai", Profile: "test", API: "chat_completions", Model: "test", BaseURL: "http://localhost"}}
 	if err := store.Save("task", 0, next); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Save("task", 0, next); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want conflict", err)
+	}
+}
+
+func TestStoreRequiresBackendProfile(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Save("task", 0, Snapshot{Backend: Backend{
+		Provider: "openai",
+		API:      "chat_completions",
+		Model:    "gpt-test",
+		BaseURL:  "https://example.test/v1",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "profile is required") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -164,7 +180,7 @@ func TestStoreCanReplaceVersionOneByRevision(t *testing.T) {
 		t.Fatalf("revision = %d", revision)
 	}
 	if err := store.Save("old", revision, Snapshot{
-		Backend:  Backend{Provider: "openai", API: "chat_completions", Model: "new", BaseURL: "http://localhost"},
+		Backend:  Backend{Provider: "openai", Profile: "new", API: "chat_completions", Model: "new", BaseURL: "http://localhost"},
 		Messages: []dora.Message{{Role: dora.RoleUser, Content: "replacement"}},
 	}); err != nil {
 		t.Fatal(err)
@@ -188,7 +204,7 @@ func TestStoreRoundTripsImages(t *testing.T) {
 		{Role: dora.RoleUser, Content: "look", Images: []dora.Image{{Path: "/tmp/a.png"}, {URL: "https://example.test/b.png"}}},
 		{Role: dora.RoleTool, ToolCallID: "call-1", Content: "seen", Images: []dora.Image{{URL: "data:image/png;base64,AAAA"}}},
 	}
-	backend := Backend{Provider: "openai", API: "responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
+	backend := Backend{Provider: "openai", Profile: "gpt-test", API: "responses", Model: "gpt-test", BaseURL: "https://example.test/v1"}
 	if err := store.Save("images", 0, Snapshot{Backend: backend, Messages: messages}); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +222,7 @@ func TestStoreReadsMessageWithoutImages(t *testing.T) {
 	// slice (backward compatibility for the optional field).
 	dir := t.TempDir()
 	path := filepath.Join(dir, "old.json")
-	payload := `{"version":4,"revision":1,"backend":{"provider":"openai","api":"chat_completions","model":"test","base_url":"http://localhost"},"messages":[{"role":"user","content":"hello"}]}`
+	payload := `{"version":5,"revision":1,"backend":{"provider":"openai","profile":"test","api":"chat_completions","model":"test","base_url":"http://localhost"},"messages":[{"role":"user","content":"hello"}]}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}

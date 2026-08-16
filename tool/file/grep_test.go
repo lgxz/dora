@@ -18,7 +18,8 @@ func TestGrepTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"TODO","path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"TODO","path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,8 @@ func TestGrepToolDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"match","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"match","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +58,8 @@ func TestGrepToolLiteral(t *testing.T) {
 	}
 	tool := NewGrepTool()
 	// Literal match: "a.b" should only match the literal "a.b", not "axb".
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"a.b","path":"`+path+`","regex":false}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"a.b","path":"`+path+`","regex":false}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +78,8 @@ func TestGrepToolIgnoreCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"hello","path":"`+path+`","ignore_case":true}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"hello","path":"`+path+`","ignore_case":true}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +95,8 @@ func TestGrepToolNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"missing","path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"missing","path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +126,8 @@ func TestGrepRegex(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"^error","path":"`+path+`","regex":true}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"^error","path":"`+path+`","regex":true}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +161,8 @@ func TestGrepRegexIgnoreCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"^hello","path":"`+path+`","regex":true,"ignore_case":true}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"^hello","path":"`+path+`","regex":true,"ignore_case":true}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +179,8 @@ func TestGrepSingleFileOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"alpha","path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"alpha","path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +200,8 @@ func TestGrepMaxResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"hit","path":"`+path+`","max_results":2}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"hit","path":"`+path+`","max_results":2}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +220,8 @@ func TestGrepLongLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"needle","path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"needle","path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +238,8 @@ func TestGrepEmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"x","path":"`+path+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"x","path":"`+path+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +304,8 @@ func TestGrepDirectoryIgnoreDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"match","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"match","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +327,8 @@ func TestGrepSubdirectoryMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := NewGrepTool()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"needle","path":"`+dir+`"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"needle","path":"`+dir+`"}`))
+	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}

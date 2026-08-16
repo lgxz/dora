@@ -160,12 +160,12 @@ func (t *tool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *tool) Execute(ctx context.Context, input json.RawMessage) (dora.ToolResult, error) {
 	if t == nil || t.skills == nil {
-		return "", errors.New("skill: tool is not initialized")
+		return dora.ToolResult{}, errors.New("skill: tool is not initialized")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 	var request struct {
 		Name string `json:"name"`
@@ -173,28 +173,28 @@ func (t *tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		return "", fmt.Errorf("skill: decode input: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("skill: decode input: %w", err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return "", errors.New("skill: input contains multiple JSON values")
+			return dora.ToolResult{}, errors.New("skill: input contains multiple JSON values")
 		}
-		return "", fmt.Errorf("skill: decode input: %w", err)
+		return dora.ToolResult{}, fmt.Errorf("skill: decode input: %w", err)
 	}
 	if request.Name == "" {
-		return "", errors.New("skill: name is required")
+		return dora.ToolResult{}, errors.New("skill: name is required")
 	}
 	loaded, exists := t.skills[request.Name]
 	if !exists {
-		return "", fmt.Errorf("skill: unknown skill %q", request.Name)
+		return dora.ToolResult{}, fmt.Errorf("skill: unknown skill %q", request.Name)
 	}
-	return fmt.Sprintf(
+	return dora.ToolResult{Content: fmt.Sprintf(
 		"Skill: %s\nDirectory: %s\n\n--- SKILL.md ---\n%s",
 		request.Name,
 		strconv.Quote(loaded.directory),
 		loaded.content,
-	), nil
+	)}, nil
 }
 
 func load(path, directoryName string, maxFileSize int64) (entry, error) {

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	fileVersion = 4
+	fileVersion = 5
 	maxFileSize = 64 << 20
 )
 
@@ -40,6 +40,7 @@ type Snapshot struct {
 // Backend identifies the model endpoint that owns an opaque continuation.
 type Backend struct {
 	Provider string `json:"provider"`
+	Profile  string `json:"profile"`
 	API      string `json:"api"`
 	Model    string `json:"model"`
 	BaseURL  string `json:"base_url"`
@@ -256,6 +257,9 @@ type sessionFile struct {
 func validateBackend(backend Backend) error {
 	if backend.Provider == "" {
 		return errors.New("provider is required")
+	}
+	if backend.Profile == "" {
+		return errors.New("profile is required")
 	}
 	if backend.API == "" {
 		return errors.New("API is required")

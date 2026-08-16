@@ -12,6 +12,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
+	"github.com/lgxz/dora/tool/internal/imageoutput"
 )
 
 const defaultPollSeconds = 60
@@ -19,11 +20,12 @@ const defaultPollSeconds = 60
 // Tool manages background jobs started by the bash tool.
 type Tool struct {
 	manager *job.Manager
+	vision  bool
 }
 
 // New creates a Job tool backed by the given manager.
-func New(manager *job.Manager) *Tool {
-	return &Tool{manager: manager}
+func New(manager *job.Manager, vision bool) *Tool {
+	return &Tool{manager: manager, vision: vision}
 }
 
 // Spec implements dora.Tool.
@@ -55,28 +57,28 @@ func (t *Tool) Spec() dora.ToolSpec {
 }
 
 // Execute implements dora.Tool.
-func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	if t == nil || t.manager == nil {
-		return "", errors.New("job: tool is not initialized")
+		return dora.ToolResult{}, errors.New("job: tool is not initialized")
 	}
 	input, err := decodeInput(raw)
 	if err != nil {
-		return "", err
+		return dora.ToolResult{}, err
 	}
 
 	switch input.Action {
 	case "status":
 		job, ok := t.manager.Status(input.JobID)
 		if !ok {
-			return `{"error": "job not found"}`, nil
+			return t.result(`{"error": "job not found"}`), nil
 		}
-		return encodeJob(job), nil
+		return t.result(encodeJob(job)), nil
 
 	case "kill":
 		if err := t.manager.Kill(input.JobID); err != nil {
-			return fmt.Sprintf(`{"error": %q}`, err.Error()), nil
+			return t.result(fmt.Sprintf(`{"error": %q}`, err.Error())), nil
 		}
-		return fmt.Sprintf(`{"job_id": %q, "status": "killed"}`, input.JobID), nil
+		return t.result(fmt.Sprintf(`{"job_id": %q, "status": "killed"}`, input.JobID)), nil
 
 	case "list":
 		jobs := t.manager.List()
@@ -89,7 +91,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 			infos = append(infos, jobInfo{ID: j.ID, Status: string(j.Status)})
 		}
 		data, _ := json.Marshal(infos)
-		return fmt.Sprintf(`{"jobs": %s}`, data), nil
+		return t.result(fmt.Sprintf(`{"jobs": %s}`, data)), nil
 
 	case "poll":
 		waitSeconds := defaultPollSeconds
@@ -98,15 +100,22 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 		}
 		job, ok := t.manager.Wait(input.JobID, time.Duration(waitSeconds)*time.Second)
 		if !ok {
-			return `{"error": "job not found"}`, nil
+			return t.result(`{"error": "job not found"}`), nil
 		}
 		stdout, stderr := job.DrainOutput()
-		return fmt.Sprintf(`{"job_id": %q, "status": %q, "exit_code": %d, "stdout": %q, "stderr": %q}`,
-			job.ID, job.Status, job.ExitCode, stdout, stderr), nil
+		return t.result(fmt.Sprintf(`{"job_id": %q, "status": %q, "exit_code": %d, "stdout": %q, "stderr": %q}`,
+			job.ID, job.Status, job.ExitCode, stdout, stderr)), nil
 
 	default:
-		return "", fmt.Errorf("job: unknown action %q", input.Action)
+		return dora.ToolResult{}, fmt.Errorf("job: unknown action %q", input.Action)
 	}
+}
+
+func (t *Tool) result(content string) dora.ToolResult {
+	if t.vision {
+		return imageoutput.Parse(content)
+	}
+	return dora.ToolResult{Content: content}
 }
 
 type input struct {

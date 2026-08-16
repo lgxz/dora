@@ -6,9 +6,9 @@
 `dora` is a tiny, modular LLM agent kernel for Go. Its core is one loop and
 two interfaces: `Model` and `Tool`.
 
-No configuration file is required: setting a single provider API key environment
-variable (OpenAI, DeepSeek, or Trustoken) lets dora auto-select that provider
-and run immediately.
+No configuration file is required for the built-in providers: set the selected
+provider's API key (for example `DEEPSEEK_API_KEY`), optionally select a profile
+with `DORA_MODEL=provider/profile`, and run immediately.
 
 See [`docs/architecture.md`](docs/architecture.md) for module boundaries,
 dependencies, interfaces, and runtime flows.
@@ -145,23 +145,21 @@ make install
 
 ### API keys
 
-Dora reads each provider's API key from a dedicated environment variable. The
-following table lists the supported providers, their environment variables,
-and their default models:
-
-| Provider | API key env | Default model | Model env | Base URL env |
-| --- | --- | --- | --- | --- |
-| openai | `OPENAI_API_KEY` | `gpt-5` | `OPENAI_MODEL` | `OPENAI_BASE_URL` |
-| deepseek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `DEEPSEEK_MODEL` | `DEEPSEEK_BASE_URL` |
-| trust | `TRUST_API_KEY` | `auto` | `TRUST_MODEL` | `TRUST_BASE_URL` |
-
-Set the environment variable for the provider you want to use. The commands
-differ by operating system.
+Dora derives an API key environment variable from each provider name: uppercase
+the name, replace non-alphanumeric characters with `_`, and append `_API_KEY`.
+For example, `deepseek`, `trust`, and `open-router` use
+`DEEPSEEK_API_KEY`, `TRUST_API_KEY`, and `OPEN_ROUTER_API_KEY`. A non-empty
+process value overrides the same key under config `env`. Config values are
+internal fallbacks and are never exported to child processes.
+`DORA_MODEL=provider/profile` selects both catalog entries and overrides
+`client.provider` and `client.profile`. It splits at the first `/`, so the
+profile portion may itself contain `/`.
 
 macOS / Linux, temporary (current terminal only):
 
 ```sh
-export OPENAI_API_KEY="sk-..."
+export TRUST_API_KEY="sk-..."
+export DORA_MODEL="trust/deepseek-v4-flash"
 ```
 
 macOS / Linux, permanent: append the `export` line above to `~/.zshrc` (zsh)
@@ -174,31 +172,30 @@ source ~/.zshrc
 Windows PowerShell, temporary (current session only):
 
 ```powershell
-$env:OPENAI_API_KEY = "sk-..."
+$env:TRUST_API_KEY = "sk-..."
+$env:DORA_MODEL = "trust/deepseek-v4-flash"
 ```
 
 Windows PowerShell, permanent (persists for the current user):
 
 ```powershell
-[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("TRUST_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("DORA_MODEL", "trust/deepseek-v4-flash", "User")
 ```
 
 Windows CMD, temporary (current session only):
 
 ```cmd
-set OPENAI_API_KEY=sk-...
+set TRUST_API_KEY=sk-...
+set DORA_MODEL=trust/deepseek-v4-flash
 ```
 
-When you set keys for more than one provider, specify `model.provider`
-explicitly in `~/.dora/config.yaml`; otherwise Dora reports an ambiguity
-error. Setting exactly one key lets Dora select that provider automatically.
-
-With exactly one supported provider API key set, Dora runs without a
-configuration file and selects that provider automatically. For example,
-`DEEPSEEK_API_KEY` selects `deepseek`, `OPENAI_API_KEY` selects `openai`, and
-`TRUST_API_KEY` selects `trust`. If multiple provider keys are set, configure
-`model.provider` explicitly. If none are set, Dora retains `deepseek` as the
-fallback and reports that `DEEPSEEK_API_KEY` is missing.
+`DORA_MODEL` must contain non-empty provider and profile names. Leave it unset
+or empty to use the `client` selector. Without either selector, Dora selects the
+only provider with a non-empty API key. Multiple keyed providers are ambiguous;
+with no keys, only a sole provider is selected automatically. The selected
+provider's first model profile is the default. With no configuration file and
+no keys, Dora retains the built-in DeepSeek default.
 
 To customize the defaults, create `~/.dora/config.yaml`. Dora uses this
 `~/.dora/` layout on every operating system, including macOS. Set the
@@ -207,88 +204,88 @@ directory. You can also place the file anywhere and pass
 `--config path/to/config.yaml`; an explicitly requested file must exist.
 
 ```yaml
-model:
-  provider: deepseek
+env:
+  DEEPSEEK_API_KEY: sk-...
 ```
 
-An explicit provider always takes precedence over environment-based selection.
-The same automatic selection applies when a configuration file exists but
-omits `model.provider`.
+This minimal file uses the embedded DeepSeek catalog, auto-selects DeepSeek as
+the sole keyed provider, and uses its first profile. Replacing the key with
+`TRUST_API_KEY` selects Trust. When both keys are configured, add `client` or
+set `DORA_MODEL` explicitly:
 
-The `deepseek` preset defaults to the `chat_completions` API,
-`deepseek-v4-flash`, `https://api.deepseek.com`, and `DEEPSEEK_API_KEY`. The
-`openai` preset defaults to `chat_completions`, `gpt-5`,
-`https://api.openai.com/v1`, and `OPENAI_API_KEY`. The `trust` preset defaults
-to `chat_completions`, `auto`, `https://api.trustoken.cn/v1`, and
-`TRUST_API_KEY`. Override any preset field when needed, and set
-`api: responses` to use the Responses API. Both APIs always use SSE streaming.
+```yaml
+env:
+  DEEPSEEK_API_KEY: sk-deepseek...
+  TRUST_API_KEY: sk-trust...
+client:
+  provider: trust
+  profile: deepseek-v4-flash
+```
+
+The embedded provider catalog supplies built-in `deepseek` and `trust`
+definitions with `base_url`, so catalog entries with those names may omit that
+field. Models are always listed explicitly in `providers[].models`. Each
+entry's `name` is a unique profile name used by `client.profile`; `model` is
+the identifier sent to the provider. `model` defaults to `name` when omitted,
+and multiple profiles may use the same model with different parameters. Set
+provider-level or model-level `api: responses` to use the Responses API. Both
+APIs always use SSE streaming.
 Responses tool loops replay typed output items locally and do not depend on
 server-side response storage.
-
-Environment variables take precedence over the configuration file: the API key
-environment variable overrides the configured provider, and the provider-scoped
-`<PROVIDER>_MODEL` / `<PROVIDER>_BASE_URL` variables (for example
-`DEEPSEEK_MODEL`, `TRUST_BASE_URL`) override the resolved provider's `name` and
-`base_url`. The `-model` and `-base-url` CLI flags were removed; set
-`OPENAI_MODEL`, `DEEPSEEK_MODEL`, or `TRUST_MODEL` (and the matching
-`*_BASE_URL`) instead to override the model and base URL for one invocation.
-The provider-scoped overrides apply only to the resolved provider and do not
-affect other providers.
 
 ### Third-party OpenAI-compatible providers
 
 To use any third-party provider that speaks the OpenAI Chat Completions
 protocol (for example Ollama, LM Studio, vLLM, Groq, Together, OpenRouter, or
-a self-hosted endpoint), keep `model.provider: openai` and override `base_url`,
-`name`, and `api_key_env` (or `api_key`). The Chat Completions endpoint is
+a self-hosted endpoint), add it to `providers` with `base_url` and models. The Chat Completions endpoint is
 `base_url + "/chat/completions"`, so `base_url` should be the provider's `/v1`
 (or equivalent) root.
 
-For a self-hosted Ollama endpoint that requires no authentication, set
-`api_key_env: ""` to disable the API key:
+For a self-hosted Ollama endpoint that requires no authentication, leave
+`OLLAMA_API_KEY` unset:
 
 ```yaml
-model:
-  provider: openai
-  name: llama3.1
-  base_url: http://localhost:11434/v1
-  api_key_env: ""
+providers:
+  - name: ollama
+    base_url: http://localhost:11434/v1
+    models:
+      - name: llama3.1
 ```
 
 For a hosted OpenAI-compatible service that requires a key, such as OpenRouter
-or Groq, point `api_key_env` at a custom environment variable:
+or Groq, export `OPENROUTER_API_KEY` or `GROQ_API_KEY` respectively, or put the
+same name under config `env`:
 
 ```yaml
-model:
-  provider: openai
-  name: openrouter/auto
-  base_url: https://openrouter.ai/api/v1
-  api_key_env: OPENROUTER_API_KEY
+providers:
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - name: openrouter/auto
+env:
+  OPENROUTER_API_KEY: sk-...
 ```
 
-For a one-off invocation, override the model and base URL with the provider-scoped
-environment variables (which take precedence over the config file):
-
-```sh
-OPENAI_MODEL=llama3.1 OPENAI_BASE_URL=http://localhost:11434/v1 ./dora "prompt"
-```
-
-Literal `api_key` is also supported, but an environment variable keeps secrets
-out of the configuration file. A non-empty literal key takes precedence over
-`api_key_env`. Set `api_key_env: ""` explicitly for a local endpoint that does
-not require authentication.
+Leave both the real variable and config fallback absent for a local endpoint
+that does not require authentication. Provider names that normalize to the
+same environment variable are rejected. Config files containing keys are
+secrets and should be protected accordingly.
 
 Control the per-response output budget and sampling with `max_tokens` and
 `temperature`:
 
 ```yaml
-model:
-  provider: openai
-  name: openrouter/auto
-  base_url: https://openrouter.ai/api/v1
-  api_key_env: OPENROUTER_API_KEY
-  max_tokens: 32768
-  temperature: 0.7
+providers:
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - name: balanced
+        model: openrouter/auto
+        max_tokens: 32768
+        temperature: 0.7
+client:
+  provider: openrouter
+  profile: balanced
 ```
 
 `max_tokens` caps the number of tokens the model generates in one response and
@@ -298,14 +295,20 @@ explicit `0` means "no explicit cap" and is relayed as-is. `temperature` has no
 default: when it is omitted, no value is sent and the provider uses its default
 sampling. It accepts values in `[0, 2]`. Because some reasoning and
 tool-calling models ignore or reject non-default temperatures, treat
-`temperature` as best-effort. Both keys only apply when set in
-`model.`; there are no command-line flags for them.
+`temperature` as best-effort. Both keys are model catalog settings; there are
+no command-line flags for them.
+
+`context_window` belongs to a model profile and approximates that model's
+context capacity using message-content bytes because Dora does not currently
+tokenize requests. It defaults to 1048576 (1 MiB). Historical rounds are
+compressed to stay within this budget, and configured values must be positive.
+This estimate does not include exact tokenization, tool schemas, or vision
+tokens. Compaction policy is independent: set `agent.max_history_rounds` to
+`0` to disable history compaction.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when
-omitted, no value is sent and the provider uses its own reasoning default. The
-`deepseek` preset is the exception and defaults to `off`; set `thinking`
-explicitly to override.
+omitted, no value is sent and the provider uses its own reasoning default.
 Support varies by provider, and unsupported values are silently ignored rather
 than causing an error:
 
@@ -319,8 +322,8 @@ than causing an error:
 - **trust**: treated best-effort like OpenAI on both APIs.
 
 Because a setting may simply be dropped, treat `thinking` as a hint rather
-than a guarantee. For one invocation, `--thinking` overrides the configured
-`model.thinking` with one of `off`, `minimal`, `low`, `medium`, or `high`:
+than a guarantee. For one invocation, `--thinking` overrides the selected
+model's setting with one of `off`, `minimal`, `low`, `medium`, or `high`:
 
 ```sh
 ./dora --thinking high "Solve a hard problem"
@@ -400,11 +403,11 @@ fails, the previous session remains intact:
 ```
 
 Session names may contain letters, numbers, `.`, `_`, and `-`. Dora stores each
-session as a versioned JSON snapshot with `0600` permissions. Session v3 binds
-the configured provider, API, model, and base URL: Chat Completions resumes
+session as a versioned JSON snapshot with `0600` permissions. Session v5 binds
+the configured provider, profile, API, model, and base URL: Chat Completions resumes
 from messages, while Responses additionally persists its opaque typed-item
-continuation. Use `--fresh` before changing a session's backend. Version 1 and
-2 session files are not supported. The default directory is
+continuation. Use `--fresh` before changing a session's backend. Older session
+formats are not supported. The default directory is
 `~/.dora/sessions` on every operating system. Omit `--session`/`-s` to keep
 the existing stateless behavior. Session files can contain commands and tool
 output, so treat them as sensitive. Do not run two Dora processes against the
@@ -412,10 +415,7 @@ same session name concurrently.
 
 Use `--config`, `--thinking`, `--max-rounds`,
 `--max-history-rounds`, or `--no-skills` to override the corresponding
-configuration for one invocation. To override the model name or base URL for
-one invocation, set the provider-scoped environment variables (for example
-`DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`) instead; the `-model` and `-base-url`
-CLI flags were removed.
+configuration for one invocation.
 
 ### Skills
 
@@ -536,23 +536,14 @@ or defaults to 120 seconds when that setting is zero or absent.
 
 ## Image understanding
 
-Dora can attach images to messages so a multimodal (vision) model can "see"
-them. Image understanding depends on the configured model: the default
-DeepSeek model may not support vision, so enable it explicitly with `--vision`
-or `model.vision: true` in the config, and select a vision-capable model (for
-example an OpenAI `gpt-4o`-class model).
+Dora treats vision support as an intrinsic model-profile property. Set
+`vision: true` on a catalog entry only when that model supports images; there
+is no CLI override or direct image-attachment flag.
 
-Attach a local image to the current prompt with the repeatable `--image` flag
-(requires vision to be enabled):
-
-```sh
-OPENAI_MODEL=gpt-4o ./dora --vision --image photo.png "Describe this photo"
-```
-
-The model can also surface images itself: when a command tool's stdout contains
-a `@@path@@` tag, Dora parses it and attaches the image at that path to the
-tool message. The command tool description documents this convention so the
-model knows it can emit such a tag.
+When a command tool's stdout contains a `@@path@@` tag, Dora parses it and
+attaches the image at that path to the tool message for a vision-capable
+profile. The command tool description documents this convention so the model
+knows it can emit such a tag.
 
 Images consume model context: each attached image is encoded into vision tokens
 that count toward the model's context window, so large images or many images

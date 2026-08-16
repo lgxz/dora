@@ -44,7 +44,9 @@ Inspect the machine carefully.
 		t.Fatalf("description is not sorted: %q", spec.Description)
 	}
 
-	content, err := tool.Execute(context.Background(), []byte(`{"name":"weather"}`))
+	toolResult, err := tool.Execute(context.Background(), []byte(`{"name":"weather"}`))
+
+	content := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,76 +1,81 @@
 package config
 
 import (
+	"bytes"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-const maxToolTimeoutSeconds = 3600
+const (
+	maxToolTimeoutSeconds     = 3600
+	defaultModelContextWindow = 1 << 20
+)
 
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
-	Model  Model  `yaml:"model"`
-	Agent  Agent  `yaml:"agent,omitempty"`
-	Tools  Tools  `yaml:"tools,omitempty"`
-	Skills Skills `yaml:"skills,omitempty"`
+	Client    ClientSelector `yaml:"client,omitempty"`
+	Providers []Provider     `yaml:"providers,omitempty"`
+	// Env supplies config-local fallbacks for provider API key environment
+	// variables. It never mutates the process environment.
+	Env    map[string]string `yaml:"env,omitempty"`
+	Agent  Agent             `yaml:"agent,omitempty"`
+	Tools  Tools             `yaml:"tools,omitempty"`
+	Skills Skills            `yaml:"skills,omitempty"`
+
+	providerDefaults map[string]providerDefault
 }
 
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
 	// MaxHistoryRounds bounds the number of recent rounds sent to the model
-	// each iteration. Zero disables compaction and sends the full history.
-	MaxHistoryRounds int `yaml:"max_history_rounds,omitempty"`
-	// ContextWindow bounds the total text budget (in bytes) for the messages
-	// sent to the model. Zero disables budget-based compaction.
-	ContextWindow int `yaml:"context_window,omitempty"`
+	// each iteration. Nil uses the default; zero disables compaction and sends
+	// the full history.
+	MaxHistoryRounds *int `yaml:"max_history_rounds,omitempty"`
 	// SystemPrompt overrides the built-in default agent system prompt. Empty
 	// uses the built-in default.
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
-// Model describes one configured model endpoint.
-type Model struct {
-	Provider  string  `yaml:"provider"`
-	API       string  `yaml:"api,omitempty"`
-	Name      string  `yaml:"name"`
-	BaseURL   string  `yaml:"base_url"`
-	APIKey    string  `yaml:"api_key,omitempty"`
-	APIKeyEnv *string `yaml:"api_key_env,omitempty"`
+// ClientSelector optionally chooses one provider and model profile from the catalog.
+// Empty fields let the registry auto-select an unambiguous entry.
+type ClientSelector struct {
+	Provider string `yaml:"provider,omitempty"`
+	Profile  string `yaml:"profile,omitempty"`
+}
 
-	// TimeoutSeconds bounds a non-streaming generation request. Zero uses the
-	// default of 120 seconds.
-	TimeoutSeconds int `yaml:"timeout_seconds,omitempty"`
-	// ConnectTimeoutSeconds bounds the TCP connection setup. Zero uses the
-	// default of 10 seconds.
-	ConnectTimeoutSeconds int `yaml:"connect_timeout_seconds,omitempty"`
-	// StreamIdleTimeoutSeconds bounds the idle time between streaming events.
-	// Zero disables the idle timeout and leaves the stream governed by the
-	// caller's context.
-	StreamIdleTimeoutSeconds int `yaml:"stream_idle_timeout_seconds,omitempty"`
-	// MaxTokens caps the number of tokens the model is allowed to generate in
-	// one response. Defaults to 32768. An explicit 0 means "no explicit cap";
-	// the value is sent to the provider as-is, so providers that reject 0
-	// should use the provider default instead.
-	MaxTokens *int `yaml:"max_tokens,omitempty"`
-	// Temperature controls sampling randomness in [0, 2]. Unset sends no value
-	// and leaves it to the provider default. Some reasoning/tool-calling models
-	// ignore or reject non-default values.
-	Temperature *float64 `yaml:"temperature,omitempty"`
-	// Thinking controls model "thinking mode" reasoning effort. Legal values:
-	// off | minimal | low | medium | high. Nil leaves it to the provider default.
-	// Values the provider does not support are silently ignored (not sent).
-	Thinking *string `yaml:"thinking,omitempty"`
-	// Vision enables image understanding. When true, command tools advertise
-	// the @@path@@ image tag and --image is accepted. Requires a vision-capable
-	// model.
-	Vision bool `yaml:"vision,omitempty"`
+// Provider describes one provider endpoint with multiple models.
+type Provider struct {
+	Name                     string      `yaml:"name"`
+	BaseURL                  string      `yaml:"base_url"`
+	APIKey                   string      `yaml:"-"`
+	API                      string      `yaml:"api,omitempty"`
+	TimeoutSeconds           int         `yaml:"timeout_seconds,omitempty"`
+	ConnectTimeoutSeconds    int         `yaml:"connect_timeout_seconds,omitempty"`
+	StreamIdleTimeoutSeconds int         `yaml:"stream_idle_timeout_seconds,omitempty"`
+	Models                   []ModelSpec `yaml:"models"`
+}
+
+// ModelSpec describes one named model profile under a Provider. Model defaults
+// to Name and may be shared by profiles with different generation parameters.
+type ModelSpec struct {
+	Name      string  `yaml:"name"`
+	Model     string  `yaml:"model,omitempty"`
+	API       string  `yaml:"api,omitempty"`
+	Thinking  *string `yaml:"thinking,omitempty"`
+	MaxTokens *int    `yaml:"max_tokens,omitempty"`
+	// ContextWindow is an approximate model context capacity measured in
+	// message-content bytes. Nil uses the default; configured values must be
+	// positive.
+	ContextWindow *int     `yaml:"context_window,omitempty"`
+	Temperature   *float64 `yaml:"temperature,omitempty"`
+	Vision        bool     `yaml:"vision,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.
@@ -101,7 +106,13 @@ type Skills struct {
 // Default returns the validated built-in configuration. Environment variable
 // references are resolved before the configuration is returned.
 func Default() (Config, error) {
-	cfg := defaultConfig()
+	cfg, err := defaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if configuredProviderKeyCount(cfg.Providers) == 0 {
+		cfg.Client = ClientSelector{Provider: "deepseek", Profile: "deepseek-v4-flash"}
+	}
 	if err := cfg.resolveAndValidate(); err != nil {
 		return Config{}, fmt.Errorf("validate default config: %w", err)
 	}
@@ -121,7 +132,10 @@ func Load(path string) (Config, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 
-	cfg := defaultConfig()
+	cfg, err := defaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
@@ -140,14 +154,40 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func defaultConfig() Config {
-	return Config{
-		Model: Model{
-			TimeoutSeconds:        120,
-			ConnectTimeoutSeconds: 10,
-			MaxTokens:             intPtr(32768),
-		},
+//go:embed builtin_providers.yaml
+var builtinProvidersYAML []byte
+
+type providerDefault struct {
+	baseURL string
+}
+
+func defaultConfig() (Config, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(builtinProvidersYAML))
+	decoder.KnownFields(true)
+	var cfg Config
+	if err := decoder.Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("decode built-in provider catalog: %w", err)
 	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return Config{}, errors.New("decode built-in provider catalog: multiple YAML documents are not allowed")
+		}
+		return Config{}, fmt.Errorf("decode built-in provider catalog: %w", err)
+	}
+	cfg.providerDefaults = make(map[string]providerDefault, len(cfg.Providers))
+	for i, provider := range cfg.Providers {
+		if provider.Name == "" || provider.BaseURL == "" {
+			return Config{}, fmt.Errorf("decode built-in provider catalog: providers[%d] must define name and base_url", i)
+		}
+		cfg.providerDefaults[provider.Name] = providerDefault{
+			baseURL: provider.BaseURL,
+		}
+	}
+	if err := cfg.resolveProviders(); err != nil {
+		return Config{}, fmt.Errorf("validate built-in provider catalog: %w", err)
+	}
+	return cfg, nil
 }
 
 // intPtr returns a pointer to v. It is a convenience helper for setting
@@ -156,58 +196,15 @@ func intPtr(v int) *int {
 	return &v
 }
 
-// strPtr returns a pointer to v. It is a convenience helper for setting
-// pointer-typed config defaults.
-func strPtr(v string) *string {
-	return &v
-}
-
 func (cfg *Config) resolveAndValidate() error {
-	model := &cfg.Model
-	if err := model.selectProvider(); err != nil {
+	if err := cfg.resolveClientSelector(); err != nil {
 		return err
 	}
-	preset, ok := modelPresets[model.Provider]
-	if !ok {
-		return errors.New(`model.provider must be "openai", "deepseek", or "trust"`)
+	if len(cfg.Providers) == 0 {
+		return errors.New("providers cannot be empty")
 	}
-	if model.API == "" {
-		model.API = "chat_completions"
-	}
-	switch model.API {
-	case "chat_completions", "responses":
-	default:
-		return errors.New(`model.api must be "chat_completions" or "responses"`)
-	}
-	if model.Provider == "deepseek" && model.Thinking == nil {
-		model.Thinking = strPtr("off")
-	}
-	if model.Name == "" {
-		model.Name = preset.name
-	}
-	if model.BaseURL == "" {
-		model.BaseURL = preset.baseURL
-	}
-	// Provider-scoped environment variables take precedence over the config
-	// file for the resolved provider's model name and base URL.
-	if value, ok := os.LookupEnv(preset.modelEnv); ok && value != "" {
-		model.Name = value
-	}
-	if value, ok := os.LookupEnv(preset.baseURLEnv); ok && value != "" {
-		model.BaseURL = value
-	}
-	if model.APIKeyEnv == nil {
-		model.APIKeyEnv = &preset.apiKeyEnv
-	}
-	if *model.APIKeyEnv != "" {
-		if value, ok := os.LookupEnv(*model.APIKeyEnv); ok && value != "" {
-			// Environment wins over a config-file literal api_key.
-			model.APIKey = value
-		} else if model.APIKey == "" {
-			// No env value and no config literal -> hard error.
-			return fmt.Errorf("environment variable %q is empty or unset", *model.APIKeyEnv)
-		}
-		// else: no env value but a config literal exists -> keep the config literal.
+	if err := cfg.resolveProviders(); err != nil {
+		return err
 	}
 	if cfg.Tools.Bash.TimeoutSeconds < 0 {
 		return errors.New("tools.bash.timeout_seconds cannot be negative")
@@ -224,33 +221,8 @@ func (cfg *Config) resolveAndValidate() error {
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")
 	}
-	if cfg.Agent.MaxHistoryRounds < 0 {
+	if cfg.Agent.MaxHistoryRounds != nil && *cfg.Agent.MaxHistoryRounds < 0 {
 		return errors.New("agent.max_history_rounds cannot be negative")
-	}
-	if cfg.Agent.ContextWindow < 0 {
-		return errors.New("agent.context_window cannot be negative")
-	}
-	if model.TimeoutSeconds < 0 {
-		return errors.New("model.timeout_seconds cannot be negative")
-	}
-	if model.ConnectTimeoutSeconds < 0 {
-		return errors.New("model.connect_timeout_seconds cannot be negative")
-	}
-	if model.StreamIdleTimeoutSeconds < 0 {
-		return errors.New("model.stream_idle_timeout_seconds cannot be negative")
-	}
-	if model.MaxTokens != nil && *model.MaxTokens < 0 {
-		return errors.New("model.max_tokens cannot be negative")
-	}
-	if model.Temperature != nil && (*model.Temperature < 0 || *model.Temperature > 2) {
-		return errors.New("model.temperature must be within [0, 2]")
-	}
-	if model.Thinking != nil {
-		switch *model.Thinking {
-		case "off", "minimal", "low", "medium", "high":
-		default:
-			return errors.New(`model.thinking must be one of "off", "minimal", "low", "medium", "high"`)
-		}
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {
@@ -260,62 +232,163 @@ func (cfg *Config) resolveAndValidate() error {
 	return nil
 }
 
-func (model *Model) selectProvider() error {
-	// Environment variables take precedence over the config-file provider.
-	var detected []string
-	for provider, preset := range modelPresets {
-		if value, ok := os.LookupEnv(preset.apiKeyEnv); ok && value != "" {
-			detected = append(detected, provider)
+// resolveClientSelector applies the optional process-wide provider/profile
+// selector. Splitting only at the first slash permits slashes in profile names.
+func (cfg *Config) resolveClientSelector() error {
+	value, ok := os.LookupEnv("DORA_MODEL")
+	if !ok || value == "" {
+		return nil
+	}
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return errors.New(`DORA_MODEL must use the "provider/profile" format`)
+	}
+	cfg.Client = ClientSelector{Provider: parts[0], Profile: parts[1]}
+	return nil
+}
+
+// resolveProviders fills built-in connection defaults, resolves API keys, and
+// validates the provider/model-profile catalog. Missing API keys remain valid
+// so local endpoints can operate without authentication.
+func (cfg *Config) resolveProviders() error {
+	providerNames := make(map[string]struct{}, len(cfg.Providers))
+	apiKeyEnvironments := make(map[string]string, len(cfg.Providers))
+	for i := range cfg.Providers {
+		p := &cfg.Providers[i]
+		if p.Name == "" {
+			return fmt.Errorf("providers[%d].name cannot be empty", i)
+		}
+		if _, exists := providerNames[p.Name]; exists {
+			return fmt.Errorf("providers[%d].name %q is duplicated", i, p.Name)
+		}
+		providerNames[p.Name] = struct{}{}
+		apiKeyEnvironment := providerAPIKeyEnvironment(p.Name)
+		if owner, exists := apiKeyEnvironments[apiKeyEnvironment]; exists {
+			return fmt.Errorf(
+				"providers[%d].name %q maps to API key environment variable %q already used by provider %q",
+				i, p.Name, apiKeyEnvironment, owner,
+			)
+		}
+		apiKeyEnvironments[apiKeyEnvironment] = p.Name
+		if defaults, ok := cfg.providerDefaults[p.Name]; ok {
+			if p.BaseURL == "" {
+				p.BaseURL = defaults.baseURL
+			}
+		}
+		if p.BaseURL == "" {
+			return fmt.Errorf("providers[%d].base_url cannot be empty", i)
+		}
+		if p.API == "" {
+			p.API = "chat_completions"
+		}
+		if err := validateAPI(p.API, fmt.Sprintf("providers[%d].api", i)); err != nil {
+			return err
+		}
+		if p.TimeoutSeconds < 0 {
+			return fmt.Errorf("providers[%d].timeout_seconds cannot be negative", i)
+		}
+		if p.ConnectTimeoutSeconds < 0 {
+			return fmt.Errorf("providers[%d].connect_timeout_seconds cannot be negative", i)
+		}
+		if p.StreamIdleTimeoutSeconds < 0 {
+			return fmt.Errorf("providers[%d].stream_idle_timeout_seconds cannot be negative", i)
+		}
+		p.APIKey = ""
+		// The real process environment wins over the config-local fallback. The
+		// fallback never mutates the process environment or child processes.
+		if value, ok := os.LookupEnv(apiKeyEnvironment); ok && value != "" {
+			p.APIKey = value
+		} else if value := cfg.Env[apiKeyEnvironment]; value != "" {
+			p.APIKey = value
+		}
+		if len(p.Models) == 0 {
+			return fmt.Errorf("providers[%d].models cannot be empty", i)
+		}
+		modelNames := make(map[string]struct{}, len(p.Models))
+		for j := range p.Models {
+			m := &p.Models[j]
+			if m.Name == "" {
+				return fmt.Errorf("providers[%d].models[%d].name cannot be empty", i, j)
+			}
+			if m.Model == "" {
+				m.Model = m.Name
+			}
+			if _, exists := modelNames[m.Name]; exists {
+				return fmt.Errorf("providers[%d].models[%d].name %q is duplicated", i, j, m.Name)
+			}
+			modelNames[m.Name] = struct{}{}
+			if m.API != "" {
+				if err := validateAPI(m.API, fmt.Sprintf("providers[%d].models[%d].api", i, j)); err != nil {
+					return err
+				}
+			}
+			if m.MaxTokens != nil && *m.MaxTokens < 0 {
+				return fmt.Errorf("providers[%d].models[%d].max_tokens cannot be negative", i, j)
+			}
+			if m.MaxTokens == nil {
+				m.MaxTokens = intPtr(32768)
+			}
+			if m.ContextWindow != nil && *m.ContextWindow <= 0 {
+				return fmt.Errorf("providers[%d].models[%d].context_window must be positive", i, j)
+			}
+			if m.ContextWindow == nil {
+				m.ContextWindow = intPtr(defaultModelContextWindow)
+			}
+			if m.Temperature != nil && (*m.Temperature < 0 || *m.Temperature > 2) {
+				return fmt.Errorf("providers[%d].models[%d].temperature must be within [0, 2]", i, j)
+			}
+			if m.Thinking != nil {
+				switch *m.Thinking {
+				case "off", "minimal", "low", "medium", "high":
+				default:
+					return fmt.Errorf(`providers[%d].models[%d].thinking must be one of "off", "minimal", "low", "medium", "high"`, i, j)
+				}
+			}
 		}
 	}
-	sort.Strings(detected)
-
-	switch len(detected) {
-	case 0:
-		// No provider detected from the environment; keep the config-file
-		// value if set, otherwise error out.
-		if model.Provider == "" {
-			return errors.New("no model provider configured; set model.provider or an API key environment variable")
+	for name := range cfg.Env {
+		if _, ok := apiKeyEnvironments[name]; !ok {
+			return fmt.Errorf("env.%s does not match any configured provider API key", name)
 		}
-	case 1:
-		model.Provider = detected[0]
-	default:
-		return fmt.Errorf(
-			"model.provider is ambiguous: API key environment variables for %s are set; configure model.provider explicitly",
-			strings.Join(detected, ", "),
-		)
 	}
 	return nil
 }
 
-type modelPreset struct {
-	name       string
-	baseURL    string
-	apiKeyEnv  string
-	modelEnv   string
-	baseURLEnv string
+func configuredProviderKeyCount(providers []Provider) int {
+	count := 0
+	for _, provider := range providers {
+		if provider.APIKey != "" {
+			count++
+		}
+	}
+	return count
 }
 
-var modelPresets = map[string]modelPreset{
-	"openai": {
-		name:       "gpt-5",
-		baseURL:    "https://api.openai.com/v1",
-		apiKeyEnv:  "OPENAI_API_KEY",
-		modelEnv:   "OPENAI_MODEL",
-		baseURLEnv: "OPENAI_BASE_URL",
-	},
-	"deepseek": {
-		name:       "deepseek-v4-flash",
-		baseURL:    "https://api.deepseek.com",
-		apiKeyEnv:  "DEEPSEEK_API_KEY",
-		modelEnv:   "DEEPSEEK_MODEL",
-		baseURLEnv: "DEEPSEEK_BASE_URL",
-	},
-	"trust": {
-		name:       "auto",
-		baseURL:    "https://api.trustoken.cn/v1",
-		apiKeyEnv:  "TRUST_API_KEY",
-		modelEnv:   "TRUST_MODEL",
-		baseURLEnv: "TRUST_BASE_URL",
-	},
+// providerAPIKeyEnvironment derives the conventional API key environment
+// variable for a provider. ASCII letters are uppercased and non-ASCII-
+// alphanumeric characters become underscores.
+func providerAPIKeyEnvironment(name string) string {
+	var result strings.Builder
+	result.Grow(len(name) + len("_API_KEY"))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			result.WriteRune(r - ('a' - 'A'))
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			result.WriteRune(r)
+		default:
+			result.WriteByte('_')
+		}
+	}
+	result.WriteString("_API_KEY")
+	return result.String()
+}
+
+func validateAPI(api, field string) error {
+	switch api {
+	case "chat_completions", "responses":
+		return nil
+	default:
+		return fmt.Errorf(`%s must be "chat_completions" or "responses"`, field)
+	}
 }

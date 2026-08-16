@@ -1,50 +1,48 @@
-model:
-  # Omit provider to select the sole provider whose API key environment
-  # variable is set. Multiple detected providers require an explicit choice.
+# Providers are a catalog. The embedded catalog gives deepseek and trust
+# built-in base_url defaults, so that field may be omitted for them. Custom
+# providers must set base_url. API keys are read from the provider-derived
+# environment variable (for example DEEPSEEK_API_KEY or TRUST_API_KEY), with
+# config-local fallbacks available under env. DORA_MODEL=provider/profile
+# overrides the client selector below. Values in env are not exported to child
+# processes.
+providers:
+  - name: deepseek
+    # base_url: https://api.deepseek.com
+    # api: chat_completions
+    # timeout_seconds: 120
+    # connect_timeout_seconds: 10
+    # stream_idle_timeout_seconds: 0
+    models:
+      # name is the unique profile name used by client.profile. model is the
+      # identifier sent to the provider and defaults to name when omitted.
+      - name: deepseek-v4-flash
+        # Defaults: model: deepseek-v4-flash, max_tokens: 32768, vision: false.
+        # Approximate context capacity in message-content bytes. Default:
+        # 1048576 (1 MiB). Must be positive.
+        context_window: 1048576
+      - name: deepseek-reasoning
+        model: deepseek-v4-flash
+        thinking: high
+  - name: trust
+    # base_url: https://api.trustoken.cn/v1
+    models:
+      - name: deepseek-v4-flash
+        context_window: 1048576
+      - name: deepseek-v4-pro
+        context_window: 1048576
+
+# Optional config-local API keys. A real process environment variable with the
+# same name takes precedence.
+# env:
+#   DEEPSEEK_API_KEY: sk-...
+#   TRUST_API_KEY: sk-...
+
+# Optional selector. With no explicit selector, a sole keyed provider is
+# selected automatically and its first model profile is the default. Multiple
+# keyed providers require client or DORA_MODEL.
+client:
   provider: deepseek
-  # Defaults shown for reference:
-  # api: chat_completions
-  # name: deepseek-v4-flash
-  # base_url: https://api.deepseek.com
-  # api_key_env: DEEPSEEK_API_KEY
-  # Other presets: openai, trust
-  #
-  # Environment variables take precedence over this file. Each preset's model
-  # name and base URL can be overridden with provider-scoped variables:
-  #   openai:  OPENAI_MODEL,        OPENAI_BASE_URL
-  #   deepseek:DEEPSEEK_MODEL,      DEEPSEEK_BASE_URL
-  #   trust:   TRUST_MODEL,         TRUST_BASE_URL
-  # The -model and -base-url CLI flags were removed; use these variables instead.
-
-  # Overall timeout (seconds) for a non-streaming generation request.
-  # Default: 120.
-  # timeout_seconds: 120
-  # Timeout (seconds) for establishing the TCP connection. Default: 10.
-  # connect_timeout_seconds: 10
-  # Maximum idle time (seconds) between streaming events before the stream is
-  # considered stalled. 0 disables the idle timeout and leaves the stream
-  # governed by the caller's context. Default: 0.
-  # stream_idle_timeout_seconds: 0
-
-  # Cap the number of tokens the model is allowed to generate in one response.
-  # Default: 32768. Sent to the provider on the wire: max_tokens for the
-  # chat_completions API and max_output_tokens for the responses API. An
-  # explicit 0 means "no explicit cap" and is sent as-is.
-  # max_tokens: 32768
-  # Sampling randomness in [0, 2]. Unset sends no value and leaves it to the
-  # provider default sampling. Some reasoning/tool-calling models ignore or
-  # reject non-default values.
-  # temperature: 1.0
-  # Model "thinking mode" reasoning effort: off | minimal | low | medium | high.
-  # Nil leaves it to the provider default. Values the provider does not support
-  # are silently ignored (not sent). The deepseek preset defaults to off;
-  # set thinking here to override.
-  # thinking: off
-
-  # Enable image understanding. Requires a vision-capable model. When true,
-  # command tools advertise the @@path@@ image tag and --image is accepted.
-  # Default: false.
-  # vision: true
+  profile: deepseek-v4-flash
 
 agent:
   max_rounds: 256
@@ -52,10 +50,6 @@ agent:
   # Default: 32. With compaction enabled, max_rounds can be raised to allow
   # longer tool loops without unbounded context growth.
   # max_history_rounds: 32
-  # Bound the total text budget (in bytes) for the messages sent to the model.
-  # Historical rounds are compressed (images dropped, oversized content
-  # truncated) so the total stays within this budget. Default: 1048576 (1 MiB).
-  # context_window: 1048576
 
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
 # followed by ~/.agents/skills/, independent of this file's location. Absent
