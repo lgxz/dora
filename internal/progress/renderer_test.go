@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/rivo/uniseg"
 )
 
 func TestRendererShowsDoraProgress(t *testing.T) {
@@ -41,7 +42,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	for _, want := range []string{
 		"dora: thinking",
 		"我先看看当前目录",
-		"pwd ·",
+		"pwd",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
@@ -172,6 +173,52 @@ func TestCommandSummaryShowsPowerShellCommand(t *testing.T) {
 	}
 }
 
+func TestCommandSummariesUseFixedDisplayWidth(t *testing.T) {
+	short := fitDisplayWidth("pwd", commandSummaryWidth)
+	long := fitDisplayWidth(strings.Repeat("x", commandSummaryWidth+10), commandSummaryWidth)
+	wide := fitDisplayWidth("读取中文文件", commandSummaryWidth)
+
+	for name, value := range map[string]string{"short": short, "long": long, "wide": wide} {
+		if got := uniseg.StringWidth(value); got != commandSummaryWidth {
+			t.Fatalf("%s display width = %d, want %d: %q", name, got, commandSummaryWidth, value)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(long), "…") {
+		t.Fatalf("long summary was not truncated: %q", long)
+	}
+}
+
+func TestRendererAlignsCommandResultColumns(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	calls := []dora.ToolCall{
+		{ID: "short", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)},
+		{ID: "long", Name: "bash", Input: json.RawMessage(`{"command":"` + strings.Repeat("x", commandSummaryWidth+10) + `"}`)},
+	}
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: calls}})
+	for _, call := range calls {
+		renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
+		renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+			Role: dora.RoleTool, ToolCallID: call.ID, Content: `{"exit_code":0,"stdout":"ok"}`,
+		}})
+	}
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("output lines = %q", lines)
+	}
+	firstColumn := strings.Index(lines[0], "·")
+	secondColumn := strings.Index(lines[1], "·")
+	if firstColumn < 0 || secondColumn < 0 {
+		t.Fatalf("result separator missing: %q", lines)
+	}
+	firstWidth := uniseg.StringWidth(lines[0][:firstColumn])
+	secondWidth := uniseg.StringWidth(lines[1][:secondColumn])
+	if firstWidth != secondWidth {
+		t.Fatalf("result columns = %d and %d: %q", firstWidth, secondWidth, lines)
+	}
+}
+
 func TestSkillSummaryShowsName(t *testing.T) {
 	summary := presentTool(
 		dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)},
@@ -197,15 +244,22 @@ func TestToolPresentations(t *testing.T) {
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"go   test ./..."}`)},
 			message:     dora.Message{Content: `{"exit_code":0,"stdout":"ok","stderr":"","timed_out":false,"truncated":false}`},
 			wantSummary: "go test ./...",
-			wantResult:  "exit 0",
+			wantResult:  "2B/0B",
 		},
 		{
 			name:        "command failure",
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"false"}`)},
-			message:     dora.Message{Content: `{"exit_code":1}`},
+			message:     dora.Message{Content: `{"exit_code":1,"stderr":"failed"}`},
 			wantSummary: "false",
-			wantResult:  "exit 1",
+			wantResult:  "0B/6B",
 			wantOutcome: outcomeFailure,
+		},
+		{
+			name:        "command combines stream sizes",
+			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"mixed-output"}`)},
+			message:     dora.Message{Content: `{"exit_code":0,"stdout":"hello","stderr":"warn"}`},
+			wantSummary: "mixed-output",
+			wantResult:  "5B/4B",
 		},
 		{
 			name:        "command timeout",
@@ -220,7 +274,7 @@ func TestToolPresentations(t *testing.T) {
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"generate-output"}`)},
 			message:     dora.Message{Content: `{"exit_code":0,"truncated":true}`},
 			wantSummary: "generate-output",
-			wantResult:  "exit 0, output truncated",
+			wantResult:  "output truncated",
 			wantOutcome: outcomeWarning,
 		},
 		{
@@ -382,6 +436,15 @@ func TestGenericPresentationOmitsPayloadAndHandlesInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestFormatStreamSizesUsesCompactStdoutStderrPair(t *testing.T) {
+	if got := formatStreamSizes(217, 64*1024); got != "217B/64K" {
+		t.Fatalf("formatStreamSizes = %q", got)
+	}
+	if got := formatStreamSizes(0, 0); got != "" {
+		t.Fatalf("empty formatStreamSizes = %q", got)
+	}
+}
+
 func TestKnownPresentationDoesNotLeakPayloadArguments(t *testing.T) {
 	presentation := presentTool(dora.ToolCall{
 		Name:  "write",
@@ -399,7 +462,7 @@ func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	command := dora.ToolCall{ID: "command", Name: "bash", Input: json.RawMessage(`{"command":"false"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: command})
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1}`}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1,"stderr":"failed"}`}})
 
 	read := dora.ToolCall{ID: "read", Name: "read", Input: json.RawMessage(`{"path":"missing.go"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{read}}})
@@ -407,12 +470,16 @@ func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolFailed, ToolCall: read, Err: fmt.Errorf(`execute tool "read": read: open missing.go: no such file`)})
 
 	for _, want := range []string{
-		"△ false · exit 1 ·",
+		"△ false",
+		"· 0B/6B ·",
 		"△ read missing.go · read: open missing.go: no such file ·",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
 		}
+	}
+	if strings.Contains(output.String(), "exit 1") {
+		t.Fatalf("output contains an unnecessary exit code: %q", output.String())
 	}
 }
 

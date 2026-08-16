@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lgxz/dora"
+	"github.com/rivo/uniseg"
 )
 
 const (
@@ -110,6 +111,8 @@ func formatCommandCall(raw json.RawMessage) string {
 func formatCommandResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
 	var result struct {
 		ExitCode  *int   `json:"exit_code"`
+		Stdout    string `json:"stdout"`
+		Stderr    string `json:"stderr"`
 		TimedOut  bool   `json:"timed_out"`
 		Truncated bool   `json:"truncated"`
 		JobID     string `json:"job_id"`
@@ -122,23 +125,23 @@ func formatCommandResult(_ dora.ToolCall, message dora.Message) (string, outcome
 	if result.Error != "" {
 		return collapse(result.Error), outcomeFailure
 	}
+	outputSize := formatStreamSizes(len(result.Stdout), len(result.Stderr))
 	if result.TimedOut {
-		return "timed out", outcomeFailure
+		return joinResult("timed out", outputSize), outcomeFailure
 	}
 	if result.JobID != "" && result.Status == "running" {
-		return "background job " + result.JobID, outcomeWarning
+		return joinResult("background job "+result.JobID, outputSize), outcomeWarning
 	}
 	if result.ExitCode != nil && *result.ExitCode != 0 {
-		return fmt.Sprintf("exit %d", *result.ExitCode), outcomeFailure
-	}
-	text := "done"
-	if result.ExitCode != nil {
-		text = fmt.Sprintf("exit %d", *result.ExitCode)
+		return outputSize, outcomeFailure
 	}
 	if result.Truncated {
-		return joinResult(text, "output truncated"), outcomeWarning
+		return joinResult(outputSize, "output truncated"), outcomeWarning
 	}
-	return text, outcomeSuccess
+	if result.ExitCode == nil {
+		return "done", outcomeSuccess
+	}
+	return outputSize, outcomeSuccess
 }
 
 func formatReadCall(raw json.RawMessage) string {
@@ -462,6 +465,35 @@ func truncateLine(value string, limit int) string {
 	return string(runes[:limit-1]) + "…"
 }
 
+func fitDisplayWidth(value string, width int) string {
+	value = collapse(value)
+	if width <= 0 {
+		return ""
+	}
+	if uniseg.StringWidth(value) <= width {
+		return value + strings.Repeat(" ", width-uniseg.StringWidth(value))
+	}
+
+	var fitted strings.Builder
+	used := 0
+	clusters := uniseg.NewGraphemes(value)
+	for clusters.Next() {
+		cluster := clusters.Str()
+		clusterWidth := uniseg.StringWidth(cluster)
+		if used+clusterWidth+1 > width {
+			break
+		}
+		fitted.WriteString(cluster)
+		used += clusterWidth
+	}
+	fitted.WriteRune('…')
+	used++
+	if used < width {
+		fitted.WriteString(strings.Repeat(" ", width-used))
+	}
+	return fitted.String()
+}
+
 func lineCount(value string) int {
 	value = strings.TrimRight(value, "\r\n")
 	if value == "" {
@@ -503,4 +535,32 @@ func formatBytes(value int) string {
 		return fmt.Sprintf("%.1f KB", float64(value)/1024)
 	}
 	return fmt.Sprintf("%.1f MB", float64(value)/(1024*1024))
+}
+
+func formatStreamSizes(stdout, stderr int) string {
+	if stdout == 0 && stderr == 0 {
+		return ""
+	}
+	return formatCompactBytes(stdout) + "/" + formatCompactBytes(stderr)
+}
+
+func formatCompactBytes(value int) string {
+	const (
+		kilobyte = 1024
+		megabyte = 1024 * 1024
+	)
+	if value < kilobyte {
+		return fmt.Sprintf("%dB", value)
+	}
+	if value < megabyte {
+		return formatCompactUnit(value, kilobyte, "K")
+	}
+	return formatCompactUnit(value, megabyte, "M")
+}
+
+func formatCompactUnit(value, unit int, suffix string) string {
+	if value%unit == 0 {
+		return fmt.Sprintf("%d%s", value/unit, suffix)
+	}
+	return fmt.Sprintf("%.1f%s", float64(value)/float64(unit), suffix)
 }

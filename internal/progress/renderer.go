@@ -18,6 +18,8 @@ const (
 	dim    = "2"
 )
 
+const commandSummaryWidth = 72
+
 // Renderer gives semantic Agent updates a concise Dora personality.
 type Renderer struct {
 	output   io.Writer
@@ -163,8 +165,12 @@ func (r *Renderer) renderToolLine(presentation toolPresentation, duration string
 	if presentation.name != "" {
 		fmt.Fprint(r.output, " ", r.paint(yellow, presentation.name))
 	}
-	if presentation.summary != "" {
-		fmt.Fprint(r.output, " ", r.paint(dim, presentation.summary))
+	summary := presentation.summary
+	if presentation.name == "" {
+		summary = fitDisplayWidth(summary, commandSummaryWidth)
+	}
+	if summary != "" {
+		fmt.Fprint(r.output, " ", r.paint(dim, summary))
 	}
 	if presentation.result != "" {
 		fmt.Fprint(r.output, " ", r.paint(statusColor, "· "+presentation.result))
