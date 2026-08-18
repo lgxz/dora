@@ -13,11 +13,6 @@ import (
 	"github.com/lgxz/dora/session"
 )
 
-var testMetadata = session.Metadata{
-	Provider: "openai", Profile: "test", API: "chat_completions",
-	Model: "model", BaseURL: "https://example.test/v1",
-}
-
 func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "history.sqlite")
@@ -35,12 +30,12 @@ func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	}
 
 	first := completedTurn(t, "first", "answer one", 2)
-	firstID, err := store.CommitTurn(ctx, first, testMetadata)
+	firstID, err := store.CommitTurn(ctx, first, session.Metadata{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second := completedTurn(t, "second", "answer two", 0)
-	secondID, err := store.CommitTurn(ctx, second, testMetadata)
+	secondID, err := store.CommitTurn(ctx, second, session.Metadata{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +64,7 @@ func TestStoreRejectsIncompleteTurnAndUnknownSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CommitTurn(ctx, dora.NewTurn("system", "user"), testMetadata); err == nil {
+	if _, err := store.CommitTurn(ctx, dora.NewTurn("system", "user"), session.Metadata{}); err == nil {
 		t.Fatal("expected incomplete turn error")
 	}
 	if _, err := store.db.Exec(`PRAGMA user_version = 99`); err != nil {

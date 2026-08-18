@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -58,15 +58,14 @@ func (s *Store) Close() error {
 }
 
 // CommitTurn atomically appends one completed turn and all of its rounds.
-func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn, metadata session.Metadata) (int64, error) {
+// The metadata parameter is deprecated and ignored; it is removed in the final
+// wiring commit.
+func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn, _ session.Metadata) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("sqlite session is not initialized")
 	}
 	if turn == nil || !turn.Completed() {
 		return 0, errors.New("cannot commit an incomplete turn")
-	}
-	if err := validateMetadata(metadata); err != nil {
-		return 0, err
 	}
 	result, _ := turn.Result()
 	rounds := turn.Rounds()
@@ -79,10 +78,8 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn, metadata sessio
 
 	inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
-    provider, profile, api, model, base_url,
     system, user, result, round_count, committed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		metadata.Provider, metadata.Profile, metadata.API, metadata.Model, metadata.BaseURL,
+) VALUES (?, ?, ?, ?, ?)`,
 		turn.System(), turn.User(), result, len(rounds), committedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -251,7 +248,7 @@ func (s *Store) initialize(ctx context.Context) error {
 			return fmt.Errorf("create sqlite session schema: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 1`); err != nil {
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
 		return fmt.Errorf("write sqlite schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -262,7 +259,7 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
-		`SELECT id, provider, profile, api, model, base_url, system, user, result, round_count, committed_at FROM turns LIMIT 0`,
+		`SELECT id, system, user, result, round_count, committed_at FROM turns LIMIT 0`,
 		`SELECT turn_id, round_index, position, role, content, tool_calls_json, tool_call_id, images_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
@@ -280,11 +277,6 @@ func (s *Store) validateSchema(ctx context.Context) error {
 var schemaStatements = []string{
 	`CREATE TABLE turns (
         id INTEGER PRIMARY KEY,
-        provider TEXT NOT NULL,
-        profile TEXT NOT NULL,
-        api TEXT NOT NULL,
-        model TEXT NOT NULL,
-        base_url TEXT NOT NULL,
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
@@ -387,13 +379,6 @@ func decodeMessage(role, content, callsJSON, callID, imagesJSON string) (dora.Me
 		}
 	}
 	return message, nil
-}
-
-func validateMetadata(metadata session.Metadata) error {
-	if metadata.Provider == "" || metadata.Profile == "" || metadata.API == "" || metadata.Model == "" || metadata.BaseURL == "" {
-		return errors.New("session metadata requires provider, profile, API, model, and base URL")
-	}
-	return nil
 }
 
 func parseTime(value string) (time.Time, error) {

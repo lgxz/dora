@@ -11,7 +11,11 @@ import (
 
 var ErrNotFound = errors.New("session turn not found")
 
-// Metadata records which configured backend produced a completed turn.
+// Metadata records which configured backend produced a completed turn. It is
+// a deprecated compatibility type retained only so internal/cli keeps compiling
+// until the final wiring commit; the turns table no longer stores these fields.
+//
+// Deprecated: will be removed.
 type Metadata struct {
 	Provider string
 	Profile  string
