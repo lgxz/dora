@@ -224,7 +224,7 @@ client:
 
 The embedded provider catalog supplies built-in `deepseek` and `trust`
 definitions with `base_url`, so catalog entries with those names may omit that
-field. Models are always listed explicitly in `providers[].models`. Each
+field. Models are always listed explicitly in `providers[].profiles`. Each
 entry's `name` is a unique profile name used by `client.profile`; `model` is
 the identifier sent to the provider. `model` defaults to `name` when omitted,
 and multiple profiles may use the same model with different parameters. Set
@@ -237,7 +237,7 @@ server-side response storage.
 
 To use any third-party provider that speaks the OpenAI Chat Completions
 protocol (for example Ollama, LM Studio, vLLM, Groq, Together, OpenRouter, or
-a self-hosted endpoint), add it to `providers` with `base_url` and models. The Chat Completions endpoint is
+a self-hosted endpoint), add it to `providers` with `base_url` and profiles. The Chat Completions endpoint is
 `base_url + "/chat/completions"`, so `base_url` should be the provider's `/v1`
 (or equivalent) root.
 
@@ -248,7 +248,7 @@ For a self-hosted Ollama endpoint that requires no authentication, leave
 providers:
   - name: ollama
     base_url: http://localhost:11434/v1
-    models:
+    profiles:
       - name: llama3.1
 ```
 
@@ -260,7 +260,7 @@ same name under config `env`:
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    models:
+    profiles:
       - name: openrouter/auto
 env:
   OPENROUTER_API_KEY: sk-...
@@ -278,7 +278,7 @@ Control the per-response output budget and sampling with `max_tokens` and
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    models:
+    profiles:
       - name: balanced
         model: openrouter/auto
         max_tokens: 32768

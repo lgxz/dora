@@ -9,7 +9,7 @@ import (
 
 // constructFunc is the seam used to instantiate a dora.Model from a resolved
 // profile. Tests inject a stub; production uses registry.Construct.
-type constructFunc func(registry.ProviderConfig, registry.ModelConfig) (dora.Model, error)
+type constructFunc func(registry.ProviderConfig, registry.Profile) (dora.Model, error)
 
 // Router implements dora.Model and routes to a cached text model plus a
 // transiently-constructed visual model for image viewing.
@@ -37,7 +37,7 @@ func newRouter(cat *registry.Catalog, construct constructFunc, text, image dora.
 	if err != nil {
 		return nil, err
 	}
-	textModel, err := construct(textSel.provider, textSel.model)
+	textModel, err := construct(textSel.provider, textSel.profile)
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +57,8 @@ func newRouter(cat *registry.Catalog, construct constructFunc, text, image dora.
 // SetThinking overrides the cached text model's thinking mode (for --thinking)
 // and reconstructs the cached text model from the same catalog entry.
 func (r *Router) SetThinking(thinking *string) error {
-	r.textSel.model.Thinking = thinking
-	model, err := r.construct(r.textSel.provider, r.textSel.model)
+	r.textSel.profile.Thinking = thinking
+	model, err := r.construct(r.textSel.provider, r.textSel.profile)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (r *Router) View(ctx context.Context, image dora.Image, prompt string) (str
 	if !r.imageSet {
 		return "", ErrNotFound
 	}
-	model, err := r.construct(r.imageSel.provider, r.imageSel.model)
+	model, err := r.construct(r.imageSel.provider, r.imageSel.profile)
 	if err != nil {
 		return "", err
 	}

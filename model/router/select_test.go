@@ -12,14 +12,14 @@ func testCatalog() *registry.Catalog {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{
 		{
 			Name: "alpha", BaseURL: "https://alpha.example", API: "chat_completions", APIKey: "test-key",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "a-text", Capabilities: []dora.Capability{dora.CapabilityText}},
 				{Name: "a-vision", Capabilities: []dora.Capability{dora.CapabilityText, dora.CapabilityImageInput}},
 			},
 		},
 		{
 			Name: "beta", BaseURL: "https://beta.example", API: "chat_completions", APIKey: "test-key",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "b-vision", Capabilities: []dora.Capability{dora.CapabilityText, dora.CapabilityImageInput, dora.CapabilityImageOutput}},
 			},
 		},
@@ -35,8 +35,8 @@ func TestSelectFirstInOrderWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.provider.Name != "alpha" || sel.model.Name != "a-vision" {
-		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.model.Name)
+	if sel.provider.Name != "alpha" || sel.profile.Name != "a-vision" {
+		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.profile.Name)
 	}
 }
 
@@ -45,8 +45,8 @@ func TestSelectEmptyConstraintsSelectsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.provider.Name != "alpha" || sel.model.Name != "a-text" {
-		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.model.Name)
+	if sel.provider.Name != "alpha" || sel.profile.Name != "a-text" {
+		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.profile.Name)
 	}
 }
 
@@ -58,8 +58,8 @@ func TestSelectNeedIntersection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.provider.Name != "beta" || sel.model.Name != "b-vision" {
-		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.model.Name)
+	if sel.provider.Name != "beta" || sel.profile.Name != "b-vision" {
+		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.profile.Name)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestSelectTextIsExplicit(t *testing.T) {
 	// A model that does not advertise "text" is skipped by Needs:[text].
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{{
 		Name: "p", BaseURL: "https://p.example", API: "chat_completions", APIKey: "test-key",
-		Models: []registry.ModelConfig{
+		Profiles: []registry.Profile{
 			{Name: "vision-only", Capabilities: []dora.Capability{dora.CapabilityImageInput}},
 			{Name: "text", Capabilities: []dora.Capability{dora.CapabilityText}},
 		},
@@ -79,8 +79,8 @@ func TestSelectTextIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.model.Name != "text" {
-		t.Fatalf("selection = %s", sel.model.Name)
+	if sel.profile.Name != "text" {
+		t.Fatalf("selection = %s", sel.profile.Name)
 	}
 }
 
@@ -99,8 +99,8 @@ func TestSelectProfileScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.model.Name != "a-vision" {
-		t.Fatalf("profile = %q", sel.model.Name)
+	if sel.profile.Name != "a-vision" {
+		t.Fatalf("profile = %q", sel.profile.Name)
 	}
 }
 
@@ -113,8 +113,8 @@ func TestSelectCombinedConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.provider.Name != "beta" || sel.model.Name != "b-vision" {
-		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.model.Name)
+	if sel.provider.Name != "beta" || sel.profile.Name != "b-vision" {
+		t.Fatalf("selection = %s/%s", sel.provider.Name, sel.profile.Name)
 	}
 }
 
@@ -142,13 +142,13 @@ func TestSelectSkipsProviderWithoutAPIKey(t *testing.T) {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{
 		{
 			Name: "A", BaseURL: "https://a.example", API: "chat_completions",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "a-text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			},
 		},
 		{
 			Name: "B", BaseURL: "https://b.example", API: "chat_completions", APIKey: "test-key",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "b-text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			},
 		},
@@ -160,8 +160,8 @@ func TestSelectSkipsProviderWithoutAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.provider.Name != "B" || sel.model.Name != "b-text" {
-		t.Fatalf("selection = %s/%s, want B/b-text", sel.provider.Name, sel.model.Name)
+	if sel.provider.Name != "B" || sel.profile.Name != "b-text" {
+		t.Fatalf("selection = %s/%s, want B/b-text", sel.provider.Name, sel.profile.Name)
 	}
 }
 
@@ -169,13 +169,13 @@ func TestSelectAllProvidersWithoutAPIKey(t *testing.T) {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{
 		{
 			Name: "A", BaseURL: "https://a.example", API: "chat_completions",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "a-text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			},
 		},
 		{
 			Name: "B", BaseURL: "https://b.example", API: "chat_completions",
-			Models: []registry.ModelConfig{
+			Profiles: []registry.Profile{
 				{Name: "b-text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			},
 		},

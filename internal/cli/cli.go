@@ -113,9 +113,9 @@ func writeAnswer(streams IO, content string) error {
 func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Config {
 	providers := make([]registry.ProviderConfig, len(cfg.Providers))
 	for i, p := range cfg.Providers {
-		models := make([]registry.ModelConfig, len(p.Models))
-		for j, m := range p.Models {
-			models[j] = registry.ModelConfig{
+		profiles := make([]registry.Profile, len(p.Profiles))
+		for j, m := range p.Profiles {
+			profiles[j] = registry.Profile{
 				Name:          m.Name,
 				Model:         m.Model,
 				API:           m.API,
@@ -135,7 +135,7 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 			ConnectTimeoutSeconds:    p.ConnectTimeoutSeconds,
 			StreamIdleTimeoutSeconds: p.StreamIdleTimeoutSeconds,
 			HTTPClient:               httpClient,
-			Models:                   models,
+			Profiles:                 profiles,
 		}
 	}
 	return registry.Config{Providers: providers}

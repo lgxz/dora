@@ -167,11 +167,11 @@ client:
   profile: deepseek-v4-flash
 ```
 
-嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].models` 中。每项的 `name` 是由 `client.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
+嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `client.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
 
 ### 第三方 OpenAI 兼容提供商
 
-要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 models。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
+要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 profiles。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
 
 对于无需认证的自托管 Ollama 端点，也需设置任意非空占位 API key（例如 `export OLLAMA_API_KEY=local`，或在配置 `env` 段下使用相同名称），否则该 provider 会被视为不可用并在选择时被跳过：
 
@@ -179,7 +179,7 @@ client:
 providers:
   - name: ollama
     base_url: http://localhost:11434/v1
-    models:
+    profiles:
       - name: llama3.1
 env:
   OLLAMA_API_KEY: local
@@ -191,7 +191,7 @@ env:
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    models:
+    profiles:
       - name: openrouter/auto
 env:
   OPENROUTER_API_KEY: sk-...
@@ -205,7 +205,7 @@ env:
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    models:
+    profiles:
       - name: balanced
         model: openrouter/auto
         max_tokens: 32768

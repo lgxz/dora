@@ -116,7 +116,7 @@ func toolNames(tools []dora.Tool) string {
 func TestBuildToolsAlwaysRegistersViewImage(t *testing.T) {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{{
 		Name: "p", BaseURL: "https://example.test/v1", API: "chat_completions", APIKey: "test-key",
-		Models: []registry.ModelConfig{{
+		Profiles: []registry.Profile{{
 			Name: "text", Capabilities: []dora.Capability{dora.CapabilityText},
 		}},
 	}}})

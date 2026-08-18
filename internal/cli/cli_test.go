@@ -58,7 +58,7 @@ func TestRunCallsConfiguredModel(t *testing.T) {
 providers:
   - name: openai
     base_url: %s
-    models:
+    profiles:
       - name: fast
         model: test-model
         capabilities: [text]
@@ -1718,7 +1718,7 @@ func writeTestConfig(t *testing.T, path, contents string) error {
 				modelConfig["capabilities"] = []string{"text", "image_input"}
 			}
 		}
-		providerConfig["models"] = []any{modelConfig}
+		providerConfig["profiles"] = []any{modelConfig}
 		root["providers"] = []any{providerConfig}
 		root["policy"] = map[string]any{
 			"text": map[string]any{"provider": provider, "profile": name},

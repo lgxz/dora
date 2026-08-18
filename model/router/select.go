@@ -15,10 +15,10 @@ var ErrNotFound = errors.New("router: no model satisfies the constraints")
 // selection is the internal resolved choice. It is never exported.
 type selection struct {
 	provider registry.ProviderConfig
-	model    registry.ModelConfig
+	profile  registry.Profile
 }
 
-// Select returns the first catalog entry, in provider then model order, that
+// Select returns the first catalog entry, in provider then profile order, that
 // satisfies every non-empty field of the constraints. Selection is silent: no
 // ambiguity error, and the first match wins.
 //
@@ -34,14 +34,14 @@ func Select(cat *registry.Catalog, c dora.Constraints) (selection, error) {
 		if provider.APIKey == "" {
 			continue
 		}
-		for _, model := range provider.Models {
-			if c.Profile != "" && model.Name != c.Profile {
+		for _, profile := range provider.Profiles {
+			if c.Profile != "" && profile.Name != c.Profile {
 				continue
 			}
-			if !satisfies(model.Capabilities, c.Needs) {
+			if !satisfies(profile.Capabilities, c.Needs) {
 				continue
 			}
-			return selection{provider: provider, model: model}, nil
+			return selection{provider: provider, profile: profile}, nil
 		}
 	}
 	return selection{}, ErrNotFound

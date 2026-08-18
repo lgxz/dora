@@ -22,7 +22,7 @@ import (
 	"github.com/lgxz/dora/model/openairesponses"
 )
 
-// ProviderConfig describes one provider endpoint and its models.
+// ProviderConfig describes one provider endpoint and its profiles.
 type ProviderConfig struct {
 	Name                     string
 	BaseURL                  string
@@ -32,12 +32,12 @@ type ProviderConfig struct {
 	ConnectTimeoutSeconds    int
 	StreamIdleTimeoutSeconds int
 	HTTPClient               *http.Client
-	Models                   []ModelConfig
+	Profiles                 []Profile
 }
 
-// ModelConfig describes one named model profile under a provider. Name selects
+// Profile describes one named model profile under a provider. Name selects
 // the profile; Model is the model identifier sent to the provider.
-type ModelConfig struct {
+type Profile struct {
 	Name          string
 	Model         string
 	API           string // overrides provider API when non-empty
@@ -65,12 +65,12 @@ func NewCatalog(cfg Config) (*Catalog, error) {
 		return nil, errors.New("registry: at least one provider is required")
 	}
 	for _, p := range cfg.Providers {
-		if len(p.Models) == 0 {
-			return nil, fmt.Errorf("registry: provider %q has no models configured", p.Name)
+		if len(p.Profiles) == 0 {
+			return nil, fmt.Errorf("registry: provider %q has no profiles configured", p.Name)
 		}
-		for i := range p.Models {
-			if p.Models[i].Model == "" {
-				p.Models[i].Model = p.Models[i].Name
+		for i := range p.Profiles {
+			if p.Profiles[i].Model == "" {
+				p.Profiles[i].Model = p.Profiles[i].Name
 			}
 		}
 	}
@@ -85,42 +85,42 @@ func (c *Catalog) Providers() []ProviderConfig {
 	return c.providers
 }
 
-// Construct instantiates a dora.Model for ONE resolved provider+model profile,
+// Construct instantiates a dora.Model for ONE resolved provider+profile,
 // translating the neutral thinking control into the adapter's wire format.
-func Construct(p ProviderConfig, m ModelConfig) (dora.Model, error) {
-	api := m.API
+func Construct(p ProviderConfig, profile Profile) (dora.Model, error) {
+	api := profile.API
 	if api == "" {
 		api = p.API
 	}
 	dur := func(seconds int) time.Duration { return time.Duration(seconds) * time.Second }
 	switch api {
 	case "chat_completions":
-		reasoningEffort, thinking := mapChatThinking(p.Name, m.Thinking)
+		reasoningEffort, thinking := mapChatThinking(p.Name, profile.Thinking)
 		return openai.New(openai.Config{
 			BaseURL:           p.BaseURL,
 			APIKey:            p.APIKey,
-			Model:             m.Model,
+			Model:             profile.Model,
 			HTTPClient:        p.HTTPClient,
 			ConnectTimeout:    dur(p.ConnectTimeoutSeconds),
 			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
 			Timeout:           dur(p.TimeoutSeconds),
-			MaxTokens:         m.MaxTokens,
-			Temperature:       m.Temperature,
+			MaxTokens:         profile.MaxTokens,
+			Temperature:       profile.Temperature,
 			ReasoningEffort:   reasoningEffort,
 			Thinking:          thinking,
 		})
 	case "responses":
-		reasoning := mapResponsesThinking(p.Name, m.Thinking)
+		reasoning := mapResponsesThinking(p.Name, profile.Thinking)
 		return openairesponses.New(openairesponses.Config{
 			BaseURL:           p.BaseURL,
 			APIKey:            p.APIKey,
-			Model:             m.Model,
+			Model:             profile.Model,
 			HTTPClient:        p.HTTPClient,
 			ConnectTimeout:    dur(p.ConnectTimeoutSeconds),
 			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
 			Timeout:           dur(p.TimeoutSeconds),
-			MaxTokens:         m.MaxTokens,
-			Temperature:       m.Temperature,
+			MaxTokens:         profile.MaxTokens,
+			Temperature:       profile.Temperature,
 			Reasoning:         reasoning,
 		})
 	default:

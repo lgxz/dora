@@ -26,7 +26,7 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	m := modelByName(t, p, "deepseek-v4-flash")
 	if m.MaxTokens == nil || *m.MaxTokens != 32768 ||
 		m.ContextWindow == nil || *m.ContextWindow != 1<<20 {
-		t.Fatalf("models = %#v", p.Models)
+		t.Fatalf("profiles = %#v", p.Profiles)
 	}
 	if cfg.Policy.Text.Provider != "" || cfg.Policy.Text.Profile != "" {
 		t.Fatalf("selector = %#v", cfg.Policy)
@@ -42,7 +42,7 @@ func TestLoadPolicyFromYAML(t *testing.T) {
 providers:
   - name: custom
     base_url: https://custom.example/v1
-    models:
+    profiles:
       - name: default
       - name: team/fast
 policy:
@@ -71,7 +71,7 @@ func TestLoadPolicyEnvOverride(t *testing.T) {
 providers:
   - name: custom
     base_url: https://custom.example/v1
-    models:
+    profiles:
       - name: default
       - name: team/fast
 `))
@@ -92,7 +92,7 @@ func TestLoadBuiltinProviderFillsConnectionDefaults(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models:
+    profiles:
       - name: custom-deepseek
 policy:
   text:
@@ -121,7 +121,7 @@ func TestLoadExplicitProviderValuesOverrideBuiltinDefaults(t *testing.T) {
 providers:
   - name: deepseek
     base_url: https://gateway.example/v1
-    models:
+    profiles:
       - name: custom-model
 `))
 	if err != nil {
@@ -137,7 +137,7 @@ func TestLoadCustomProviderRequiresBaseURL(t *testing.T) {
 	_, err := Load(writeConfig(t, `
 providers:
   - name: custom
-    models:
+    profiles:
       - name: model
 `))
 	if err == nil || !strings.Contains(err.Error(), "base_url cannot be empty") {
@@ -151,7 +151,7 @@ func TestLoadProcessEnvironmentOverridesConfigEnvironment(t *testing.T) {
 providers:
   - name: custom
     base_url: https://custom.example/v1
-    models:
+    profiles:
       - name: model
 env:
   CUSTOM_API_KEY: config-secret
@@ -187,10 +187,10 @@ func TestLoadDerivesDistinctProviderAPIKeyEnvironments(t *testing.T) {
 providers:
   - name: foo-bar
     base_url: https://foo.example/v1
-    models: [{name: model}]
+    profiles: [{name: model}]
   - name: baz
     base_url: https://baz.example/v1
-    models: [{name: model}]
+    profiles: [{name: model}]
 policy:
   text:
     provider: foo-bar
@@ -209,10 +209,10 @@ func TestLoadRejectsProviderAPIKeyEnvironmentCollision(t *testing.T) {
 providers:
   - name: foo-bar
     base_url: https://foo.example/v1
-    models: [{name: model}]
+    profiles: [{name: model}]
   - name: foo_bar
     base_url: https://bar.example/v1
-    models: [{name: model}]
+    profiles: [{name: model}]
 `))
 	if err == nil || !strings.Contains(err.Error(), "FOO_BAR_API_KEY") || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("error = %v", err)
@@ -225,7 +225,7 @@ providers:
   - name: custom
     base_url: https://custom.example/v1
     api_key_env: CUSTOM_KEY
-    models:
+    profiles:
       - name: model
 `))
 	if err == nil || !strings.Contains(err.Error(), "field api_key_env not found") {
@@ -239,7 +239,7 @@ providers:
   - name: custom
     base_url: https://custom.example/v1
     api_key: secret
-    models:
+    profiles:
       - name: model
 `))
 	if err == nil || !strings.Contains(err.Error(), "field api_key not found") {
@@ -261,14 +261,14 @@ func TestLoadCapabilitiesRoundTrip(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models:
+    profiles:
       - name: flash
         capabilities: [text, image_input]
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := cfg.Providers[0].Models[0].Capabilities
+	got := cfg.Providers[0].Profiles[0].Capabilities
 	if len(got) != 2 || got[0] != dora.CapabilityText || got[1] != dora.CapabilityImageInput {
 		t.Fatalf("capabilities = %#v", got)
 	}
@@ -278,7 +278,7 @@ func TestLoadRejectsUnknownCapability(t *testing.T) {
 	_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models:
+    profiles:
       - name: flash
         capabilities: [text, bogus]
 `))
@@ -312,7 +312,7 @@ client:
 		_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models: [{name: model, vision: true}]
+    profiles: [{name: model, vision: true}]
 `))
 		if err == nil || !strings.Contains(err.Error(), "field vision not found") {
 			t.Fatalf("error = %v", err)
@@ -322,7 +322,7 @@ providers:
 		_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models: [{name: model}]
+    profiles: [{name: model}]
 agent:
   context_window: 1048576
 `))
@@ -336,7 +336,7 @@ func TestLoadAppliesModelDefaults(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models:
+    profiles:
       - name: flash
       - name: reasoner
         model: flash
@@ -346,14 +346,14 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	models := cfg.Providers[0].Models
-	if models[0].Model != "flash" || models[0].MaxTokens == nil || *models[0].MaxTokens != 32768 ||
-		models[0].ContextWindow == nil || *models[0].ContextWindow != 1<<20 || models[0].Thinking != nil {
-		t.Fatalf("default model = %#v", models[0])
+	profiles := cfg.Providers[0].Profiles
+	if profiles[0].Model != "flash" || profiles[0].MaxTokens == nil || *profiles[0].MaxTokens != 32768 ||
+		profiles[0].ContextWindow == nil || *profiles[0].ContextWindow != 1<<20 || profiles[0].Thinking != nil {
+		t.Fatalf("default model = %#v", profiles[0])
 	}
-	if models[1].Model != "flash" || models[1].MaxTokens == nil || *models[1].MaxTokens != 0 ||
-		models[1].ContextWindow == nil || *models[1].ContextWindow != 2048 {
-		t.Fatalf("explicit values = %#v", models[1])
+	if profiles[1].Model != "flash" || profiles[1].MaxTokens == nil || *profiles[1].MaxTokens != 0 ||
+		profiles[1].ContextWindow == nil || *profiles[1].ContextWindow != 2048 {
+		t.Fatalf("explicit values = %#v", profiles[1])
 	}
 }
 
@@ -362,9 +362,9 @@ func TestLoadRejectsDuplicateProviderAndModelNames(t *testing.T) {
 		_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models: [{name: one}]
+    profiles: [{name: one}]
   - name: deepseek
-    models: [{name: two}]
+    profiles: [{name: two}]
 `))
 		if err == nil || !strings.Contains(err.Error(), "duplicated") {
 			t.Fatalf("error = %v", err)
@@ -374,7 +374,7 @@ providers:
 		_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models:
+    profiles:
       - name: same
       - name: same
 `))
@@ -391,13 +391,13 @@ func TestLoadRejectsInvalidProviderAndModelValues(t *testing.T) {
 		want string
 	}{
 		{"empty providers", "providers: []\n", "providers cannot be empty"},
-		{"invalid api", "providers:\n  - name: deepseek\n    api: bogus\n    models: [{name: model}]\n", "must be"},
-		{"negative timeout", "providers:\n  - name: deepseek\n    timeout_seconds: -1\n    models: [{name: model}]\n", "cannot be negative"},
-		{"negative max tokens", "providers:\n  - name: deepseek\n    models: [{name: model, max_tokens: -1}]\n", "cannot be negative"},
-		{"zero context window", "providers:\n  - name: deepseek\n    models: [{name: model, context_window: 0}]\n", "context_window must be positive"},
-		{"negative context window", "providers:\n  - name: deepseek\n    models: [{name: model, context_window: -1}]\n", "context_window must be positive"},
-		{"temperature", "providers:\n  - name: deepseek\n    models: [{name: model, temperature: 3}]\n", "within [0, 2]"},
-		{"thinking", "providers:\n  - name: deepseek\n    models: [{name: model, thinking: turbo}]\n", "thinking must be one of"},
+		{"invalid api", "providers:\n  - name: deepseek\n    api: bogus\n    profiles: [{name: model}]\n", "must be"},
+		{"negative timeout", "providers:\n  - name: deepseek\n    timeout_seconds: -1\n    profiles: [{name: model}]\n", "cannot be negative"},
+		{"negative max tokens", "providers:\n  - name: deepseek\n    profiles: [{name: model, max_tokens: -1}]\n", "cannot be negative"},
+		{"zero context window", "providers:\n  - name: deepseek\n    profiles: [{name: model, context_window: 0}]\n", "context_window must be positive"},
+		{"negative context window", "providers:\n  - name: deepseek\n    profiles: [{name: model, context_window: -1}]\n", "context_window must be positive"},
+		{"temperature", "providers:\n  - name: deepseek\n    profiles: [{name: model, temperature: 3}]\n", "within [0, 2]"},
+		{"thinking", "providers:\n  - name: deepseek\n    profiles: [{name: model, thinking: turbo}]\n", "thinking must be one of"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -424,7 +424,7 @@ func TestLoadValidatesSharedSettings(t *testing.T) {
 	_, err := Load(writeConfig(t, `
 providers:
   - name: deepseek
-    models: [{name: model}]
+    profiles: [{name: model}]
 agent:
   max_rounds: -1
 `))
@@ -444,15 +444,15 @@ func providerByName(t *testing.T, cfg Config, name string) Provider {
 	return Provider{}
 }
 
-func modelByName(t *testing.T, provider Provider, name string) ModelSpec {
+func modelByName(t *testing.T, provider Provider, name string) ProfileSpec {
 	t.Helper()
-	for _, model := range provider.Models {
-		if model.Name == name {
-			return model
+	for _, profile := range provider.Profiles {
+		if profile.Name == name {
+			return profile
 		}
 	}
 	t.Fatalf("model profile %q not found under provider %q", name, provider.Name)
-	return ModelSpec{}
+	return ProfileSpec{}
 }
 
 func writeConfig(t *testing.T, contents string) string {

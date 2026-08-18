@@ -12,11 +12,11 @@ func TestNewCatalogPreservesOrder(t *testing.T) {
 		Providers: []ProviderConfig{
 			{
 				Name: "first", BaseURL: "https://first.example", API: "chat_completions",
-				Models: []ModelConfig{{Name: "a"}, {Name: "b"}},
+				Profiles: []Profile{{Name: "a"}, {Name: "b"}},
 			},
 			{
 				Name: "second", BaseURL: "https://second.example", API: "chat_completions",
-				Models: []ModelConfig{{Name: "c"}},
+				Profiles: []Profile{{Name: "c"}},
 			},
 		},
 	}
@@ -28,20 +28,20 @@ func TestNewCatalogPreservesOrder(t *testing.T) {
 	if len(providers) != 2 || providers[0].Name != "first" || providers[1].Name != "second" {
 		t.Fatalf("providers = %#v", providers)
 	}
-	if len(providers[0].Models) != 2 || providers[0].Models[0].Name != "a" || providers[0].Models[1].Name != "b" {
-		t.Fatalf("models = %#v", providers[0].Models)
+	if len(providers[0].Profiles) != 2 || providers[0].Profiles[0].Name != "a" || providers[0].Profiles[1].Name != "b" {
+		t.Fatalf("profiles = %#v", providers[0].Profiles)
 	}
 }
 
 func TestNewCatalogFillsDefaultModelNames(t *testing.T) {
 	cat, err := NewCatalog(Config{Providers: []ProviderConfig{{
 		Name: "p", BaseURL: "https://example.test", API: "chat_completions",
-		Models: []ModelConfig{{Name: "m"}},
+		Profiles: []Profile{{Name: "m"}},
 	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cat.Providers()[0].Models[0].Model; got != "m" {
+	if got := cat.Providers()[0].Profiles[0].Model; got != "m" {
 		t.Fatalf("model = %q, want %q", got, "m")
 	}
 }
@@ -51,20 +51,20 @@ func TestNewCatalogRejectsEmptyProvidersAndProviderWithoutModels(t *testing.T) {
 		t.Fatal("expected error for empty providers")
 	}
 	if _, err := NewCatalog(Config{Providers: []ProviderConfig{{Name: "p"}}}); err == nil {
-		t.Fatal("expected error for provider without models")
+		t.Fatal("expected error for provider without profiles")
 	}
 }
 
 func TestCapabilitiesRoundTrip(t *testing.T) {
 	cfg := Config{Providers: []ProviderConfig{{
 		Name: "p", BaseURL: "https://example.test", API: "chat_completions",
-		Models: []ModelConfig{{Name: "m", Capabilities: []dora.Capability{dora.CapabilityImageInput}}},
+		Profiles: []Profile{{Name: "m", Capabilities: []dora.Capability{dora.CapabilityImageInput}}},
 	}}}
 	cat, err := NewCatalog(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := cat.Providers()[0].Models[0].Capabilities
+	got := cat.Providers()[0].Profiles[0].Capabilities
 	if len(got) != 1 || got[0] != dora.CapabilityImageInput {
 		t.Fatalf("capabilities = %#v", got)
 	}
@@ -73,7 +73,7 @@ func TestCapabilitiesRoundTrip(t *testing.T) {
 func TestConstructChatCompletions(t *testing.T) {
 	model, err := Construct(
 		ProviderConfig{Name: "openai", BaseURL: "https://example.test/v1", API: "chat_completions", HTTPClient: &http.Client{}},
-		ModelConfig{Name: "m", Model: "test-model"},
+		Profile{Name: "m", Model: "test-model"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestConstructChatCompletions(t *testing.T) {
 func TestConstructResponses(t *testing.T) {
 	model, err := Construct(
 		ProviderConfig{Name: "openai", BaseURL: "https://example.test/v1", API: "responses", HTTPClient: &http.Client{}},
-		ModelConfig{Name: "m", Model: "test-model"},
+		Profile{Name: "m", Model: "test-model"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestConstructResponses(t *testing.T) {
 func TestConstructUnknownAPI(t *testing.T) {
 	if _, err := Construct(
 		ProviderConfig{Name: "openai", BaseURL: "https://example.test/v1", API: "bogus"},
-		ModelConfig{Name: "m", Model: "test-model"},
+		Profile{Name: "m", Model: "test-model"},
 	); err == nil {
 		t.Fatal("expected error for unknown API")
 	}

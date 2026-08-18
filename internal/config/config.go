@@ -53,21 +53,22 @@ type Agent struct {
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
-// Provider describes one provider endpoint with multiple models.
+// Provider describes one provider endpoint with multiple profiles.
 type Provider struct {
-	Name                     string      `yaml:"name"`
-	BaseURL                  string      `yaml:"base_url"`
-	APIKey                   string      `yaml:"-"`
-	API                      string      `yaml:"api,omitempty"`
-	TimeoutSeconds           int         `yaml:"timeout_seconds,omitempty"`
-	ConnectTimeoutSeconds    int         `yaml:"connect_timeout_seconds,omitempty"`
-	StreamIdleTimeoutSeconds int         `yaml:"stream_idle_timeout_seconds,omitempty"`
-	Models                   []ModelSpec `yaml:"models"`
+	Name                     string        `yaml:"name"`
+	BaseURL                  string        `yaml:"base_url"`
+	APIKey                   string        `yaml:"-"`
+	API                      string        `yaml:"api,omitempty"`
+	TimeoutSeconds           int           `yaml:"timeout_seconds,omitempty"`
+	ConnectTimeoutSeconds    int           `yaml:"connect_timeout_seconds,omitempty"`
+	StreamIdleTimeoutSeconds int           `yaml:"stream_idle_timeout_seconds,omitempty"`
+	Profiles                 []ProfileSpec `yaml:"profiles"`
 }
 
-// ModelSpec describes one named model profile under a Provider. Model defaults
-// to Name and may be shared by profiles with different generation parameters.
-type ModelSpec struct {
+// ProfileSpec describes one named model profile under a Provider. Model
+// defaults to Name and may be shared by profiles with different generation
+// parameters.
+type ProfileSpec struct {
 	Name      string  `yaml:"name"`
 	Model     string  `yaml:"model,omitempty"`
 	API       string  `yaml:"api,omitempty"`
@@ -314,52 +315,52 @@ func (cfg *Config) resolveProviders() error {
 		} else if value := cfg.Env[apiKeyEnvironment]; value != "" {
 			p.APIKey = value
 		}
-		if len(p.Models) == 0 {
-			return fmt.Errorf("providers[%d].models cannot be empty", i)
+		if len(p.Profiles) == 0 {
+			return fmt.Errorf("providers[%d].profiles cannot be empty", i)
 		}
-		modelNames := make(map[string]struct{}, len(p.Models))
-		for j := range p.Models {
-			m := &p.Models[j]
+		modelNames := make(map[string]struct{}, len(p.Profiles))
+		for j := range p.Profiles {
+			m := &p.Profiles[j]
 			if m.Name == "" {
-				return fmt.Errorf("providers[%d].models[%d].name cannot be empty", i, j)
+				return fmt.Errorf("providers[%d].profiles[%d].name cannot be empty", i, j)
 			}
 			if m.Model == "" {
 				m.Model = m.Name
 			}
 			if _, exists := modelNames[m.Name]; exists {
-				return fmt.Errorf("providers[%d].models[%d].name %q is duplicated", i, j, m.Name)
+				return fmt.Errorf("providers[%d].profiles[%d].name %q is duplicated", i, j, m.Name)
 			}
 			modelNames[m.Name] = struct{}{}
 			if m.API != "" {
-				if err := validateAPI(m.API, fmt.Sprintf("providers[%d].models[%d].api", i, j)); err != nil {
+				if err := validateAPI(m.API, fmt.Sprintf("providers[%d].profiles[%d].api", i, j)); err != nil {
 					return err
 				}
 			}
 			if m.MaxTokens != nil && *m.MaxTokens < 0 {
-				return fmt.Errorf("providers[%d].models[%d].max_tokens cannot be negative", i, j)
+				return fmt.Errorf("providers[%d].profiles[%d].max_tokens cannot be negative", i, j)
 			}
 			if m.MaxTokens == nil {
 				m.MaxTokens = intPtr(32768)
 			}
 			if m.ContextWindow != nil && *m.ContextWindow <= 0 {
-				return fmt.Errorf("providers[%d].models[%d].context_window must be positive", i, j)
+				return fmt.Errorf("providers[%d].profiles[%d].context_window must be positive", i, j)
 			}
 			if m.ContextWindow == nil {
 				m.ContextWindow = intPtr(defaultModelContextWindow)
 			}
 			if m.Temperature != nil && (*m.Temperature < 0 || *m.Temperature > 2) {
-				return fmt.Errorf("providers[%d].models[%d].temperature must be within [0, 2]", i, j)
+				return fmt.Errorf("providers[%d].profiles[%d].temperature must be within [0, 2]", i, j)
 			}
 			if m.Thinking != nil {
 				switch *m.Thinking {
 				case "off", "minimal", "low", "medium", "high":
 				default:
-					return fmt.Errorf(`providers[%d].models[%d].thinking must be one of "off", "minimal", "low", "medium", "high"`, i, j)
+					return fmt.Errorf(`providers[%d].profiles[%d].thinking must be one of "off", "minimal", "low", "medium", "high"`, i, j)
 				}
 			}
 			for _, capability := range m.Capabilities {
 				if !validCapability(capability) {
-					return fmt.Errorf("providers[%d].models[%d].capabilities contains unknown capability %q", i, j, capability)
+					return fmt.Errorf("providers[%d].profiles[%d].capabilities contains unknown capability %q", i, j, capability)
 				}
 			}
 		}

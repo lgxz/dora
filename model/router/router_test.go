@@ -27,7 +27,7 @@ func (s *stubModel) GenerateStream(ctx context.Context, req dora.Request, emit f
 func routerCatalog(t *testing.T) *registry.Catalog {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{{
 		Name: "alpha", BaseURL: "https://alpha.example", API: "chat_completions", APIKey: "test-key",
-		Models: []registry.ModelConfig{
+		Profiles: []registry.Profile{
 			{Name: "text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			{Name: "vision", Capabilities: []dora.Capability{dora.CapabilityImageInput}},
 		},
@@ -41,7 +41,7 @@ func routerCatalog(t *testing.T) *registry.Catalog {
 func TestNewCachesTextModel(t *testing.T) {
 	cat := routerCatalog(t)
 	constructed := 0
-	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.ModelConfig) (dora.Model, error) {
+	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.Profile) (dora.Model, error) {
 		constructed++
 		return &stubModel{content: "hello"}, nil
 	},
@@ -67,7 +67,7 @@ func TestNewCachesTextModel(t *testing.T) {
 
 func TestGenerateStreamPassthrough(t *testing.T) {
 	cat := routerCatalog(t)
-	r, err := newRouter(cat, func(registry.ProviderConfig, registry.ModelConfig) (dora.Model, error) {
+	r, err := newRouter(cat, func(registry.ProviderConfig, registry.Profile) (dora.Model, error) {
 		return &stubModel{content: "streamed"}, nil
 	},
 		dora.Constraints{Needs: []dora.Capability{dora.CapabilityText}},
@@ -93,7 +93,7 @@ func TestGenerateStreamPassthrough(t *testing.T) {
 func TestViewBuildsTransientModelEachCall(t *testing.T) {
 	cat := routerCatalog(t)
 	constructed := 0
-	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.ModelConfig) (dora.Model, error) {
+	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.Profile) (dora.Model, error) {
 		constructed++
 		return &stubModel{content: "a description"}, nil
 	},
@@ -126,7 +126,7 @@ func TestViewBuildsTransientModelEachCall(t *testing.T) {
 func TestViewPassesImageToModel(t *testing.T) {
 	cat := routerCatalog(t)
 	var gotImages []dora.Image
-	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.ModelConfig) (dora.Model, error) {
+	r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.Profile) (dora.Model, error) {
 		return &captureModel{onGenerate: func(req dora.Request) {
 			if len(req.Messages) == 1 {
 				gotImages = req.Messages[0].Images
