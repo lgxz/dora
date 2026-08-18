@@ -11,11 +11,9 @@ type Tool interface {
 	Execute(context.Context, json.RawMessage) (ToolResult, error)
 }
 
-// ToolResult is the successful output of a tool invocation. Content and
-// Images are forwarded together in the tool message sent to the model.
+// ToolResult is the successful output of a tool invocation.
 type ToolResult struct {
 	Content string
-	Images  []Image
 }
 
 // ToolSpec describes a tool and the JSON object accepted by Execute.

@@ -12,7 +12,4 @@ func TestResultReturnsContent(t *testing.T) {
 	if result.Content != `{"stdout":"hello"}` {
 		t.Fatalf("content = %q", result.Content)
 	}
-	if len(result.Images) != 0 {
-		t.Fatalf("images = %#v", result.Images)
-	}
 }

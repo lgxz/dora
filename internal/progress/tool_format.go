@@ -64,13 +64,6 @@ func presentTool(call dora.ToolCall, message dora.Message) toolPresentation {
 	if call.Name == "bash" || call.Name == "powershell" {
 		presentation.name = ""
 	}
-	if count := len(message.Images); count > 0 {
-		attachment := fmt.Sprintf("%d images", count)
-		if count == 1 {
-			attachment = "1 image"
-		}
-		presentation.result = joinResult(presentation.result, attachment)
-	}
 	presentation.summary = truncateLine(presentation.summary, maxOperationRunes)
 	presentation.result = truncateLine(presentation.result, maxResultRunes)
 	return presentation

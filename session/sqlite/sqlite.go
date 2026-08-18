@@ -167,7 +167,7 @@ func (s *Store) GetRounds(ctx context.Context, id int64, options session.RoundOp
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT round_index, position, role, content, tool_calls_json, tool_call_id, images_json
+SELECT round_index, position, role, content, tool_calls_json, tool_call_id
 FROM messages
 WHERE turn_id = ? AND round_index >= ? AND round_index < ?
 ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limit)
@@ -180,11 +180,11 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 	for rows.Next() {
 		var roundIndex, position int
 		var role string
-		var content, callsJSON, callID, imagesJSON sql.NullString
-		if err := rows.Scan(&roundIndex, &position, &role, &content, &callsJSON, &callID, &imagesJSON); err != nil {
+		var content, callsJSON, callID sql.NullString
+		if err := rows.Scan(&roundIndex, &position, &role, &content, &callsJSON, &callID); err != nil {
 			return session.RoundPage{}, fmt.Errorf("scan turn %d message: %w", id, err)
 		}
-		message, err := decodeMessage(role, content.String, callsJSON.String, callID.String, imagesJSON.String)
+		message, err := decodeMessage(role, content.String, callsJSON.String, callID.String)
 		if err != nil {
 			return session.RoundPage{}, fmt.Errorf("decode turn %d round %d position %d: %w", id, roundIndex, position, err)
 		}
@@ -258,7 +258,7 @@ func (s *Store) initialize(ctx context.Context) error {
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
 		`SELECT id, system, user, result, round_count, committed_at FROM turns LIMIT 0`,
-		`SELECT turn_id, round_index, position, role, content, tool_calls_json, tool_call_id, images_json FROM messages LIMIT 0`,
+		`SELECT turn_id, round_index, position, role, content, tool_calls_json, tool_call_id FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
 		rows, err := s.db.QueryContext(ctx, query)
@@ -289,16 +289,10 @@ var schemaStatements = []string{
         content TEXT,
         tool_calls_json TEXT,
         tool_call_id TEXT,
-        images_json TEXT,
         PRIMARY KEY (turn_id, round_index, position),
         FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE CASCADE,
         CHECK ((position = 0 AND role = 'assistant') OR (position > 0 AND role = 'tool'))
     )`,
-}
-
-type imageRecord struct {
-	Path string `json:"path,omitempty"`
-	URL  string `json:"url,omitempty"`
 }
 
 type toolCallRecord struct {
@@ -312,14 +306,10 @@ func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, po
 	if err != nil {
 		return fmt.Errorf("encode turn %d round %d position %d tool calls: %w", turnID, roundIndex, position, err)
 	}
-	images, err := encodeImages(message.Images)
-	if err != nil {
-		return fmt.Errorf("encode turn %d round %d position %d images: %w", turnID, roundIndex, position, err)
-	}
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO messages (turn_id, round_index, position, role, content, tool_calls_json, tool_call_id, images_json)
-VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
-		turnID, roundIndex, position, string(message.Role), message.Content, calls, message.ToolCallID, images,
+INSERT INTO messages (turn_id, round_index, position, role, content, tool_calls_json, tool_call_id)
+VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`,
+		turnID, roundIndex, position, string(message.Role), message.Content, calls, message.ToolCallID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert turn %d round %d position %d: %w", turnID, roundIndex, position, err)
@@ -342,19 +332,7 @@ func encodeToolCalls(calls []dora.ToolCall) (string, error) {
 	return string(encoded), err
 }
 
-func encodeImages(images []dora.Image) (string, error) {
-	if len(images) == 0 {
-		return "", nil
-	}
-	records := make([]imageRecord, len(images))
-	for i, image := range images {
-		records[i] = imageRecord{Path: image.Path, URL: image.URL}
-	}
-	encoded, err := json.Marshal(records)
-	return string(encoded), err
-}
-
-func decodeMessage(role, content, callsJSON, callID, imagesJSON string) (dora.Message, error) {
+func decodeMessage(role, content, callsJSON, callID string) (dora.Message, error) {
 	message := dora.Message{Role: dora.Role(role), Content: content, ToolCallID: callID}
 	if callsJSON != "" {
 		var records []toolCallRecord
@@ -364,16 +342,6 @@ func decodeMessage(role, content, callsJSON, callID, imagesJSON string) (dora.Me
 		message.ToolCalls = make([]dora.ToolCall, len(records))
 		for i, record := range records {
 			message.ToolCalls[i] = dora.ToolCall{ID: record.ID, Name: record.Name, Input: append(json.RawMessage(nil), record.Input...)}
-		}
-	}
-	if imagesJSON != "" {
-		var records []imageRecord
-		if err := json.Unmarshal([]byte(imagesJSON), &records); err != nil {
-			return dora.Message{}, err
-		}
-		message.Images = make([]dora.Image, len(records))
-		for i, record := range records {
-			message.Images[i] = dora.Image{Path: record.Path, URL: record.URL}
 		}
 	}
 	return message, nil

@@ -212,7 +212,6 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 				Role:       RoleTool,
 				Content:    result.result.Content,
 				ToolCallID: call.ID,
-				Images:     cloneImages(result.result.Images),
 			}
 			toolMessages = append(toolMessages, toolMessage)
 			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
@@ -304,7 +303,6 @@ func toolErrorMessage(call ToolCall, err error) Message {
 
 func cloneMessage(message Message) Message {
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
-	message.Images = cloneImages(message.Images)
 	return message
 }
 
@@ -321,17 +319,7 @@ func cloneMessages(messages []Message) []Message {
 	for i, message := range messages {
 		cloned[i] = message
 		cloned[i].ToolCalls = cloneToolCalls(message.ToolCalls)
-		cloned[i].Images = cloneImages(message.Images)
 	}
-	return cloned
-}
-
-func cloneImages(images []Image) []Image {
-	if images == nil {
-		return nil
-	}
-	cloned := make([]Image, len(images))
-	copy(cloned, images)
 	return cloned
 }
 

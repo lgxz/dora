@@ -278,14 +278,6 @@ func TestToolPresentations(t *testing.T) {
 			wantOutcome: outcomeWarning,
 		},
 		{
-			name:        "command background with image",
-			call:        dora.ToolCall{Name: "powershell", Input: json.RawMessage(`{"command":"Start-Sleep 10"}`)},
-			message:     dora.Message{Content: `{"job_id":"job-1","status":"running"}`, Images: []dora.Image{{Path: "chart.png"}}},
-			wantSummary: "Start-Sleep 10",
-			wantResult:  "background job job-1, 1 image",
-			wantOutcome: outcomeWarning,
-		},
-		{
 			name:        "read range",
 			call:        dora.ToolCall{Name: "read", Input: json.RawMessage(`{"path":"agent.go","offset":2,"limit":3}`)},
 			message:     dora.Message{Content: "2:a\n3:b\n"},

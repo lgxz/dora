@@ -44,7 +44,8 @@ func (t *Tool) Spec() dora.ToolSpec {
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Local image file path (mutually exclusive with url)"},
-    "url": {"type": "string", "description": "Remote image URL (mutually exclusive with path)"}
+    "url": {"type": "string", "description": "Remote image URL (mutually exclusive with path)"},
+    "prompt": {"type": "string", "description": "Optional instruction describing what to focus on or extract from the image"}
   },
   "additionalProperties": false
 }`),
@@ -73,7 +74,11 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	if t.viewer == nil {
 		return dora.ToolResult{}, errors.New("view_image: no viewer configured")
 	}
-	description, err := t.viewer(image, "Describe this image.")
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" {
+		prompt = "Describe this image."
+	}
+	description, err := t.viewer(image, prompt)
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("view_image: %w", err)
 	}
@@ -100,8 +105,9 @@ func expandHome(path string) string {
 }
 
 type input struct {
-	Path string `json:"path"`
-	URL  string `json:"url"`
+	Path   string `json:"path"`
+	URL    string `json:"url"`
+	Prompt string `json:"prompt"`
 }
 
 func decodeInput(raw json.RawMessage) (input, error) {

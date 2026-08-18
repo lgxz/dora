@@ -68,9 +68,6 @@ func TestExecuteLocalPath(t *testing.T) {
 	if got.Path != path {
 		t.Fatalf("viewer image = %#v", got)
 	}
-	if len(result.Images) != 0 {
-		t.Fatalf("images = %#v, want empty", result.Images)
-	}
 	if result.Content != "a screenshot" {
 		t.Fatalf("content = %q", result.Content)
 	}
@@ -91,11 +88,62 @@ func TestExecuteRemoteURL(t *testing.T) {
 	if got.URL != "https://example.com/a.png" {
 		t.Fatalf("viewer image = %#v", got)
 	}
-	if len(result.Images) != 0 {
-		t.Fatalf("images = %#v, want empty", result.Images)
-	}
 	if result.Content != "a picture" {
 		t.Fatalf("content = %q", result.Content)
+	}
+}
+
+func TestExecuteUsesCustomPrompt(t *testing.T) {
+	path := writePNG(t, "shot.png")
+	var gotPrompt string
+	tool := New()
+	tool.SetViewer(func(_ dora.Image, prompt string) (string, error) {
+		gotPrompt = prompt
+		return "a screenshot", nil
+	})
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":`+strconvQuote(path)+`,"prompt":"Count the cats"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrompt != "Count the cats" {
+		t.Fatalf("prompt = %q, want %q", gotPrompt, "Count the cats")
+	}
+}
+
+func TestExecuteUsesDefaultPrompt(t *testing.T) {
+	path := writePNG(t, "shot.png")
+	var gotPrompt string
+	tool := New()
+	tool.SetViewer(func(_ dora.Image, prompt string) (string, error) {
+		gotPrompt = prompt
+		return "a screenshot", nil
+	})
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":`+strconvQuote(path)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrompt != "Describe this image." {
+		t.Fatalf("prompt = %q, want %q", gotPrompt, "Describe this image.")
+	}
+}
+
+func TestExecuteTrimsBlankPromptToDefault(t *testing.T) {
+	path := writePNG(t, "shot.png")
+	var gotPrompt string
+	tool := New()
+	tool.SetViewer(func(_ dora.Image, prompt string) (string, error) {
+		gotPrompt = prompt
+		return "a screenshot", nil
+	})
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"path":`+strconvQuote(path)+`,"prompt":"   "}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrompt != "Describe this image." {
+		t.Fatalf("prompt = %q, want %q", gotPrompt, "Describe this image.")
 	}
 }
 

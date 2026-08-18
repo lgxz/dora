@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -13,20 +11,6 @@ import (
 	"testing"
 	"time"
 )
-
-// pngBytes is a minimal valid PNG header so http.DetectContentType reports
-// image/png.
-var pngBytes = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
-
-// writeTempPNG writes a minimal PNG file and returns its path.
-func writeTempPNG(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "img.png")
-	if err := os.WriteFile(path, pngBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
 
 type modelFunc func(context.Context, Request) (Response, error)
 
@@ -47,14 +31,13 @@ func (f streamingModelFunc) GenerateStream(ctx context.Context, request Request,
 type stubTool struct {
 	spec    ToolSpec
 	execute func(context.Context, json.RawMessage) (string, error)
-	images  []Image
 }
 
 func (t stubTool) Spec() ToolSpec { return t.spec }
 
 func (t stubTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	content, err := t.execute(ctx, input)
-	return ToolResult{Content: content, Images: t.images}, err
+	return ToolResult{Content: content}, err
 }
 
 type testRunResult struct {
@@ -816,55 +799,6 @@ func TestRunRetriesRateLimitUpToMaxRateLimitAttempts(t *testing.T) {
 	}
 }
 
-func TestRunAttachesToolResultImagesToToolMessage(t *testing.T) {
-	path := writeTempPNG(t)
-	var calls int
-	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		calls++
-		switch calls {
-		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
-		case 2:
-			if len(request.Messages) != 4 {
-				t.Fatalf("message count = %d, want 4", len(request.Messages))
-			}
-			toolMessage := request.Messages[3]
-			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
-				t.Fatalf("unexpected tool message: %#v", toolMessage)
-			}
-			// The tag is not stripped from the content.
-			if toolMessage.Content != "captured @@"+path+"@@" {
-				t.Fatalf("content = %q", toolMessage.Content)
-			}
-			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != path {
-				t.Fatalf("images = %#v", toolMessage.Images)
-			}
-			return Response{Content: "seen"}, nil
-		default:
-			t.Fatal("model called too many times")
-			return Response{}, nil
-		}
-	})
-	tool := stubTool{
-		spec:   ToolSpec{Name: "snap"},
-		images: []Image{{Path: path}},
-		execute: func(context.Context, json.RawMessage) (string, error) {
-			return "captured @@" + path + "@@", nil
-		},
-	}
-	agent, err := New(model, tool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := runAgent(agent, context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Content != "seen" || calls != 2 {
-		t.Fatalf("result = %#v, calls = %d", result, calls)
-	}
-}
-
 func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
@@ -874,7 +808,7 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
 			toolMessage := request.Messages[3]
-			if toolMessage.Content != "plain output" || len(toolMessage.Images) != 0 {
+			if toolMessage.Content != "plain output" {
 				t.Fatalf("tool message = %#v", toolMessage)
 			}
 			return Response{Content: "done"}, nil
@@ -901,49 +835,6 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 	}
 }
 
-func TestRunForwardsStructuredImageWithCommandJSONOutput(t *testing.T) {
-	path := writeTempPNG(t)
-	jsonOutput := fmt.Sprintf(`{"exit_code":0,"stdout":"@@%s@@\n","stderr":"","timed_out":false,"truncated":false}`, path)
-	var calls int
-	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		calls++
-		switch calls {
-		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
-		case 2:
-			toolMessage := request.Messages[3]
-			if toolMessage.Role != RoleTool || toolMessage.ToolCallID != "call-1" {
-				t.Fatalf("unexpected tool message: %#v", toolMessage)
-			}
-			if len(toolMessage.Images) != 1 || toolMessage.Images[0].Path != path {
-				t.Fatalf("images = %#v", toolMessage.Images)
-			}
-			return Response{Content: "seen"}, nil
-		default:
-			t.Fatal("model called too many times")
-			return Response{}, nil
-		}
-	})
-	tool := stubTool{
-		spec:   ToolSpec{Name: "snap"},
-		images: []Image{{Path: path}},
-		execute: func(context.Context, json.RawMessage) (string, error) {
-			return jsonOutput, nil
-		},
-	}
-	agent, err := New(model, tool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := runAgent(agent, context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Content != "seen" || calls != 2 {
-		t.Fatalf("result = %#v, calls = %d", result, calls)
-	}
-}
-
 func TestRunDoesNotInterpretImageTags(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.png")
 	content := "captured @@" + missing + "@@"
@@ -955,9 +846,6 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
 			toolMessage := request.Messages[3]
-			if len(toolMessage.Images) != 0 {
-				t.Fatalf("images = %#v", toolMessage.Images)
-			}
 			if toolMessage.Content != content {
 				t.Fatalf("content = %q", toolMessage.Content)
 			}
