@@ -1,5 +1,6 @@
-// Package viewimage implements a dora.Tool that attaches a local image file or
-// remote image URL to a tool result for a vision-capable model.
+// Package viewimage implements a dora.Tool that loads a local image file or
+// remote image URL and returns a textual description produced by a transient
+// visual model.
 package viewimage
 
 import (
@@ -18,17 +19,27 @@ import (
 	"github.com/lgxz/dora/internal/imagefile"
 )
 
-// Tool loads an image from a local path or a remote URL for viewing.
-type Tool struct{}
+// Viewer understands an image and returns a text description. It is injected
+// by the CLI (the router's transient visual model call).
+type Viewer func(dora.Image, string) (string, error)
 
-// New creates a view_image tool.
+// Tool loads an image for viewing and returns a text description.
+type Tool struct {
+	viewer Viewer
+}
+
+// New creates a view_image tool with no viewer configured. Call SetViewer to
+// wire the description function before use.
 func New() *Tool { return &Tool{} }
+
+// SetViewer sets the function that produces a text description for an image.
+func (t *Tool) SetViewer(viewer Viewer) { t.viewer = viewer }
 
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "view_image",
-		Description: "Load an image from a local file path or a remote URL so a vision-capable model can view it.",
+		Description: "Load an image from a local file path or a remote URL and return a textual description of its contents.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -47,23 +58,26 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		return dora.ToolResult{}, err
 	}
 
+	var image dora.Image
 	switch {
 	case input.Path != "":
 		path := expandHome(input.Path)
 		if err := imagefile.Validate(path); err != nil {
 			return dora.ToolResult{}, fmt.Errorf("view_image: %w", err)
 		}
-		return dora.ToolResult{
-			Content: fmt.Sprintf("loaded image %q", path),
-			Images:  []dora.Image{{Path: path}},
-		}, nil
-
+		image = dora.Image{Path: path}
 	default:
-		return dora.ToolResult{
-			Content: fmt.Sprintf("loaded image %q", input.URL),
-			Images:  []dora.Image{{URL: input.URL}},
-		}, nil
+		image = dora.Image{URL: input.URL}
 	}
+
+	if t.viewer == nil {
+		return dora.ToolResult{}, errors.New("view_image: no viewer configured")
+	}
+	description, err := t.viewer(image, "Describe this image.")
+	if err != nil {
+		return dora.ToolResult{}, fmt.Errorf("view_image: %w", err)
+	}
+	return dora.ToolResult{Content: description}, nil
 }
 
 // expandHome expands a leading "~" (or "~/") into the current user's home

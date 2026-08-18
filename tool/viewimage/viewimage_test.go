@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lgxz/dora"
 )
 
 func writePNG(t *testing.T, name string) string {
@@ -52,29 +54,56 @@ func TestExpandHome(t *testing.T) {
 
 func TestExecuteLocalPath(t *testing.T) {
 	path := writePNG(t, "shot.png")
+	var got dora.Image
 	tool := New()
+	tool.SetViewer(func(image dora.Image, prompt string) (string, error) {
+		got = image
+		return "a screenshot", nil
+	})
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"path":`+strconvQuote(path)+`}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Images) != 1 || result.Images[0].Path != path {
-		t.Fatalf("images = %#v", result.Images)
+	if got.Path != path {
+		t.Fatalf("viewer image = %#v", got)
 	}
-	if !strings.Contains(result.Content, path) {
+	if len(result.Images) != 0 {
+		t.Fatalf("images = %#v, want empty", result.Images)
+	}
+	if result.Content != "a screenshot" {
 		t.Fatalf("content = %q", result.Content)
 	}
 }
 
 func TestExecuteRemoteURL(t *testing.T) {
+	var got dora.Image
 	tool := New()
+	tool.SetViewer(func(image dora.Image, prompt string) (string, error) {
+		got = image
+		return "a picture", nil
+	})
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/a.png"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Images) != 1 || result.Images[0].URL != "https://example.com/a.png" {
-		t.Fatalf("images = %#v", result.Images)
+	if got.URL != "https://example.com/a.png" {
+		t.Fatalf("viewer image = %#v", got)
+	}
+	if len(result.Images) != 0 {
+		t.Fatalf("images = %#v, want empty", result.Images)
+	}
+	if result.Content != "a picture" {
+		t.Fatalf("content = %q", result.Content)
+	}
+}
+
+func TestExecuteWithoutViewerErrors(t *testing.T) {
+	tool := New()
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/a.png"}`))
+	if err == nil || !strings.Contains(err.Error(), "no viewer configured") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
