@@ -1,7 +1,11 @@
 // Package registry assembles a dora.Model from a catalog of providers and
-// model profiles. It is the single composition point for model adapters: it
-// selects a provider+profile, translates the neutral "thinking" control into each
-// adapter's wire format, and instantiates the concrete dora.Model.
+// model profiles. It owns the neutral catalog input types and a Construct
+// function that turns one resolved provider+profile into a concrete dora.Model
+// (translating the neutral "thinking" control into each adapter's wire format).
+//
+// The registry does not perform selection. Constraint-based selection lives in
+// model/router; the registry only preserves catalog order (provider order is
+// priority) and constructs adapters.
 //
 // The registry does not depend on internal/config; callers convert their
 // configuration into the registry's neutral input types.
@@ -42,7 +46,10 @@ type ModelConfig struct {
 	MaxTokens     *int
 	ContextWindow *int
 	Temperature   *float64
-	Vision        bool
+	Capabilities  []dora.Capability
+	// Vision is a temporary compatibility field derived from Capabilities. It is
+	// removed once internal/cli stops deriving view_image registration from it.
+	Vision bool
 }
 
 // Config is the registry input.
@@ -52,7 +59,9 @@ type Config struct {
 	SelectedProfile  string
 }
 
-// Selection describes the chosen provider, profile, and effective model.
+// Selection describes the chosen provider, profile, and effective model. It is
+// kept only as a temporary compatibility type for internal/cli; selection moves
+// to model/router and this type is removed in the final wiring.
 type Selection struct {
 	Provider      string
 	Profile       string
@@ -64,7 +73,84 @@ type Selection struct {
 	ContextWindow *int
 }
 
-// Registry holds a resolved provider+profile selection.
+// Catalog is an immutable, ordered provider catalog. Provider order and, within
+// each provider, model order encode user priority.
+type Catalog struct {
+	providers []ProviderConfig
+}
+
+// NewCatalog validates cfg, preserves order, and returns a Catalog.
+func NewCatalog(cfg Config) (*Catalog, error) {
+	if len(cfg.Providers) == 0 {
+		return nil, errors.New("registry: at least one provider is required")
+	}
+	for _, p := range cfg.Providers {
+		if len(p.Models) == 0 {
+			return nil, fmt.Errorf("registry: provider %q has no models configured", p.Name)
+		}
+		for i := range p.Models {
+			if p.Models[i].Model == "" {
+				p.Models[i].Model = p.Models[i].Name
+			}
+		}
+	}
+	// Copy to keep the catalog immutable against caller mutation.
+	providers := make([]ProviderConfig, len(cfg.Providers))
+	copy(providers, cfg.Providers)
+	return &Catalog{providers: providers}, nil
+}
+
+// Providers returns the providers in catalog order.
+func (c *Catalog) Providers() []ProviderConfig {
+	return c.providers
+}
+
+// Construct instantiates a dora.Model for ONE resolved provider+model profile,
+// translating the neutral thinking control into the adapter's wire format.
+func Construct(p ProviderConfig, m ModelConfig) (dora.Model, error) {
+	api := m.API
+	if api == "" {
+		api = p.API
+	}
+	dur := func(seconds int) time.Duration { return time.Duration(seconds) * time.Second }
+	switch api {
+	case "chat_completions":
+		reasoningEffort, thinking := mapChatThinking(p.Name, m.Thinking)
+		return openai.New(openai.Config{
+			BaseURL:           p.BaseURL,
+			APIKey:            p.APIKey,
+			Model:             m.Model,
+			HTTPClient:        p.HTTPClient,
+			ConnectTimeout:    dur(p.ConnectTimeoutSeconds),
+			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
+			Timeout:           dur(p.TimeoutSeconds),
+			MaxTokens:         m.MaxTokens,
+			Temperature:       m.Temperature,
+			ReasoningEffort:   reasoningEffort,
+			Thinking:          thinking,
+		})
+	case "responses":
+		reasoning := mapResponsesThinking(p.Name, m.Thinking)
+		return openairesponses.New(openairesponses.Config{
+			BaseURL:           p.BaseURL,
+			APIKey:            p.APIKey,
+			Model:             m.Model,
+			HTTPClient:        p.HTTPClient,
+			ConnectTimeout:    dur(p.ConnectTimeoutSeconds),
+			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
+			Timeout:           dur(p.TimeoutSeconds),
+			MaxTokens:         m.MaxTokens,
+			Temperature:       m.Temperature,
+			Reasoning:         reasoning,
+		})
+	default:
+		return nil, fmt.Errorf("registry: unknown API %q for provider %q", api, p.Name)
+	}
+}
+
+// Registry holds a resolved provider+profile selection. It is a temporary
+// compatibility shim that delegates construction to Construct; it is removed
+// once internal/cli is rewired to model/router.
 type Registry struct {
 	provider ProviderConfig
 	model    ModelConfig
@@ -139,7 +225,9 @@ func selectProfile(provider ProviderConfig, selected string) (ModelConfig, error
 	return provider.Models[0], nil
 }
 
-// Selection returns the resolved provider, profile, and model metadata.
+// Selection returns the resolved provider, profile, and model metadata. The
+// Vision field is derived from Capabilities for compatibility until the CLI is
+// rewired.
 func (r *Registry) Selection() Selection {
 	api := r.model.API
 	if api == "" {
@@ -151,7 +239,7 @@ func (r *Registry) Selection() Selection {
 		API:           api,
 		Model:         r.model.Model,
 		BaseURL:       strings.TrimRight(r.provider.BaseURL, "/"),
-		Vision:        r.model.Vision,
+		Vision:        hasCapability(r.model.Capabilities, dora.CapabilityImageInput),
 		Thinking:      r.model.Thinking,
 		ContextWindow: r.model.ContextWindow,
 	}
@@ -160,45 +248,17 @@ func (r *Registry) Selection() Selection {
 // SetThinking overrides the selected profile's thinking mode (for --thinking).
 func (r *Registry) SetThinking(thinking *string) { r.model.Thinking = thinking }
 
-// Model instantiates the concrete dora.Model, translating the neutral thinking
-// control into the adapter's wire format.
+// Model instantiates the concrete dora.Model via Construct.
 func (r *Registry) Model() (dora.Model, error) {
-	api := r.model.API
-	if api == "" {
-		api = r.provider.API
+	return Construct(r.provider, r.model)
+}
+
+// hasCapability reports whether capabilities contains the requested capability.
+func hasCapability(capabilities []dora.Capability, want dora.Capability) bool {
+	for _, c := range capabilities {
+		if c == want {
+			return true
+		}
 	}
-	dur := func(seconds int) time.Duration { return time.Duration(seconds) * time.Second }
-	switch api {
-	case "chat_completions":
-		reasoningEffort, thinking := mapChatThinking(r.provider.Name, r.model.Thinking)
-		return openai.New(openai.Config{
-			BaseURL:           r.provider.BaseURL,
-			APIKey:            r.provider.APIKey,
-			Model:             r.model.Model,
-			HTTPClient:        r.provider.HTTPClient,
-			ConnectTimeout:    dur(r.provider.ConnectTimeoutSeconds),
-			StreamIdleTimeout: dur(r.provider.StreamIdleTimeoutSeconds),
-			Timeout:           dur(r.provider.TimeoutSeconds),
-			MaxTokens:         r.model.MaxTokens,
-			Temperature:       r.model.Temperature,
-			ReasoningEffort:   reasoningEffort,
-			Thinking:          thinking,
-		})
-	case "responses":
-		reasoning := mapResponsesThinking(r.provider.Name, r.model.Thinking)
-		return openairesponses.New(openairesponses.Config{
-			BaseURL:           r.provider.BaseURL,
-			APIKey:            r.provider.APIKey,
-			Model:             r.model.Model,
-			HTTPClient:        r.provider.HTTPClient,
-			ConnectTimeout:    dur(r.provider.ConnectTimeoutSeconds),
-			StreamIdleTimeout: dur(r.provider.StreamIdleTimeoutSeconds),
-			Timeout:           dur(r.provider.TimeoutSeconds),
-			MaxTokens:         r.model.MaxTokens,
-			Temperature:       r.model.Temperature,
-			Reasoning:         reasoning,
-		})
-	default:
-		return nil, fmt.Errorf("registry: unknown API %q for provider %q", api, r.provider.Name)
-	}
+	return false
 }
