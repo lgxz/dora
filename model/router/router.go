@@ -20,6 +20,7 @@ type Router struct {
 	textModel dora.Model
 	textSel   selection
 
+	imageSet bool
 	imageSel selection
 }
 
@@ -43,12 +44,26 @@ func newRouter(cat *registry.Catalog, construct constructFunc, text, image dora.
 	r.textSel = textSel
 	r.textModel = textModel
 
-	imageSel, err := Select(cat, image)
-	if err != nil {
-		return nil, err
+	// The image selection is resolved lazily: it is cached if found, but a miss
+	// is not fatal at construction time (a provider may not advertise
+	// image_input). View then reports the miss.
+	if imageSel, err := Select(cat, image); err == nil {
+		r.imageSel = imageSel
+		r.imageSet = true
 	}
-	r.imageSel = imageSel
 	return r, nil
+}
+
+// SetThinking overrides the cached text model's thinking mode (for --thinking)
+// and reconstructs the cached text model from the same catalog entry.
+func (r *Router) SetThinking(thinking *string) error {
+	r.textSel.model.Thinking = thinking
+	model, err := r.construct(r.textSel.provider, r.textSel.model)
+	if err != nil {
+		return err
+	}
+	r.textModel = model
+	return nil
 }
 
 // Generate delegates to the cached text model.
@@ -68,6 +83,9 @@ func (r *Router) GenerateStream(ctx context.Context, req dora.Request, emit func
 // View constructs a transient visual model from the cached image selection,
 // sends it a single image-bearing message, and returns the text description.
 func (r *Router) View(ctx context.Context, image dora.Image, prompt string) (string, error) {
+	if !r.imageSet {
+		return "", ErrNotFound
+	}
 	model, err := r.construct(r.imageSel.provider, r.imageSel.model)
 	if err != nil {
 		return "", err

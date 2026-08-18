@@ -304,7 +304,17 @@ client:
   provider: openai
   base_url: https://api.openai.com/v1
 `))
-		if err == nil || !strings.Contains(err.Error(), "field base_url not found") {
+		if err == nil || !strings.Contains(err.Error(), "field client not found") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("vision field", func(t *testing.T) {
+		_, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    models: [{name: model, vision: true}]
+`))
+		if err == nil || !strings.Contains(err.Error(), "field vision not found") {
 			t.Fatalf("error = %v", err)
 		}
 	})

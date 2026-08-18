@@ -58,9 +58,7 @@ func (s *Store) Close() error {
 }
 
 // CommitTurn atomically appends one completed turn and all of its rounds.
-// The metadata parameter is deprecated and ignored; it is removed in the final
-// wiring commit.
-func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn, _ session.Metadata) (int64, error) {
+func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("sqlite session is not initialized")
 	}

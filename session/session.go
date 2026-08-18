@@ -11,19 +11,6 @@ import (
 
 var ErrNotFound = errors.New("session turn not found")
 
-// Metadata records which configured backend produced a completed turn. It is
-// a deprecated compatibility type retained only so internal/cli keeps compiling
-// until the final wiring commit; the turns table no longer stores these fields.
-//
-// Deprecated: will be removed.
-type Metadata struct {
-	Provider string
-	Profile  string
-	API      string
-	Model    string
-	BaseURL  string
-}
-
 // ListOptions selects a page of turns. Offset zero starts at the newest turn.
 type ListOptions struct {
 	Offset int
@@ -70,6 +57,6 @@ type Reader interface {
 // Store appends completed turns and provides history queries.
 type Store interface {
 	Reader
-	CommitTurn(context.Context, *dora.Turn, Metadata) (int64, error)
+	CommitTurn(context.Context, *dora.Turn) (int64, error)
 	Close() error
 }

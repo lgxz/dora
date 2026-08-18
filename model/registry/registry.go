@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/lgxz/dora"
@@ -47,30 +46,11 @@ type ModelConfig struct {
 	ContextWindow *int
 	Temperature   *float64
 	Capabilities  []dora.Capability
-	// Vision is a temporary compatibility field derived from Capabilities. It is
-	// removed once internal/cli stops deriving view_image registration from it.
-	Vision bool
 }
 
 // Config is the registry input.
 type Config struct {
-	Providers        []ProviderConfig
-	SelectedProvider string
-	SelectedProfile  string
-}
-
-// Selection describes the chosen provider, profile, and effective model. It is
-// kept only as a temporary compatibility type for internal/cli; selection moves
-// to model/router and this type is removed in the final wiring.
-type Selection struct {
-	Provider      string
-	Profile       string
-	API           string
-	Model         string
-	BaseURL       string
-	Vision        bool
-	Thinking      *string
-	ContextWindow *int
+	Providers []ProviderConfig
 }
 
 // Catalog is an immutable, ordered provider catalog. Provider order and, within
@@ -146,119 +126,4 @@ func Construct(p ProviderConfig, m ModelConfig) (dora.Model, error) {
 	default:
 		return nil, fmt.Errorf("registry: unknown API %q for provider %q", api, p.Name)
 	}
-}
-
-// Registry holds a resolved provider+profile selection. It is a temporary
-// compatibility shim that delegates construction to Construct; it is removed
-// once internal/cli is rewired to model/router.
-type Registry struct {
-	provider ProviderConfig
-	model    ModelConfig
-}
-
-// New validates cfg, selects a provider and profile, and returns a Registry.
-func New(cfg Config) (*Registry, error) {
-	if len(cfg.Providers) == 0 {
-		return nil, errors.New("registry: at least one provider is required")
-	}
-	provider, err := selectProvider(cfg)
-	if err != nil {
-		return nil, err
-	}
-	if len(provider.Models) == 0 {
-		return nil, fmt.Errorf("registry: provider %q has no models configured", provider.Name)
-	}
-	model, err := selectProfile(provider, cfg.SelectedProfile)
-	if err != nil {
-		return nil, err
-	}
-	if model.Model == "" {
-		model.Model = model.Name
-	}
-	return &Registry{provider: provider, model: model}, nil
-}
-
-func selectProvider(cfg Config) (ProviderConfig, error) {
-	if cfg.SelectedProvider != "" {
-		for _, p := range cfg.Providers {
-			if p.Name == cfg.SelectedProvider {
-				return p, nil
-			}
-		}
-		return ProviderConfig{}, fmt.Errorf("registry: selected provider %q not found", cfg.SelectedProvider)
-	}
-	if len(cfg.Providers) == 1 {
-		return cfg.Providers[0], nil
-	}
-	var keyed []ProviderConfig
-	for _, provider := range cfg.Providers {
-		if provider.APIKey != "" {
-			keyed = append(keyed, provider)
-		}
-	}
-	if len(keyed) == 1 {
-		return keyed[0], nil
-	}
-	if len(keyed) > 1 {
-		names := make([]string, len(keyed))
-		for i, provider := range keyed {
-			names[i] = provider.Name
-		}
-		return ProviderConfig{}, fmt.Errorf("registry: API keys are configured for multiple providers (%s); set DORA_MODEL or client.provider", strings.Join(names, ", "))
-	}
-	names := make([]string, len(cfg.Providers))
-	for i, p := range cfg.Providers {
-		names[i] = p.Name
-	}
-	return ProviderConfig{}, fmt.Errorf("registry: multiple providers available (%s); set client.provider to select one", strings.Join(names, ", "))
-}
-
-func selectProfile(provider ProviderConfig, selected string) (ModelConfig, error) {
-	if selected != "" {
-		for _, m := range provider.Models {
-			if m.Name == selected {
-				return m, nil
-			}
-		}
-		return ModelConfig{}, fmt.Errorf("registry: profile %q not found under provider %q", selected, provider.Name)
-	}
-	return provider.Models[0], nil
-}
-
-// Selection returns the resolved provider, profile, and model metadata. The
-// Vision field is derived from Capabilities for compatibility until the CLI is
-// rewired.
-func (r *Registry) Selection() Selection {
-	api := r.model.API
-	if api == "" {
-		api = r.provider.API
-	}
-	return Selection{
-		Provider:      r.provider.Name,
-		Profile:       r.model.Name,
-		API:           api,
-		Model:         r.model.Model,
-		BaseURL:       strings.TrimRight(r.provider.BaseURL, "/"),
-		Vision:        hasCapability(r.model.Capabilities, dora.CapabilityImageInput),
-		Thinking:      r.model.Thinking,
-		ContextWindow: r.model.ContextWindow,
-	}
-}
-
-// SetThinking overrides the selected profile's thinking mode (for --thinking).
-func (r *Registry) SetThinking(thinking *string) { r.model.Thinking = thinking }
-
-// Model instantiates the concrete dora.Model via Construct.
-func (r *Registry) Model() (dora.Model, error) {
-	return Construct(r.provider, r.model)
-}
-
-// hasCapability reports whether capabilities contains the requested capability.
-func hasCapability(capabilities []dora.Capability, want dora.Capability) bool {
-	for _, c := range capabilities {
-		if c == want {
-			return true
-		}
-	}
-	return false
 }

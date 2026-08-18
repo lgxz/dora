@@ -9,6 +9,10 @@ import (
 	"testing"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/job"
+	"github.com/lgxz/dora/model/registry"
+	"github.com/lgxz/dora/model/router"
 )
 
 func TestAssembleCommandToolsUsesPlatformDefaults(t *testing.T) {
@@ -107,4 +111,27 @@ func toolNames(tools []dora.Tool) string {
 		names[index] = tool.Spec().Name
 	}
 	return strings.Join(names, ",")
+}
+
+func TestBuildToolsAlwaysRegistersViewImage(t *testing.T) {
+	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{{
+		Name: "p", BaseURL: "https://example.test/v1", API: "chat_completions",
+		Models: []registry.ModelConfig{{
+			Name: "text", Capabilities: []dora.Capability{dora.CapabilityText},
+		}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := router.New(cat, dora.Constraints{Needs: []dora.Capability{dora.CapabilityText}}, dora.Constraints{Needs: []dora.Capability{dora.CapabilityImageInput}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := buildTools(config.Config{}, r, job.New(), nil, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(toolNames(tools), "view_image") {
+		t.Fatalf("tools = %q, want view_image present", toolNames(tools))
+	}
 }

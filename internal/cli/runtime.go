@@ -11,11 +11,12 @@ import (
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/model/registry"
+	"github.com/lgxz/dora/model/router"
 	"github.com/lgxz/dora/session"
 	sqlitesession "github.com/lgxz/dora/session/sqlite"
 )
 
-func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *registry.Registry, error) {
+func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *router.Router, error) {
 	configPath := opts.configPath
 	configExplicit := configPath != ""
 	if configPath == "" {
@@ -32,7 +33,21 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 	if err != nil {
 		return config.Config{}, nil, err
 	}
-	reg, err := registry.New(registryFromConfig(cfg, httpClient))
+	cat, err := registry.NewCatalog(registryFromConfig(cfg, httpClient))
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	textConstraints := dora.Constraints{
+		Provider: cfg.Policy.Text.Provider,
+		Profile:  cfg.Policy.Text.Profile,
+		Needs:    []dora.Capability{dora.CapabilityText},
+	}
+	imageConstraints := dora.Constraints{
+		Provider: cfg.Policy.Image.Provider,
+		Profile:  cfg.Policy.Image.Profile,
+		Needs:    []dora.Capability{dora.CapabilityImageInput},
+	}
+	r, err := router.New(cat, textConstraints, imageConstraints)
 	if err != nil {
 		return config.Config{}, nil, err
 	}
@@ -43,12 +58,14 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 			return config.Config{}, nil, errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high"`)
 		}
 		value := opts.thinking
-		reg.SetThinking(&value)
+		if err := r.SetThinking(&value); err != nil {
+			return config.Config{}, nil, err
+		}
 	}
 	if opts.maxRoundsSet {
 		cfg.Agent.MaxRounds = opts.maxRounds
 	}
-	return cfg, reg, nil
+	return cfg, r, nil
 }
 
 func openSession(ctx context.Context, path string) (*sqlitesession.Store, bool, error) {

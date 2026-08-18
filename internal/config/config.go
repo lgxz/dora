@@ -21,11 +21,6 @@ const (
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
 	Policy    PolicySettings `yaml:"policy,omitempty"`
-	// Client is a deprecated compatibility field. It is retained only so
-	// internal/cli keeps compiling until the final wiring commit; use Policy.
-	//
-	// Deprecated: use Config.Policy.
-	Client    ClientSelector `yaml:"client,omitempty"`
 	Providers []Provider     `yaml:"providers,omitempty"`
 	// Env supplies config-local fallbacks for provider API key environment
 	// variables. It never mutates the process environment.
@@ -58,16 +53,6 @@ type Agent struct {
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
-// ClientSelector is a deprecated compatibility type. It is retained only so
-// internal/cli keeps compiling until the final wiring commit removes the
-// legacy client selector; use Policy instead.
-//
-// Deprecated: use Config.Policy.
-type ClientSelector struct {
-	Provider string `yaml:"provider,omitempty"`
-	Profile  string `yaml:"profile,omitempty"`
-}
-
 // Provider describes one provider endpoint with multiple models.
 type Provider struct {
 	Name                     string      `yaml:"name"`
@@ -96,12 +81,6 @@ type ModelSpec struct {
 	// Capabilities advertises the provider-neutral capabilities this profile
 	// supports (for example text, image_input).
 	Capabilities []dora.Capability `yaml:"capabilities,omitempty"`
-	// Vision is a deprecated compatibility field derived from Capabilities. It
-	// is retained only so internal/cli keeps compiling until the final wiring
-	// commit; use Capabilities.
-	//
-	// Deprecated: use Capabilities.
-	Vision bool `yaml:"vision,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.

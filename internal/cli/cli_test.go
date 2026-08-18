@@ -26,6 +26,10 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("DEEPSEEK_API_KEY", "")
 	_ = os.Setenv("TRUST_API_KEY", "")
 	_ = os.Setenv("DORA_MODEL", "")
+	_ = os.Setenv("DORA_POLICY_TEXT_PROVIDER", "")
+	_ = os.Setenv("DORA_POLICY_TEXT_PROFILE", "")
+	_ = os.Setenv("DORA_POLICY_IMAGE_PROVIDER", "")
+	_ = os.Setenv("DORA_POLICY_IMAGE_PROFILE", "")
 	os.Exit(m.Run())
 }
 
@@ -57,11 +61,13 @@ providers:
     models:
       - name: fast
         model: test-model
+        capabilities: [text]
 env:
   OPENAI_API_KEY: secret
-client:
-  provider: openai
-  profile: fast
+policy:
+  text:
+    provider: openai
+    profile: fast
 `, "https://example.test/v1")
 	if err := writeTestConfig(t, configPath, configContents); err != nil {
 		t.Fatal(err)
@@ -249,7 +255,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinDeepSeek(t *testing.T) {
 func TestRunConfigEnvironmentAutoSelectsBuiltinTrust(t *testing.T) {
 	t.Setenv("TRUST_API_KEY", "")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("env:\n  TRUST_API_KEY: trust-secret\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("env:\n  TRUST_API_KEY: trust-secret\npolicy:\n  text:\n    provider: trust\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -281,21 +287,33 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinTrust(t *testing.T) {
 	}
 }
 
-func TestRunRejectsAmbiguousConfigEnvironmentKeys(t *testing.T) {
+func TestRunEmptyPolicySelectsFirstProvider(t *testing.T) {
+	// Order = priority: with no explicit policy, the first text model in the
+	// catalog (deepseek) is selected even when multiple providers have keys.
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("TRUST_API_KEY", "")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte("env:\n  DEEPSEEK_API_KEY: deepseek-secret\n  TRUST_API_KEY: trust-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://api.deepseek.com/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"first provider"}}]}`), nil
+	})}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
-		Stdout:          io.Discard,
+		Stdout:          &stdout,
 		Stderr:          io.Discard,
 		StdinIsTerminal: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "multiple providers") {
-		t.Fatalf("error = %v", err)
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "first provider\n" {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 
@@ -886,7 +904,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 8 {
+		if len(tools) != 9 {
 			t.Fatalf("tools = %#v", tools)
 		}
 		var names []string
@@ -894,7 +912,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell,job,read,write,edit,grep,glob" {
+		if strings.Join(names, ",") != "bash,powershell,job,view_image,read,write,edit,grep,glob" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil
@@ -1689,15 +1707,22 @@ func writeTestConfig(t *testing.T, path, contents string) error {
 				providerConfig["base_url"] = "https://api.openai.com/v1"
 			}
 		}
-		modelConfig := map[string]any{"name": name, "model": name}
-		for _, field := range []string{"thinking", "max_tokens", "temperature", "vision"} {
+		modelConfig := map[string]any{"name": name, "model": name, "capabilities": []string{"text"}}
+		for _, field := range []string{"thinking", "max_tokens", "temperature"} {
 			if value, ok := legacy[field]; ok {
 				modelConfig[field] = value
 			}
 		}
+		if value, ok := legacy["vision"]; ok {
+			if v, _ := value.(bool); v {
+				modelConfig["capabilities"] = []string{"text", "image_input"}
+			}
+		}
 		providerConfig["models"] = []any{modelConfig}
 		root["providers"] = []any{providerConfig}
-		root["client"] = map[string]any{"provider": provider, "profile": name}
+		root["policy"] = map[string]any{
+			"text": map[string]any{"provider": provider, "profile": name},
+		}
 		delete(root, "model")
 	}
 	encoded, err := yaml.Marshal(root)

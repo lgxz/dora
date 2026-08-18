@@ -18,7 +18,6 @@ import (
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/model/registry"
-	"github.com/lgxz/dora/session"
 )
 
 const maxStdinBytes = 16 << 20
@@ -63,17 +62,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		opts.usage()
 		return err
 	}
-	cfg, reg, err := loadRuntimeConfig(opts, streams.HTTPClient)
+	cfg, model, err := loadRuntimeConfig(opts, streams.HTTPClient)
 	if err != nil {
 		return err
-	}
-	sel := reg.Selection()
-	metadata := session.Metadata{
-		Provider: sel.Provider,
-		Profile:  sel.Profile,
-		API:      sel.API,
-		Model:    sel.Model,
-		BaseURL:  sel.BaseURL,
 	}
 
 	sessionStore, historyAvailable, err := openSession(ctx, opts.sessionPath)
@@ -83,13 +74,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if sessionStore != nil {
 		defer sessionStore.Close()
 	}
-	model, err := reg.Model()
-	if err != nil {
-		return err
-	}
 	jobManager := job.New()
 	defer jobManager.Cleanup()
-	tools, err := buildTools(cfg, sel, jobManager, sessionStore, historyAvailable, opts.noSkills)
+	tools, err := buildTools(cfg, model, jobManager, sessionStore, historyAvailable, opts.noSkills)
 	if err != nil {
 		return err
 	}
@@ -108,7 +95,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return nil
 	}
 	if sessionStore != nil {
-		if _, err := sessionStore.CommitTurn(ctx, turn, metadata); err != nil {
+		if _, err := sessionStore.CommitTurn(ctx, turn); err != nil {
 			return err
 		}
 	}
@@ -136,7 +123,7 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 				MaxTokens:     m.MaxTokens,
 				ContextWindow: m.ContextWindow,
 				Temperature:   m.Temperature,
-				Vision:        m.Vision,
+				Capabilities:  m.Capabilities,
 			}
 		}
 		providers[i] = registry.ProviderConfig{
@@ -151,11 +138,7 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 			Models:                   models,
 		}
 	}
-	return registry.Config{
-		Providers:        providers,
-		SelectedProvider: cfg.Client.Provider,
-		SelectedProfile:  cfg.Client.Profile,
-	}
+	return registry.Config{Providers: providers}
 }
 
 func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {

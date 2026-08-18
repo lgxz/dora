@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"runtime"
 	"time"
@@ -8,7 +9,7 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/job"
-	"github.com/lgxz/dora/model/registry"
+	"github.com/lgxz/dora/model/router"
 	"github.com/lgxz/dora/session"
 	"github.com/lgxz/dora/skill"
 	bashtool "github.com/lgxz/dora/tool/bash"
@@ -19,7 +20,7 @@ import (
 	viewimagetool "github.com/lgxz/dora/tool/viewimage"
 )
 
-func buildTools(cfg config.Config, selection registry.Selection, manager *job.Manager, history session.Reader, historyAvailable, noSkills bool) ([]dora.Tool, error) {
+func buildTools(cfg config.Config, model *router.Router, manager *job.Manager, history session.Reader, historyAvailable, noSkills bool) ([]dora.Tool, error) {
 	var tools []dora.Tool
 	if historyAvailable {
 		historyTool, err := historytool.New(history)
@@ -53,9 +54,11 @@ func buildTools(cfg config.Config, selection registry.Selection, manager *job.Ma
 	}
 	tools = append(tools, commandTools...)
 	tools = append(tools, jobtool.New(manager))
-	if selection.Vision {
-		tools = append(tools, viewimagetool.New())
-	}
+	viewImage := viewimagetool.New()
+	viewImage.SetViewer(func(image dora.Image, prompt string) (string, error) {
+		return model.View(context.Background(), image, prompt)
+	})
+	tools = append(tools, viewImage)
 	tools = append(tools, buildFileTools()...)
 	return tools, nil
 }
