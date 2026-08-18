@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lgxz/dora"
 )
 
 func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
@@ -26,59 +28,61 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 		m.ContextWindow == nil || *m.ContextWindow != 1<<20 {
 		t.Fatalf("models = %#v", p.Models)
 	}
-	if cfg.Client.Provider != "" || cfg.Client.Profile != "" {
-		t.Fatalf("selector = %#v", cfg.Client)
+	if cfg.Policy.Text.Provider != "" || cfg.Policy.Text.Profile != "" {
+		t.Fatalf("selector = %#v", cfg.Policy)
 	}
 	if providerByName(t, cfg, "trust").APIKey != "" {
 		t.Fatal("DeepSeek key leaked into Trust provider")
 	}
 }
 
-func TestDefaultDORAModelSelectsBuiltinProfile(t *testing.T) {
+func TestLoadPolicyFromYAML(t *testing.T) {
 	clearBuiltinAPIKeys(t)
-	t.Setenv("DORA_MODEL", "trust/deepseek-v4-flash")
-	cfg, err := Default()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Client.Provider != "trust" || cfg.Client.Profile != "deepseek-v4-flash" {
-		t.Fatalf("selector = %#v", cfg.Client)
-	}
-}
-
-func TestLoadDORAModelOverridesClient(t *testing.T) {
-	clearBuiltinAPIKeys(t)
-	path := writeConfig(t, `
+	cfg, err := Load(writeConfig(t, `
 providers:
   - name: custom
     base_url: https://custom.example/v1
     models:
       - name: default
       - name: team/fast
-client:
-  provider: custom
-  profile: default
-`)
-	t.Setenv("DORA_MODEL", "custom/team/fast")
-	cfg, err := Load(path)
+policy:
+  text:
+    provider: custom
+    profile: default
+  image:
+    profile: team/fast
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Client.Provider != "custom" || cfg.Client.Profile != "team/fast" {
-		t.Fatalf("selector = %#v", cfg.Client)
+	if cfg.Policy.Text.Provider != "custom" || cfg.Policy.Text.Profile != "default" {
+		t.Fatalf("text policy = %#v", cfg.Policy.Text)
+	}
+	if cfg.Policy.Image.Profile != "team/fast" {
+		t.Fatalf("image policy = %#v", cfg.Policy.Image)
 	}
 }
 
-func TestLoadRejectsInvalidDORAModel(t *testing.T) {
-	for _, value := range []string{"trust", "/auto", "trust/"} {
-		t.Run(value, func(t *testing.T) {
-			clearBuiltinAPIKeys(t)
-			t.Setenv("DORA_MODEL", value)
-			_, err := Default()
-			if err == nil || !strings.Contains(err.Error(), "provider/profile") {
-				t.Fatalf("error = %v", err)
-			}
-		})
+func TestLoadPolicyEnvOverride(t *testing.T) {
+	clearBuiltinAPIKeys(t)
+	t.Setenv("DORA_POLICY_TEXT_PROVIDER", "custom")
+	t.Setenv("DORA_POLICY_IMAGE_PROFILE", "team/fast")
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: custom
+    base_url: https://custom.example/v1
+    models:
+      - name: default
+      - name: team/fast
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policy.Text.Provider != "custom" {
+		t.Fatalf("text policy = %#v", cfg.Policy.Text)
+	}
+	if cfg.Policy.Image.Profile != "team/fast" {
+		t.Fatalf("image policy = %#v", cfg.Policy.Image)
 	}
 }
 
@@ -90,9 +94,10 @@ providers:
   - name: deepseek
     models:
       - name: custom-deepseek
-client:
-  provider: deepseek
-  profile: custom-deepseek
+policy:
+  text:
+    provider: deepseek
+    profile: custom-deepseek
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -104,8 +109,8 @@ client:
 	if p.BaseURL != "https://api.deepseek.com" || p.APIKey != "env-secret" || p.API != "chat_completions" {
 		t.Fatalf("provider = %#v", p)
 	}
-	if cfg.Client.Provider != "deepseek" || cfg.Client.Profile != "custom-deepseek" {
-		t.Fatalf("selector = %#v", cfg.Client)
+	if cfg.Policy.Text.Provider != "deepseek" || cfg.Policy.Text.Profile != "custom-deepseek" {
+		t.Fatalf("selector = %#v", cfg.Policy.Text)
 	}
 }
 
@@ -186,9 +191,10 @@ providers:
   - name: baz
     base_url: https://baz.example/v1
     models: [{name: model}]
-client:
-  provider: foo-bar
-  profile: model
+policy:
+  text:
+    provider: foo-bar
+    profile: model
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +253,36 @@ env:
   OPENAI_API_KEY: secret
 `))
 	if err == nil || !strings.Contains(err.Error(), "does not match any configured provider") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadCapabilitiesRoundTrip(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    models:
+      - name: flash
+        capabilities: [text, image_input]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Providers[0].Models[0].Capabilities
+	if len(got) != 2 || got[0] != dora.CapabilityText || got[1] != dora.CapabilityImageInput {
+		t.Fatalf("capabilities = %#v", got)
+	}
+}
+
+func TestLoadRejectsUnknownCapability(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    models:
+      - name: flash
+        capabilities: [text, bogus]
+`))
+	if err == nil || !strings.Contains(err.Error(), "unknown capability") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -423,4 +459,8 @@ func clearBuiltinAPIKeys(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("TRUST_API_KEY", "")
 	t.Setenv("DORA_MODEL", "")
+	t.Setenv("DORA_POLICY_TEXT_PROVIDER", "")
+	t.Setenv("DORA_POLICY_TEXT_PROFILE", "")
+	t.Setenv("DORA_POLICY_IMAGE_PROVIDER", "")
+	t.Setenv("DORA_POLICY_IMAGE_PROFILE", "")
 }

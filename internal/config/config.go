@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lgxz/dora"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +20,11 @@ const (
 
 // Config contains the runtime configuration used by the dora CLI.
 type Config struct {
+	Policy    PolicySettings `yaml:"policy,omitempty"`
+	// Client is a deprecated compatibility field. It is retained only so
+	// internal/cli keeps compiling until the final wiring commit; use Policy.
+	//
+	// Deprecated: use Config.Policy.
 	Client    ClientSelector `yaml:"client,omitempty"`
 	Providers []Provider     `yaml:"providers,omitempty"`
 	// Env supplies config-local fallbacks for provider API key environment
@@ -31,6 +37,19 @@ type Config struct {
 	providerDefaults map[string]providerDefault
 }
 
+// Policy selects a provider and profile for one capability. Empty fields leave
+// selection to the router (auto).
+type Policy struct {
+	Provider string `yaml:"provider,omitempty"`
+	Profile  string `yaml:"profile,omitempty"`
+}
+
+// PolicySettings holds the per-capability policy. Absence of a key means auto.
+type PolicySettings struct {
+	Text  Policy `yaml:"text,omitempty"`
+	Image Policy `yaml:"image,omitempty"`
+}
+
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
@@ -39,8 +58,11 @@ type Agent struct {
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
-// ClientSelector optionally chooses one provider and model profile from the catalog.
-// Empty fields let the registry auto-select an unambiguous entry.
+// ClientSelector is a deprecated compatibility type. It is retained only so
+// internal/cli keeps compiling until the final wiring commit removes the
+// legacy client selector; use Policy instead.
+//
+// Deprecated: use Config.Policy.
 type ClientSelector struct {
 	Provider string `yaml:"provider,omitempty"`
 	Profile  string `yaml:"profile,omitempty"`
@@ -71,7 +93,15 @@ type ModelSpec struct {
 	// positive.
 	ContextWindow *int     `yaml:"context_window,omitempty"`
 	Temperature   *float64 `yaml:"temperature,omitempty"`
-	Vision        bool     `yaml:"vision,omitempty"`
+	// Capabilities advertises the provider-neutral capabilities this profile
+	// supports (for example text, image_input).
+	Capabilities []dora.Capability `yaml:"capabilities,omitempty"`
+	// Vision is a deprecated compatibility field derived from Capabilities. It
+	// is retained only so internal/cli keeps compiling until the final wiring
+	// commit; use Capabilities.
+	//
+	// Deprecated: use Capabilities.
+	Vision bool `yaml:"vision,omitempty"`
 }
 
 // Tools configures optional capabilities exposed to the model.
@@ -105,9 +135,6 @@ func Default() (Config, error) {
 	cfg, err := defaultConfig()
 	if err != nil {
 		return Config{}, err
-	}
-	if configuredProviderKeyCount(cfg.Providers) == 0 {
-		cfg.Client = ClientSelector{Provider: "deepseek", Profile: "deepseek-v4-flash"}
 	}
 	if err := cfg.resolveAndValidate(); err != nil {
 		return Config{}, fmt.Errorf("validate default config: %w", err)
@@ -193,7 +220,7 @@ func intPtr(v int) *int {
 }
 
 func (cfg *Config) resolveAndValidate() error {
-	if err := cfg.resolveClientSelector(); err != nil {
+	if err := cfg.resolvePolicy(); err != nil {
 		return err
 	}
 	if len(cfg.Providers) == 0 {
@@ -225,18 +252,32 @@ func (cfg *Config) resolveAndValidate() error {
 	return nil
 }
 
-// resolveClientSelector applies the optional process-wide provider/profile
-// selector. Splitting only at the first slash permits slashes in profile names.
-func (cfg *Config) resolveClientSelector() error {
-	value, ok := os.LookupEnv("DORA_MODEL")
-	if !ok || value == "" {
-		return nil
+// resolvePolicy applies per-capability policy environment variables to the
+// config policy. The v1 capability keys are text and image.
+func (cfg *Config) resolvePolicy() error {
+	for _, capKey := range []string{"text", "image"} {
+		var policy *Policy
+		switch capKey {
+		case "text":
+			policy = &cfg.Policy.Text
+		case "image":
+			policy = &cfg.Policy.Image
+		}
+		if err := resolvePolicyField(capKey, "provider", &policy.Provider); err != nil {
+			return err
+		}
+		if err := resolvePolicyField(capKey, "profile", &policy.Profile); err != nil {
+			return err
+		}
 	}
-	parts := strings.SplitN(value, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return errors.New(`DORA_MODEL must use the "provider/profile" format`)
+	return nil
+}
+
+func resolvePolicyField(capKey, field string, dst *string) error {
+	envVar := "DORA_POLICY_" + strings.ToUpper(capKey) + "_" + strings.ToUpper(field)
+	if value, ok := os.LookupEnv(envVar); ok && value != "" {
+		*dst = value
 	}
-	cfg.Client = ClientSelector{Provider: parts[0], Profile: parts[1]}
 	return nil
 }
 
@@ -337,6 +378,11 @@ func (cfg *Config) resolveProviders() error {
 					return fmt.Errorf(`providers[%d].models[%d].thinking must be one of "off", "minimal", "low", "medium", "high"`, i, j)
 				}
 			}
+			for _, capability := range m.Capabilities {
+				if !validCapability(capability) {
+					return fmt.Errorf("providers[%d].models[%d].capabilities contains unknown capability %q", i, j, capability)
+				}
+			}
 		}
 	}
 	for name := range cfg.Env {
@@ -345,16 +391,6 @@ func (cfg *Config) resolveProviders() error {
 		}
 	}
 	return nil
-}
-
-func configuredProviderKeyCount(providers []Provider) int {
-	count := 0
-	for _, provider := range providers {
-		if provider.APIKey != "" {
-			count++
-		}
-	}
-	return count
 }
 
 // providerAPIKeyEnvironment derives the conventional API key environment
@@ -383,5 +419,16 @@ func validateAPI(api, field string) error {
 		return nil
 	default:
 		return fmt.Errorf(`%s must be "chat_completions" or "responses"`, field)
+	}
+}
+
+// validCapability reports whether capability is a recognized dora.Capability.
+func validCapability(capability dora.Capability) bool {
+	switch capability {
+	case dora.CapabilityText, dora.CapabilityImageInput, dora.CapabilityImageOutput,
+		dora.CapabilityAudioInput, dora.CapabilityFileInput:
+		return true
+	default:
+		return false
 	}
 }
