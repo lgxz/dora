@@ -7,8 +7,9 @@
 two interfaces: `Model` and `Tool`.
 
 No configuration file is required for the built-in providers: set the selected
-provider's API key (for example `DEEPSEEK_API_KEY`), optionally select a profile
-with `DORA_MODEL=provider/profile`, and run immediately.
+provider's API key (for example `DEEPSEEK_API_KEY`), optionally select a model
+with the per-capability `policy` setting (for example
+`DORA_POLICY_TEXT_PROVIDER=deepseek`), and run immediately.
 
 See [`docs/architecture.md`](docs/architecture.md) for module boundaries,
 dependencies, interfaces, and runtime flows.
@@ -151,18 +152,24 @@ For example, `deepseek`, `trust`, and `open-router` use
 `DEEPSEEK_API_KEY`, `TRUST_API_KEY`, and `OPEN_ROUTER_API_KEY`. A non-empty
 process value overrides the same key under config `env`. Config values are
 internal fallbacks and are never exported to child processes.
-`DORA_MODEL=provider/profile` selects both catalog entries and overrides
-`client.provider` and `client.profile`. It splits at the first `/`, so the
-profile portion may itself contain `/`.
+Model selection is driven by per-capability `policy`, not by a single model
+selector. Each capability (`text` and `image`) has an optional `{provider,
+profile}` pair; either field left empty falls back to automatic (`auto`)
+selection. The environment override for a policy field is
+`DORA_POLICY_<CAPABILITY>_<FIELD>` (for example `DORA_POLICY_TEXT_PROVIDER`,
+`DORA_POLICY_TEXT_PROFILE`, `DORA_POLICY_IMAGE_PROVIDER`,
+`DORA_POLICY_IMAGE_PROFILE`); environment values take precedence over the
+config file.
 
 macOS / Linux, temporary (current terminal only):
 
 ```sh
 export TRUST_API_KEY="sk-..."
-export DORA_MODEL="trust/deepseek-v4-flash"
+export DORA_POLICY_TEXT_PROVIDER="trust"
+export DORA_POLICY_TEXT_PROFILE="deepseek-v4-flash"
 ```
 
-macOS / Linux, permanent: append the `export` line above to `~/.zshrc` (zsh)
+macOS / Linux, permanent: append the `export` lines above to `~/.zshrc` (zsh)
 or `~/.bashrc` (bash), then reload it:
 
 ```sh
@@ -173,29 +180,35 @@ Windows PowerShell, temporary (current session only):
 
 ```powershell
 $env:TRUST_API_KEY = "sk-..."
-$env:DORA_MODEL = "trust/deepseek-v4-flash"
+$env:DORA_POLICY_TEXT_PROVIDER = "trust"
+$env:DORA_POLICY_TEXT_PROFILE = "deepseek-v4-flash"
 ```
 
 Windows PowerShell, permanent (persists for the current user):
 
 ```powershell
 [Environment]::SetEnvironmentVariable("TRUST_API_KEY", "sk-...", "User")
-[Environment]::SetEnvironmentVariable("DORA_MODEL", "trust/deepseek-v4-flash", "User")
+[Environment]::SetEnvironmentVariable("DORA_POLICY_TEXT_PROVIDER", "trust", "User")
+[Environment]::SetEnvironmentVariable("DORA_POLICY_TEXT_PROFILE", "deepseek-v4-flash", "User")
 ```
 
 Windows CMD, temporary (current session only):
 
 ```cmd
 set TRUST_API_KEY=sk-...
-set DORA_MODEL=trust/deepseek-v4-flash
+set DORA_POLICY_TEXT_PROVIDER=trust
+set DORA_POLICY_TEXT_PROFILE=deepseek-v4-flash
 ```
 
-`DORA_MODEL` must contain non-empty provider and profile names. Leave it unset
-or empty to use the `client` selector. Without either selector, Dora selects the
-only provider with a non-empty API key. Multiple keyed providers are ambiguous;
-with no keys, only a sole provider is selected automatically. The selected
-provider's first model profile is the default. With no configuration file and
-no keys, Dora retains the built-in DeepSeek default.
+When a policy field is left to `auto`, Dora walks the catalog in order —
+providers in the order they are listed, then that provider's profiles in the
+order they are listed — and selects the first entry that both has a non-empty
+API key (that is, is usable) and satisfies the capability constraint. Catalog
+order is therefore priority. A provider with no API key is treated as
+unavailable and is skipped during selection. Local endpoints that do not
+require authentication (such as Ollama) still need a non-empty placeholder API
+key to be selectable. With no configuration file and no keys, Dora retains the
+built-in DeepSeek default.
 
 To customize the defaults, create `~/.dora/config.yaml`. Dora uses this
 `~/.dora/` layout on every operating system, including macOS. Set the
@@ -208,26 +221,28 @@ env:
   DEEPSEEK_API_KEY: sk-...
 ```
 
-This minimal file uses the embedded DeepSeek catalog, auto-selects DeepSeek as
-the sole keyed provider, and uses its first profile. Replacing the key with
-`TRUST_API_KEY` selects Trust. When both keys are configured, add `client` or
-set `DORA_MODEL` explicitly:
+This minimal file uses the embedded DeepSeek catalog and auto-selects the first
+available text model. Replacing the key with `TRUST_API_KEY` selects Trust.
+When both keys are configured, set `policy.text` explicitly:
 
 ```yaml
 env:
   DEEPSEEK_API_KEY: sk-deepseek...
   TRUST_API_KEY: sk-trust...
-client:
-  provider: trust
-  profile: deepseek-v4-flash
+policy:
+  text:
+    provider: trust
+    profile: deepseek-v4-flash
 ```
 
 The embedded provider catalog supplies built-in `deepseek` and `trust`
 definitions with `base_url`, so catalog entries with those names may omit that
 field. Models are always listed explicitly in `providers[].profiles`. Each
-entry's `name` is a unique profile name used by `client.profile`; `model` is
+entry's `name` is a unique profile name used by `policy.*.profile`; `model` is
 the identifier sent to the provider. `model` defaults to `name` when omitted,
-and multiple profiles may use the same model with different parameters. Set
+and multiple profiles may use the same model with different parameters. Each
+profile declares its capabilities with `capabilities`, for example
+`capabilities: [text]` or `capabilities: [text, image_input]`. Set
 provider-level or model-level `api: responses` to use the Responses API. Both
 APIs always use SSE streaming.
 Responses tool loops replay typed output items locally and do not depend on
@@ -283,9 +298,10 @@ providers:
         model: openrouter/auto
         max_tokens: 32768
         temperature: 0.7
-client:
-  provider: openrouter
-  profile: balanced
+policy:
+  text:
+    provider: openrouter
+    profile: balanced
 ```
 
 `max_tokens` caps the number of tokens the model generates in one response and
@@ -520,18 +536,20 @@ or defaults to 120 seconds when that setting is zero or absent.
 
 ## Image understanding
 
-Dora treats vision support as an intrinsic model-profile property. Set
-`vision: true` on a catalog entry only when that model supports images; there
-is no CLI override or direct image-attachment flag.
+Dora treats vision support as a model-profile capability. A profile that can
+understand images declares `capabilities: [text, image_input]`; a text-only
+model declares `capabilities: [text]`. There is no CLI override or direct
+image-attachment flag.
 
-When the model wants to view an image, it calls the `view_image` tool with
-either a local `path` or a remote `url`; the tool attaches that image to its
-result message for a vision-capable profile. The tool is only registered when
-the selected model profile sets `vision: true`.
+When the model wants to view an image, it calls the `view_image` tool, which is
+always registered. The tool accepts a local `path` or a remote `url` and routes
+the image through a transient visual model selected with the `image_input`
+capability constraint, returning a text description of the image. The image
+itself never enters the main model's context — only the returned description
+does.
 
-Images consume model context: each attached image is encoded into vision tokens
-that count toward the model's context window, so large images or many images
-can exhaust a small context window. Dora limits each local image file to 4 MiB
-and rejects files that are not images. When a `view_image` call points at a
-missing, non-image, or oversized file, the tool reports the error to the model
-so it can correct the path.
+Dora limits each local image file to 4 MiB and rejects files that are not
+images. When a `view_image` call points at a missing, non-image, or oversized
+file, the tool reports the error to the model so it can correct the path. If no
+catalog entry advertises `image_input`, the `view_image` call reports that no
+visual model is available.

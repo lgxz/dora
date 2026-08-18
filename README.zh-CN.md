@@ -5,7 +5,7 @@
 
 `dora` 是一个小巧、模块化的 Go 语言 LLM Agent 内核。其核心是一个循环和两个接口：`Model` 和 `Tool`。
 
-使用内建 provider 时无需配置文件：设置所选 provider 的 API 密钥（例如 `DEEPSEEK_API_KEY`），并可通过 `DORA_MODEL=provider/profile` 选择 profile，即可立即运行。
+使用内建 provider 时无需配置文件：设置所选 provider 的 API 密钥（例如 `DEEPSEEK_API_KEY`），并可通过按能力（capability）区分的 `policy` 设置选择模型（例如 `DORA_POLICY_TEXT_PROVIDER=deepseek`），即可立即运行。
 
 有关模块边界、依赖、接口和运行时流程，请参阅 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -111,13 +111,16 @@ make install
 
 ### API 密钥
 
-Dora 根据每个 provider 名称派生 API 密钥环境变量：名称转为大写，非字母数字字符替换为 `_`，再追加 `_API_KEY`。例如 `deepseek`、`trust` 和 `open-router` 分别使用 `DEEPSEEK_API_KEY`、`TRUST_API_KEY` 和 `OPEN_ROUTER_API_KEY`。非空的真实进程环境变量会覆盖配置文件 `env` 下的同名值。配置值只作为 Dora 内部 fallback，不会导出给子进程。`DORA_MODEL=provider/profile` 同时选择 catalog 中的 provider 和 profile，并覆盖 `client.provider` 与 `client.profile`。它只按第一个 `/` 分割，因此 profile 部分本身可以包含 `/`。
+Dora 根据每个 provider 名称派生 API 密钥环境变量：名称转为大写，非字母数字字符替换为 `_`，再追加 `_API_KEY`。例如 `deepseek`、`trust` 和 `open-router` 分别使用 `DEEPSEEK_API_KEY`、`TRUST_API_KEY` 和 `OPEN_ROUTER_API_KEY`。非空的真实进程环境变量会覆盖配置文件 `env` 下的同名值。配置值只作为 Dora 内部 fallback，不会导出给子进程。
+
+模型选择由按能力（capability）区分的 `policy` 驱动，而非单一模型选择器。每种能力（`text` 与 `image`）都有一个可选的 `{provider, profile}` 对；任一字段留空即回退为自动（`auto`）选择。policy 字段对应的环境变量覆盖为 `DORA_POLICY_<CAPABILITY>_<FIELD>`（例如 `DORA_POLICY_TEXT_PROVIDER`、`DORA_POLICY_TEXT_PROFILE`、`DORA_POLICY_IMAGE_PROVIDER`、`DORA_POLICY_IMAGE_PROFILE`）；环境变量优先于配置文件。
 
 macOS / Linux，临时（仅当前终端）：
 
 ```sh
 export TRUST_API_KEY="sk-..."
-export DORA_MODEL="trust/deepseek-v4-flash"
+export DORA_POLICY_TEXT_PROVIDER="trust"
+export DORA_POLICY_TEXT_PROFILE="deepseek-v4-flash"
 ```
 
 macOS / Linux，永久：将上面的 `export` 行追加到 `~/.zshrc`（zsh）或 `~/.bashrc`（bash），然后重新加载：
@@ -130,24 +133,27 @@ Windows PowerShell，临时（仅当前会话）：
 
 ```powershell
 $env:TRUST_API_KEY = "sk-..."
-$env:DORA_MODEL = "trust/deepseek-v4-flash"
+$env:DORA_POLICY_TEXT_PROVIDER = "trust"
+$env:DORA_POLICY_TEXT_PROFILE = "deepseek-v4-flash"
 ```
 
 Windows PowerShell，永久（对当前用户持久生效）：
 
 ```powershell
 [Environment]::SetEnvironmentVariable("TRUST_API_KEY", "sk-...", "User")
-[Environment]::SetEnvironmentVariable("DORA_MODEL", "trust/deepseek-v4-flash", "User")
+[Environment]::SetEnvironmentVariable("DORA_POLICY_TEXT_PROVIDER", "trust", "User")
+[Environment]::SetEnvironmentVariable("DORA_POLICY_TEXT_PROFILE", "deepseek-v4-flash", "User")
 ```
 
 Windows CMD，临时（仅当前会话）：
 
 ```cmd
 set TRUST_API_KEY=sk-...
-set DORA_MODEL=trust/deepseek-v4-flash
+set DORA_POLICY_TEXT_PROVIDER=trust
+set DORA_POLICY_TEXT_PROFILE=deepseek-v4-flash
 ```
 
-`DORA_MODEL` 的 provider 和 profile 两部分都不能为空。未设置或设置为空时，使用配置文件中的 `client` selector。两者都没有时，Dora 自动选择唯一具有非空 API key 的 provider；多个 provider 都有 key 时会报歧义；没有 key 时只有唯一 provider 才能自动选择。未指定 profile 时使用所选 provider 的第一个 model profile。没有配置文件且没有 key 时，仍使用内建的 DeepSeek 默认值。
+当 policy 字段回退为 `auto` 时，Dora 按 catalog 顺序遍历——先按 provider 的列出顺序，再按该 provider 中 profiles 的列出顺序——并选中第一个「具有非空 API key（即可用）且满足能力约束」的条目。因此 catalog 顺序即优先级。没有 API key 的 provider 被视为不可用，并在选择时被跳过。无需认证的本地端点（如 Ollama）同样需要设置一个任意非空占位 API key 才能被选中。没有配置文件且没有 key 时，仍使用内建的 DeepSeek 默认值。
 
 要自定义默认值，请创建 `~/.dora/config.yaml`。Dora 在每个操作系统（包括 macOS）上都使用这个 `~/.dora/` 布局。设置 `DORA_HOME` 环境变量为绝对路径可覆盖 home 目录。你也可以把文件放在任何位置并通过 `--config path/to/config.yaml` 指定；显式请求的文件必须存在。
 
@@ -156,18 +162,19 @@ env:
   DEEPSEEK_API_KEY: sk-...
 ```
 
-这个最小配置直接使用内嵌的 DeepSeek catalog，自动选择唯一具有 key 的 DeepSeek，并使用它的第一个 profile。将其替换为 `TRUST_API_KEY` 会自动选择 Trust。如果同时配置两个 key，则需要增加 `client` 或设置 `DORA_MODEL`：
+这个最小配置直接使用内嵌的 DeepSeek catalog，并自动选择第一个可用的文本模型。将其替换为 `TRUST_API_KEY` 会自动选择 Trust。如果同时配置两个 key，则需要显式设置 `policy.text`：
 
 ```yaml
 env:
   DEEPSEEK_API_KEY: sk-deepseek...
   TRUST_API_KEY: sk-trust...
-client:
-  provider: trust
-  profile: deepseek-v4-flash
+policy:
+  text:
+    provider: trust
+    profile: deepseek-v4-flash
 ```
 
-嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `client.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
+嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `policy.*.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。每个 profile 通过 `capabilities` 声明其能力，例如 `capabilities: [text]` 或 `capabilities: [text, image_input]`。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
 
 ### 第三方 OpenAI 兼容提供商
 
@@ -210,9 +217,10 @@ providers:
         model: openrouter/auto
         max_tokens: 32768
         temperature: 0.7
-client:
-  provider: openrouter
-  profile: balanced
+policy:
+  text:
+    provider: openrouter
+    profile: balanced
 ```
 
 `max_tokens` 限制模型在一次响应中生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这两个键属于 model catalog，没有对应的命令行标志。
@@ -366,8 +374,8 @@ PowerShell 也在 Dora 的当前目录中启动，需要时可在命令内部使
 
 ## 图像理解
 
-Dora 将视觉能力视为 model profile 的固有属性。只有模型确实支持图像时，才在对应 catalog 项中设置 `vision: true`；CLI 不再提供覆盖或直接附加图片的标志。
+Dora 将视觉能力视为 model profile 的能力（capability）。能够理解图像的 profile 声明 `capabilities: [text, image_input]`；纯文本模型声明 `capabilities: [text]`。CLI 不提供覆盖或直接附加图片的标志。
 
-当模型想要查看图像时，它会调用 `view_image` 工具并传入本地 `path` 或远程 `url`；该工具会将图像附加到其结果消息中，供支持视觉的 profile 使用。仅当选中的模型 profile 设置了 `vision: true` 时才会注册该工具。
+当模型想要查看图像时，它会调用始终注册的 `view_image` 工具。该工具接受本地 `path` 或远程 `url`，并以 `image_input` 能力约束临时选择一个视觉模型来识别图片，返回图片的文字描述。图片本身不会进入主模型的上下文——只有返回的描述才会。
 
-图像会消耗模型上下文：每个附加的图像都会被编码为视觉 token，计入模型的上下文窗口，因此大图或多图可能耗尽小的上下文窗口。Dora 将每个本地图像文件限制为 4 MiB，并拒绝非图像文件。当 `view_image` 调用指向缺失、非图像或过大的文件时，该工具会向模型报告错误，以便其更正路径。
+Dora 将每个本地图像文件限制为 4 MiB，并拒绝非图像文件。当 `view_image` 调用指向缺失、非图像或过大的文件时，该工具会向模型报告错误，以便其更正路径。如果没有任何 catalog 项声明 `image_input`，`view_image` 调用会报告没有可用的视觉模型。
