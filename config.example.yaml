@@ -2,9 +2,9 @@
 # built-in base_url defaults, so that field may be omitted for them. Custom
 # providers must set base_url. API keys are read from the provider-derived
 # environment variable (for example DEEPSEEK_API_KEY or TRUST_API_KEY), with
-# config-local fallbacks available under env. DORA_MODEL=provider/profile
-# overrides the client selector below. Values in env are not exported to child
-# processes.
+# config-local fallbacks available under env. Model selection is driven by
+# per-capability policy (see policy below). Values in env are not exported to
+# child processes.
 providers:
   - name: deepseek
     # base_url: https://api.deepseek.com
@@ -13,23 +13,29 @@ providers:
     # connect_timeout_seconds: 10
     # stream_idle_timeout_seconds: 0
     models:
-      # name is the unique profile name used by client.profile. model is the
+      # name is the unique profile name used by policy.profile. model is the
       # identifier sent to the provider and defaults to name when omitted.
+      # capabilities advertises what this profile supports: text (always for a
+      # chat model) and image_input for vision-capable models.
       - name: deepseek-v4-flash
-        # Defaults: model: deepseek-v4-flash, max_tokens: 32768, vision: false.
+        # Defaults: model: deepseek-v4-flash, max_tokens: 32768.
         # Approximate context capacity in message-content bytes. Default:
         # 1048576 (1 MiB). Must be positive.
         context_window: 1048576
+        capabilities: [text]
       - name: deepseek-reasoning
         model: deepseek-v4-flash
         thinking: high
+        capabilities: [text]
   - name: trust
     # base_url: https://api.trustoken.cn/v1
     models:
       - name: deepseek-v4-flash
         context_window: 1048576
+        capabilities: [text]
       - name: deepseek-v4-pro
         context_window: 1048576
+        capabilities: [text]
 
 # Optional config-local API keys. A real process environment variable with the
 # same name takes precedence.
@@ -37,12 +43,16 @@ providers:
 #   DEEPSEEK_API_KEY: sk-...
 #   TRUST_API_KEY: sk-...
 
-# Optional selector. With no explicit selector, a sole keyed provider is
-# selected automatically and its first model profile is the default. Multiple
-# keyed providers require client or DORA_MODEL.
-client:
-  provider: deepseek
-  profile: deepseek-v4-flash
+# Per-capability model policy. Each key is an optional {provider, profile};
+# absence means auto (the router picks the first catalog entry satisfying the
+# capability). text maps to [text]; image maps to [image_input]. Environment
+# overrides are DORA_POLICY_TEXT_PROVIDER, DORA_POLICY_TEXT_PROFILE,
+# DORA_POLICY_IMAGE_PROVIDER, and DORA_POLICY_IMAGE_PROFILE.
+policy:
+  text:
+    provider: deepseek
+    profile: deepseek-v4-flash
+  # image: {}   # auto; requires a model advertising capabilities: [image_input]
 
 agent:
   max_rounds: 256

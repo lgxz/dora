@@ -24,7 +24,8 @@ flowchart TD
     CLI --> Update["internal/update<br/>standalone self-update"]
     CLI --> Progress["internal/progress<br/>terminal progress"]
     CLI --> Core["dora<br/>Agent core"]
-    CLI --> Registry["model/registry<br/>provider/profile assembly"]
+    CLI --> Registry["model/registry<br/>catalog + construct"]
+    CLI --> Router["model/router<br/>constraint selection + routing"]
     CLI --> Skill["skill<br/>Skill tool"]
     CLI --> Bash["tool/bash<br/>Bash tool"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell tool"]
@@ -32,6 +33,8 @@ flowchart TD
 
     Registry --> OpenAI["model/openai<br/>Chat Completions"]
     Registry --> Responses["model/openairesponses<br/>Responses API"]
+    Router --> Registry
+    Router --> Core
     OpenAI --> Provider["model/provider<br/>shared HTTP/SSE transport"]
     Responses --> Provider
     Bash --> CommandExec["tool/internal/commandexec<br/>command execution kernel"]
@@ -50,10 +53,10 @@ flowchart TD
 
 Key constraints on dependency direction:
 
-- The root package `dora` does not import any concrete implementation package within the project.
+- The root package `dora` does not import any concrete implementation package within the project. `dora.Capability` and `dora.Constraints` are root value types shared by `model/registry` and `model/router` without an import cycle.
 - Model adapters and tool packages depend on the interfaces and data structures in `dora`.
 - `internal/*` serves only the Dora application and cannot be imported directly from outside the module.
-- `internal/cli` knows all concrete implementations and is the composition root; model assembly is delegated to `model/registry`.
+- `internal/cli` knows all concrete implementations and is the composition root; model assembly is delegated to `model/router` (selection) and `model/registry` (construction).
 
 ## Directories and Modules
 
@@ -72,12 +75,13 @@ Key constraints on dependency direction:
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
 | `model/openai` | OpenAI-compatible Chat Completions SSE protocol adapter | `New`, `Client.GenerateStream` |
 | `model/openairesponses` | Responses API, SSE stream, and provider continuation adapter | `New`, `Client.GenerateStream` |
-| `model/registry` | Assembles a `dora.Model` from a provider/profile catalog; selects, translates thinking, instantiates adapters | `New`, `Registry.Model`, `Registry.Selection` |
+| `model/registry` | Catalog registration/query (order = priority) and per-protocol adapter construction | `NewCatalog`, `Catalog.Providers`, `Construct` |
+| `model/router` | Constraint-based selection, `dora.Model` routing with caching; internal `selection` | `New`, `Router.Generate`, `Router.GenerateStream`, `Router.View`, `Router.SetThinking` |
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory and under timeout and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
-| `tool/viewimage` | Loads a local image file or remote URL for a vision-capable model | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/viewimage` | Loads a local image file or remote URL and returns a text description via a transient visual model | `New`, `Tool.SetViewer`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, timeout, cancellation, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
 
 ## Core Interfaces
@@ -266,19 +270,19 @@ concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
 the SQLite database itself. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 1 and two tables:
+The database uses schema version 2 and two tables:
 
 - `turns`: one row per successfully completed invocation, including plain-text
-  `system`, `user`, and final `result`, backend identity, round count, and
-  commit time;
+  `system`, `user`, and final `result`, round count, and commit time;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls and images are JSON columns because
   they are structured fields of a message.
 
-`CommitTurn` inserts the turn and all messages in one transaction. Incomplete
-Turns are rejected, so there is no status column. Provider continuation is
-intentionally not stored. SQLite allocates the turn ID and foreign keys bind
-every message to its turn.
+`CommitTurn` inserts the turn and all messages in one transaction (no backend
+metadata). Incomplete Turns are rejected, so there is no status column. Provider
+continuation is intentionally not stored. SQLite allocates the turn ID and
+foreign keys bind every message to its turn. Older schema databases are
+rejected rather than migrated.
 
 `tool/history` is registered only when the selected session database already
 contains at least one completed turn. An empty database exposes no history
@@ -329,7 +333,9 @@ Bash and PowerShell remain separate public tools with separate shell-launch poli
 
 ## Configuration and Paths
 
-`internal/config` uses strict YAML decoding for a provider/model-profile catalog: unknown fields, multiple documents, duplicate names, invalid API types, and negative limits all report errors. `builtin_providers.yaml` is embedded into the binary and defines the built-in `deepseek` and `trust` catalogs, including base URLs and default profiles. Within `providers[].models`, `name` uniquely identifies a profile while `model` is the provider-facing model identifier; `model` defaults to `name`, and different profiles may target the same model. A profile's positive `context_window` records its approximate context capacity; omission defaults to 1 MiB. Explicit user catalog fields override connection defaults, while user model lists replace rather than merge with built-in models. Each provider's API key environment variable is derived by uppercasing its name, replacing non-alphanumeric characters with underscores, and appending `_API_KEY`; a non-empty process value overrides the config-local `env` fallback, and normalization collisions or unknown config env names are rejected. These fallbacks never mutate the process environment. `DORA_MODEL=provider/profile` atomically overrides the client selector and splits only at the first slash, allowing slashes in profile names. Without an explicit selector, a sole keyed provider is selected automatically; multiple keyed providers are ambiguous, and the first profile is the provider default. Only the no-config, no-key `Default()` path injects the DeepSeek selector. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
+`internal/config` uses strict YAML decoding for a provider/model-profile catalog: unknown fields, multiple documents, duplicate names, invalid API types, invalid capability values, and negative limits all report errors. `builtin_providers.yaml` is embedded into the binary and defines the built-in `deepseek` and `trust` catalogs, including base URLs and default profiles. Within `providers[].models`, `name` uniquely identifies a profile while `model` is the provider-facing model identifier; `model` defaults to `name`, and different profiles may target the same model. A profile's positive `context_window` records its approximate context capacity; omission defaults to 1 MiB. A profile's `capabilities` advertises the provider-neutral capabilities it supports (for example `text`, `image_input`). Explicit user catalog fields override connection defaults, while user model lists replace rather than merge with built-in models. Each provider's API key environment variable is derived by uppercasing its name, replacing non-alphanumeric characters with underscores, and appending `_API_KEY`; a non-empty process value overrides the config-local `env` fallback, and normalization collisions or unknown config env names are rejected. These fallbacks never mutate the process environment.
+
+Model selection is driven by per-capability policy, keyed by capability name: `policy.text` and `policy.image`, each an optional `{provider, profile}`; absence means `auto` (the router selects the first catalog entry satisfying the capability). The corresponding environment overrides are `DORA_POLICY_<CAPABILITY>_<FIELD>`, for example `DORA_POLICY_TEXT_PROVIDER` and `DORA_POLICY_IMAGE_PROFILE`. `text` maps to the `text` capability and `image` maps to `image_input`. Selection is pure order-plus-constraints: provider order then model order within a provider wins; `text` must be declared explicitly. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
 
 `internal/paths` uses a unified `~/.dora` layout on all operating systems:
 
