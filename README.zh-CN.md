@@ -173,7 +173,7 @@ client:
 
 要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 models。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
 
-对于无需认证的自托管 Ollama 端点，请不要设置 `OLLAMA_API_KEY`：
+对于无需认证的自托管 Ollama 端点，也需设置任意非空占位 API key（例如 `export OLLAMA_API_KEY=local`，或在配置 `env` 段下使用相同名称），否则该 provider 会被视为不可用并在选择时被跳过：
 
 ```yaml
 providers:
@@ -181,6 +181,8 @@ providers:
     base_url: http://localhost:11434/v1
     models:
       - name: llama3.1
+env:
+  OLLAMA_API_KEY: local
 ```
 
 对于需要密钥的托管式 OpenAI 兼容服务（如 OpenRouter 或 Groq），分别将密钥导出为 `OPENROUTER_API_KEY` 或 `GROQ_API_KEY`，也可以在配置文件 `env` 下使用相同名称：

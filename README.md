@@ -266,10 +266,10 @@ env:
   OPENROUTER_API_KEY: sk-...
 ```
 
-Leave both the real variable and config fallback absent for a local endpoint
-that does not require authentication. Provider names that normalize to the
-same environment variable are rejected. Config files containing keys are
-secrets and should be protected accordingly.
+Even a local endpoint that does not require authentication needs a non-empty
+API key (any placeholder value works) to be selectable. Provider names that
+normalize to the same environment variable are rejected. Config files
+containing keys are secrets and should be protected accordingly.
 
 Control the per-response output budget and sampling with `max_tokens` and
 `temperature`:

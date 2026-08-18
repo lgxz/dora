@@ -22,7 +22,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	_ = os.Setenv("OPENAI_API_KEY", "")
+	_ = os.Setenv("OPENAI_API_KEY", "test-key")
 	_ = os.Setenv("DEEPSEEK_API_KEY", "")
 	_ = os.Setenv("TRUST_API_KEY", "")
 	_ = os.Setenv("DORA_MODEL", "")

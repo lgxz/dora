@@ -261,8 +261,8 @@ func resolvePolicyField(capKey, field string, dst *string) error {
 }
 
 // resolveProviders fills built-in connection defaults, resolves API keys, and
-// validates the provider/model-profile catalog. Missing API keys remain valid
-// so local endpoints can operate without authentication.
+// validates the provider/model-profile catalog. A provider with a missing API
+// key is still valid config, but the router skips it during selection.
 func (cfg *Config) resolveProviders() error {
 	providerNames := make(map[string]struct{}, len(cfg.Providers))
 	apiKeyEnvironments := make(map[string]string, len(cfg.Providers))

@@ -21,9 +21,17 @@ type selection struct {
 // Select returns the first catalog entry, in provider then model order, that
 // satisfies every non-empty field of the constraints. Selection is silent: no
 // ambiguity error, and the first match wins.
+//
+// A provider with an empty APIKey is considered unavailable and is skipped,
+// even if it is listed first and its capabilities match. Local endpoints that
+// do not require authentication (such as Ollama) must therefore set any
+// non-empty placeholder APIKey to be selectable.
 func Select(cat *registry.Catalog, c dora.Constraints) (selection, error) {
 	for _, provider := range cat.Providers() {
 		if c.Provider != "" && provider.Name != c.Provider {
+			continue
+		}
+		if provider.APIKey == "" {
 			continue
 		}
 		for _, model := range provider.Models {

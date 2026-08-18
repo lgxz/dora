@@ -26,7 +26,7 @@ func (s *stubModel) GenerateStream(ctx context.Context, req dora.Request, emit f
 
 func routerCatalog(t *testing.T) *registry.Catalog {
 	cat, err := registry.NewCatalog(registry.Config{Providers: []registry.ProviderConfig{{
-		Name: "alpha", BaseURL: "https://alpha.example", API: "chat_completions",
+		Name: "alpha", BaseURL: "https://alpha.example", API: "chat_completions", APIKey: "test-key",
 		Models: []registry.ModelConfig{
 			{Name: "text", Capabilities: []dora.Capability{dora.CapabilityText}},
 			{Name: "vision", Capabilities: []dora.Capability{dora.CapabilityImageInput}},
