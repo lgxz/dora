@@ -13,7 +13,6 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
-	"github.com/lgxz/dora/tool/internal/imageoutput"
 )
 
 const (
@@ -34,9 +33,6 @@ type Config struct {
 	// not finish within wait_seconds is adopted as a background job and a
 	// job_id is returned.
 	JobManager *job.Manager
-	// Vision advertises the @@path@@ image tag in the tool description so the
-	// model can attach images for viewing. Requires a vision-capable model.
-	Vision bool
 }
 
 // Tool executes commands using a configured executable.
@@ -48,7 +44,6 @@ type Tool struct {
 	timeout        time.Duration
 	maxOutputBytes int
 	jobManager     *job.Manager
-	vision         bool
 }
 
 // New creates a command execution tool.
@@ -79,19 +74,14 @@ func New(cfg Config) (*Tool, error) {
 		timeout:        timeout,
 		maxOutputBytes: maxOutputBytes,
 		jobManager:     cfg.JobManager,
-		vision:         cfg.Vision,
 	}, nil
 }
 
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
-	description := t.description
-	if t.vision {
-		description += " To load an image file for viewing, use `echo @@path@@`"
-	}
 	return dora.ToolSpec{
 		Name:        t.name,
-		Description: description,
+		Description: t.description,
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -228,9 +218,6 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input) (dora.Too
 }
 
 func (t *Tool) result(content string) dora.ToolResult {
-	if t.vision {
-		return imageoutput.Parse(content)
-	}
 	return dora.ToolResult{Content: content}
 }
 

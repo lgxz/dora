@@ -524,14 +524,14 @@ Dora treats vision support as an intrinsic model-profile property. Set
 `vision: true` on a catalog entry only when that model supports images; there
 is no CLI override or direct image-attachment flag.
 
-When a command tool's stdout contains a `@@path@@` tag, Dora parses it and
-attaches the image at that path to the tool message for a vision-capable
-profile. The command tool description documents this convention so the model
-knows it can emit such a tag.
+When the model wants to view an image, it calls the `view_image` tool with
+either a local `path` or a remote `url`; the tool attaches that image to its
+result message for a vision-capable profile. The tool is only registered when
+the selected model profile sets `vision: true`.
 
 Images consume model context: each attached image is encoded into vision tokens
 that count toward the model's context window, so large images or many images
-can exhaust a small context window. Dora limits each image file to 4 MiB and
-rejects files that are not images. When a `@@path@@` tag points at a missing,
-non-image, or oversized file, Dora does not attach it and instead reports the
-error to the model so it can correct the path.
+can exhaust a small context window. Dora limits each local image file to 4 MiB
+and rejects files that are not images. When a `view_image` call points at a
+missing, non-image, or oversized file, the tool reports the error to the model
+so it can correct the path.

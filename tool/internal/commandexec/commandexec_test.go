@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,57 +29,12 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
-	tool := newTestTool(t, Config{Timeout: 45 * time.Second, Vision: true})
+	tool := newTestTool(t, Config{Timeout: 45 * time.Second})
 	spec := tool.Spec()
 	if spec.Name != "test-command" ||
 		!strings.Contains(spec.Description, "Execute a test command") ||
-		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "wait_seconds") {
 		t.Fatalf("spec = %#v", spec)
-	}
-}
-
-func TestSpecOmitsImageNoteWithoutVision(t *testing.T) {
-	tool := newTestTool(t, Config{})
-	spec := tool.Spec()
-	if strings.Contains(spec.Description, "@@path@@") {
-		t.Fatalf("description = %q", spec.Description)
-	}
-}
-
-func TestExecuteReturnsStructuredImagesWhenVisionEnabled(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "shot.png")
-	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
-	if err := os.WriteFile(path, png, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tool := newTestTool(t, Config{Vision: true})
-	result, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"command":%q}`, "image:"+path)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Images) != 1 || result.Images[0].Path != path {
-		t.Fatalf("images = %#v", result.Images)
-	}
-	decoded := decodeResult(t, result.Content)
-	if decoded.Stdout != "@@"+path+"@@" {
-		t.Fatalf("stdout = %q", decoded.Stdout)
-	}
-}
-
-func TestExecuteDoesNotParseImagesWithoutVision(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "shot.png")
-	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d}
-	if err := os.WriteFile(path, png, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tool := newTestTool(t, Config{})
-	result, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"command":%q}`, "image:"+path)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Images) != 0 {
-		t.Fatalf("images = %#v", result.Images)
 	}
 }
 
@@ -260,11 +214,6 @@ func TestCommandHelper(t *testing.T) {
 	}
 
 	command := os.Args[separator+1]
-	if strings.HasPrefix(command, "image:") {
-		fmt.Print("@@" + strings.TrimPrefix(command, "image:") + "@@")
-		os.Exit(0)
-	}
-
 	switch command {
 	case "hello":
 		fmt.Print("hello")

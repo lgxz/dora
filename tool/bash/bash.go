@@ -25,8 +25,6 @@ type Config struct {
 	MaxOutputBytes int
 	// JobManager, when set, enables background execution via wait_seconds.
 	JobManager *job.Manager
-	// Vision advertises the @@path@@ image tag in the tool description.
-	Vision bool
 }
 
 // Tool executes commands using Bash.
@@ -50,7 +48,6 @@ func New(cfg Config) (*Tool, error) {
 		Timeout:        cfg.Timeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
 		JobManager:     cfg.JobManager,
-		Vision:         cfg.Vision,
 	})
 	if err != nil {
 		return nil, err

@@ -77,8 +77,8 @@ Key constraints on dependency direction:
 | `tool/bash` | Executes Bash within the current directory and under timeout and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/viewimage` | Loads a local image file or remote URL for a vision-capable model | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, timeout, cancellation, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
-| `tool/internal/imageoutput` | Converts the command tools' `@@path@@` convention into structured image results | `Parse` |
 
 ## Core Interfaces
 

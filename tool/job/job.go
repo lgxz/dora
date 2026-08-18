@@ -12,7 +12,6 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
-	"github.com/lgxz/dora/tool/internal/imageoutput"
 )
 
 const defaultPollSeconds = 60
@@ -20,12 +19,11 @@ const defaultPollSeconds = 60
 // Tool manages background jobs started by the bash tool.
 type Tool struct {
 	manager *job.Manager
-	vision  bool
 }
 
 // New creates a Job tool backed by the given manager.
-func New(manager *job.Manager, vision bool) *Tool {
-	return &Tool{manager: manager, vision: vision}
+func New(manager *job.Manager) *Tool {
+	return &Tool{manager: manager}
 }
 
 // Spec implements dora.Tool.
@@ -112,9 +110,6 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 }
 
 func (t *Tool) result(content string) dora.ToolResult {
-	if t.vision {
-		return imageoutput.Parse(content)
-	}
 	return dora.ToolResult{Content: content}
 }
 

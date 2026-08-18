@@ -16,6 +16,7 @@ import (
 	historytool "github.com/lgxz/dora/tool/history"
 	jobtool "github.com/lgxz/dora/tool/job"
 	powershelltool "github.com/lgxz/dora/tool/powershell"
+	viewimagetool "github.com/lgxz/dora/tool/viewimage"
 )
 
 func buildTools(cfg config.Config, selection registry.Selection, manager *job.Manager, history session.Reader, historyAvailable, noSkills bool) ([]dora.Tool, error) {
@@ -46,12 +47,15 @@ func buildTools(cfg config.Config, selection registry.Selection, manager *job.Ma
 			}
 		}
 	}
-	commandTools, err := buildCommandTools(cfg.Tools, selection.Vision, manager)
+	commandTools, err := buildCommandTools(cfg.Tools, manager)
 	if err != nil {
 		return nil, err
 	}
 	tools = append(tools, commandTools...)
-	tools = append(tools, jobtool.New(manager, selection.Vision))
+	tools = append(tools, jobtool.New(manager))
+	if selection.Vision {
+		tools = append(tools, viewimagetool.New())
+	}
 	tools = append(tools, buildFileTools()...)
 	return tools, nil
 }
@@ -74,7 +78,7 @@ type toolCandidate struct {
 	unavailable      error
 }
 
-func buildCommandTools(cfg config.Tools, vision bool, jobManager *job.Manager) ([]dora.Tool, error) {
+func buildCommandTools(cfg config.Tools, jobManager *job.Manager) ([]dora.Tool, error) {
 	return assembleCommandTools(runtime.GOOS, []toolCandidate{
 		{
 			enabled:          cfg.Bash.Enabled,
@@ -82,7 +86,6 @@ func buildCommandTools(cfg config.Tools, vision bool, jobManager *job.Manager) (
 			create: func() (dora.Tool, error) {
 				return bashtool.New(bashtool.Config{
 					Timeout:    time.Duration(cfg.Bash.TimeoutSeconds) * time.Second,
-					Vision:     vision,
 					JobManager: jobManager,
 				})
 			},
@@ -94,7 +97,6 @@ func buildCommandTools(cfg config.Tools, vision bool, jobManager *job.Manager) (
 			create: func() (dora.Tool, error) {
 				return powershelltool.New(powershelltool.Config{
 					Timeout:    time.Duration(cfg.PowerShell.TimeoutSeconds) * time.Second,
-					Vision:     vision,
 					JobManager: jobManager,
 				})
 			},

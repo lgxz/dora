@@ -48,7 +48,7 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecIdentifiesPowerShell(t *testing.T) {
-	tool, err := New(Config{Timeout: 120 * time.Second, Vision: true})
+	tool, err := New(Config{Timeout: 120 * time.Second})
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("PowerShell is not installed")
 	}
@@ -58,7 +58,6 @@ func TestSpecIdentifiesPowerShell(t *testing.T) {
 	spec := tool.Spec()
 	if spec.Name != "powershell" ||
 		!strings.Contains(spec.Description, "Execute PowerShell command.") ||
-		!strings.Contains(spec.Description, "To load an image file for viewing, use `echo @@path@@`") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "wait_seconds") {
 		t.Fatalf("spec = %#v", spec)
 	}
