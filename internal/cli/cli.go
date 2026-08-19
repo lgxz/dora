@@ -97,6 +97,13 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	if serverMode {
+		sendTool, err := events.NewSendTool(source)
+		if err != nil {
+			return err
+		}
+		tools = append(tools, sendTool)
+	}
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds: cfg.Agent.MaxRounds,

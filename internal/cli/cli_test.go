@@ -664,10 +664,10 @@ func TestRunExecutesEnabledBashTool(t *testing.T) {
 		case 1:
 			tools := body["tools"].([]any)
 			function := tools[0].(map[string]any)["function"].(map[string]any)
-			if function["name"] != "bash" {
+			if function["name"] != "Bash" {
 				t.Fatalf("function = %#v", function)
 			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf dora\"}"}}]}}]}`), nil
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"printf dora\"}"}}]}}]}`), nil
 		case 2:
 			messages := body["messages"].([]any)
 			toolMessage := messages[len(messages)-1].(map[string]any)
@@ -721,7 +721,7 @@ func TestRunContinuesAfterMaximumRounds(t *testing.T) {
 		}
 		switch calls {
 		case 1:
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf continued\"}"}}]}}]}`), nil
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"printf continued\"}"}}]}}]}`), nil
 		case 2:
 			messages := body["messages"].([]any)
 			if len(messages) != 3 || messages[2].(map[string]any)["role"] != "tool" {
@@ -769,7 +769,7 @@ tools:
 
 func TestRunDoesNotPromptAfterMaximumRoundsWithoutTerminalInput(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf limited\"}"}}]}}]}`), nil
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"printf limited\"}"}}]}}]}`), nil
 	})}
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := writeTestConfig(t, configPath, `
@@ -831,7 +831,7 @@ func TestRunSkipsDefaultBashWhenUnavailable(t *testing.T) {
 		}
 		for _, tool := range tools {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "bash" {
+			if fn["name"] == "Bash" {
 				t.Fatalf("bash tool should be skipped, got %#v", tools)
 			}
 		}
@@ -912,7 +912,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell,job,view_image,read,write,edit,grep,glob" {
+		if strings.Join(names, ",") != "Bash,PowerShell,Job,ViewImage,Read,Write,Edit,Grep,Glob" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil
@@ -955,10 +955,10 @@ func TestRunLoadsSkillFromDoraHome(t *testing.T) {
 		case 1:
 			tools := body["tools"].([]any)
 			function := tools[0].(map[string]any)["function"].(map[string]any)
-			if function["name"] != "skill" || !strings.Contains(function["description"].(string), "system-status") {
+			if function["name"] != "Skill" || !strings.Contains(function["description"].(string), "system-status") {
 				t.Fatalf("function = %#v", function)
 			}
-			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-skill","type":"function","function":{"name":"skill","arguments":"{\"name\":\"system-status\"}"}}]}}]}`), nil
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-skill","type":"function","function":{"name":"Skill","arguments":"{\"name\":\"system-status\"}"}}]}}]}`), nil
 		case 2:
 			messages := body["messages"].([]any)
 			result := messages[len(messages)-1].(map[string]any)
@@ -1027,7 +1027,7 @@ func TestRunIgnoresEmptyDefaultSkillDirectory(t *testing.T) {
 		}
 		for _, tool := range tools {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				t.Fatalf("skill tool should be absent, got %#v", tools)
 			}
 		}
@@ -1106,7 +1106,7 @@ func TestRunLoadsConfiguredSkillDirectories(t *testing.T) {
 		var skillTool map[string]any
 		for _, tool := range tools {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				skillTool = fn
 				break
 			}
@@ -1168,7 +1168,7 @@ func TestRunNoSkillsDisablesEverySkillSource(t *testing.T) {
 		}
 		for _, tool := range tools {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				t.Fatalf("skill tool should be disabled, got %#v", tools)
 			}
 		}
@@ -1218,7 +1218,7 @@ func TestRunLoadsSkillFromAgentsHome(t *testing.T) {
 		}
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				capturedDescription = fn["description"].(string)
 			}
 		}
@@ -1262,7 +1262,7 @@ func TestRunSkipsAbsentDefaultSkillDirectories(t *testing.T) {
 		}
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				t.Fatalf("skill tool should be absent, got %#v", body["tools"])
 			}
 		}
@@ -1309,7 +1309,7 @@ func TestRunConfiguredDirectoriesReplaceDefaults(t *testing.T) {
 		}
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				capturedDescription = fn["description"].(string)
 			}
 		}
@@ -1362,7 +1362,7 @@ func TestRunExpandsTildeSkillDirectory(t *testing.T) {
 		}
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
-			if fn["name"] == "skill" {
+			if fn["name"] == "Skill" {
 				capturedDescription = fn["description"].(string)
 			}
 		}
@@ -1611,7 +1611,7 @@ func TestRunStoresIndependentTurnsInSQLiteSession(t *testing.T) {
 		foundHistory := false
 		for _, raw := range body["tools"].([]any) {
 			function := raw.(map[string]any)["function"].(map[string]any)
-			if function["name"] == "history" {
+			if function["name"] == "History" {
 				foundHistory = true
 			}
 		}

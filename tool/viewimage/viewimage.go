@@ -28,7 +28,7 @@ type Tool struct {
 	viewer Viewer
 }
 
-// New creates a view_image tool with no viewer configured. Call SetViewer to
+// New creates a ViewImage tool with no viewer configured. Call SetViewer to
 // wire the description function before use.
 func New() *Tool { return &Tool{} }
 
@@ -38,7 +38,7 @@ func (t *Tool) SetViewer(viewer Viewer) { t.viewer = viewer }
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "view_image",
+		Name:        "ViewImage",
 		Description: "Load an image from a local file path or a remote URL and return a textual description of its contents.",
 		InputSchema: json.RawMessage(`{
   "type": "object",

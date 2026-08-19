@@ -565,7 +565,7 @@ Output is limited to 1 MiB per stream. This tool grants the model the same
 filesystem and process permissions as the `dora` process, so disable it unless
 you trust the environment in which Dora runs.
 
-The independent `powershell` tool prefers PowerShell Core (`pwsh`) and falls
+The independent `PowerShell` tool prefers PowerShell Core (`pwsh`) and falls
 back to Windows PowerShell (`powershell.exe`). If both tools are explicitly
 enabled, they are exposed separately so their command syntaxes remain distinct.
 
@@ -592,7 +592,7 @@ understand images declares `capabilities: [text, image_input]`; a text-only
 model declares `capabilities: [text]`. There is no CLI override or direct
 image-attachment flag.
 
-When the model wants to view an image, it calls the `view_image` tool, which is
+When the model wants to view an image, it calls the `ViewImage` tool, which is
 always registered. The tool accepts a local `path` or a remote `url` and routes
 the image through a transient visual model selected with the `image_input`
 capability constraint, returning a text description of the image. The image
@@ -600,7 +600,7 @@ itself never enters the main model's context — only the returned description
 does.
 
 Dora limits each local image file to 4 MiB and rejects files that are not
-images. When a `view_image` call points at a missing, non-image, or oversized
+images. When a `ViewImage` call points at a missing, non-image, or oversized
 file, the tool reports the error to the model so it can correct the path. If no
-catalog entry advertises `image_input`, the `view_image` call reports that no
+catalog entry advertises `image_input`, the `ViewImage` call reports that no
 visual model is available.

@@ -19,20 +19,20 @@ func TestAssembleCommandToolsUsesPlatformDefaults(t *testing.T) {
 	candidates := []toolCandidate{
 		{
 			defaultPlatforms: []string{"darwin", "linux"},
-			create:           newNamedTool("bash"),
+			create:           newNamedTool("Bash"),
 		},
 		{
 			defaultPlatforms: []string{"windows"},
-			create:           newNamedTool("powershell"),
+			create:           newNamedTool("PowerShell"),
 		},
 	}
 	for _, test := range []struct {
 		goos string
 		want string
 	}{
-		{goos: "darwin", want: "bash"},
-		{goos: "linux", want: "bash"},
-		{goos: "windows", want: "powershell"},
+		{goos: "darwin", want: "Bash"},
+		{goos: "linux", want: "Bash"},
+		{goos: "windows", want: "PowerShell"},
 		{goos: "plan9", want: ""},
 	} {
 		t.Run(test.goos, func(t *testing.T) {
@@ -53,19 +53,19 @@ func TestAssembleCommandToolsExplicitConfigOverridesPlatform(t *testing.T) {
 		{
 			enabled:          &enabled,
 			defaultPlatforms: []string{"darwin", "linux"},
-			create:           newNamedTool("bash"),
+			create:           newNamedTool("Bash"),
 		},
 		{
 			enabled:          &disabled,
 			defaultPlatforms: []string{"windows"},
-			create:           newNamedTool("powershell"),
+			create:           newNamedTool("PowerShell"),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := toolNames(tools); got != "bash" {
-		t.Fatalf("tools = %q, want bash", got)
+	if got := toolNames(tools); got != "Bash" {
+		t.Fatalf("tools = %q, want Bash", got)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestBuildToolsAlwaysRegistersViewImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(toolNames(tools), "view_image") {
-		t.Fatalf("tools = %q, want view_image present", toolNames(tools))
+	if !strings.Contains(toolNames(tools), "ViewImage") {
+		t.Fatalf("tools = %q, want ViewImage present", toolNames(tools))
 	}
 }

@@ -39,7 +39,7 @@ func New(cfg Config) (*Tool, error) {
 	}
 
 	core, err := commandexec.New(commandexec.Config{
-		Name:           "powershell",
+		Name:           "PowerShell",
 		Description:    "Execute PowerShell command.",
 		Binary:         binary,
 		CommandArgs:    commandArgs,

@@ -29,7 +29,7 @@ func New(manager *job.Manager) *Tool {
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "job",
+		Name:        "Job",
 		Description: "Manage background jobs",
 		InputSchema: json.RawMessage(`{
   "type": "object",

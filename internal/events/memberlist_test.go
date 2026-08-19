@@ -89,3 +89,68 @@ func TestMemberlistReceive(t *testing.T) {
 		t.Fatalf("unexpected event: %+v", got)
 	}
 }
+
+func TestEventsSendBroadcastFillsSenderAndID(t *testing.T) {
+	_, receiverPort := freePort(t)
+	_, senderPort := freePort(t)
+
+	receiver, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(receiverPort)),
+				Name: "receiver-node",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New receiver: %v", err)
+	}
+	defer receiver.Close()
+
+	sender, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(senderPort)),
+				Name: "sender-node",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New sender: %v", err)
+	}
+	defer sender.Close()
+
+	// Join the sender to the receiver's cluster.
+	receiverAddr := receiver.transport.(*memberlistTransport).list.LocalNode().Address()
+	senderList := sender.transport.(*memberlistTransport).list
+	if _, err := senderList.Join([]string{receiverAddr}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	for i := 0; i < 100 && senderList.NumMembers() < 2; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := senderList.NumMembers(); n != 2 {
+		t.Fatalf("expected 2 members, got %d", n)
+	}
+
+	// Broadcast an event with no sender/ID; the facade fills them.
+	sent, err := sender.Send(Event{Type: "test", Msg: "broadcast"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if sent.Sender != "sender-node" || sent.ID == "" {
+		t.Fatalf("filled event = %+v", sent)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := receiver.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if got.Sender != "sender-node" || got.ID != sent.ID || got.Msg != "broadcast" {
+		t.Fatalf("received event = %+v", got)
+	}
+}

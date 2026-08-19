@@ -9,12 +9,14 @@ import (
 	"github.com/hashicorp/memberlist"
 )
 
-// memberlistTransport receives events over memberlist gossip. It implements
-// memberlist.Delegate and delivers inbound events through a bounded channel so
-// the gossip receive loop never blocks.
+// memberlistTransport receives and sends events over memberlist gossip. It
+// implements memberlist.Delegate and delivers inbound events through a bounded
+// channel so the gossip receive loop never blocks. Outbound broadcasts are
+// queued and delivered via gossip.
 type memberlistTransport struct {
 	list  *memberlist.Memberlist
 	msgs  chan Event
+	queue *memberlist.TransmitLimitedQueue
 	done  chan struct{}
 	close chan struct{}
 }
@@ -48,6 +50,9 @@ func newMemberlistTransport(cfg MemberlistConfig) (*memberlistTransport, error) 
 		done:  make(chan struct{}),
 		close: make(chan struct{}),
 	}
+	t.queue = &memberlist.TransmitLimitedQueue{
+		RetransmitMult: memberlist.DefaultLANConfig().RetransmitMult,
+	}
 
 	conf := memberlist.DefaultLANConfig()
 	conf.BindAddr = host
@@ -69,7 +74,32 @@ func newMemberlistTransport(cfg MemberlistConfig) (*memberlistTransport, error) 
 		return nil, fmt.Errorf("create memberlist: %w", err)
 	}
 	t.list = list
+	t.queue.NumNodes = func() int { return list.NumMembers() }
 	return t, nil
+}
+
+// Send delivers an event into the cluster. An empty Receiver broadcasts via
+// gossip; a non-empty Receiver targets that node with a reliable unicast.
+func (t *memberlistTransport) Send(ev Event) error {
+	encoded, err := encodeEvent(ev)
+	if err != nil {
+		return fmt.Errorf("send event: encode: %w", err)
+	}
+
+	if ev.Receiver == "" {
+		t.queue.QueueBroadcast(&eventBroadcast{msg: encoded})
+		return nil
+	}
+
+	for _, n := range t.list.Members() {
+		if n.Name == ev.Receiver {
+			if err := t.list.SendReliable(n, encoded); err != nil {
+				return fmt.Errorf("send event to %q: %w", ev.Receiver, err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("send event: receiver %q not found", ev.Receiver)
 }
 
 // Next blocks until an event is available or ctx is canceled.
@@ -120,10 +150,10 @@ func (t *memberlistTransport) NotifyMsg(buf []byte) {
 	}
 }
 
-// GetBroadcasts implements memberlist.Delegate. Phase one does not broadcast,
-// so it always returns nil.
+// GetBroadcasts implements memberlist.Delegate, returning queued gossip
+// broadcasts for the memberlist layer to deliver.
 func (t *memberlistTransport) GetBroadcasts(overhead, limit int) [][]byte {
-	return nil
+	return t.queue.GetBroadcasts(overhead, limit)
 }
 
 // LocalState implements memberlist.Delegate with no state.
@@ -140,3 +170,15 @@ type discardWriter struct{}
 func (discardWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
+
+// eventBroadcast is a single gossip broadcast message. Each message is unique,
+// so it never invalidates another.
+type eventBroadcast struct {
+	msg []byte
+}
+
+func (b *eventBroadcast) Invalidates(other memberlist.Broadcast) bool { return false }
+
+func (b *eventBroadcast) Message() []byte { return b.msg }
+
+func (b *eventBroadcast) Finished() {}

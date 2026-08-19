@@ -28,7 +28,7 @@ const defaultGlobMaxResults = 100
 // Spec implements dora.Tool.
 func (t *GlobTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "glob",
+		Name:        "Glob",
 		Description: "Find files matching a glob pattern. Use for precise file discovery",
 		InputSchema: json.RawMessage(`{
   "type": "object",

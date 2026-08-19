@@ -36,7 +36,7 @@ func New(reader session.Reader) (*Tool, error) {
 // Spec implements dora.Tool.
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "history",
+		Name:        "History",
 		Description: "Inspect completed turns in this session. Earlier turns are not in the current context; use list to find turn IDs and get to read a turn's tool rounds.",
 		InputSchema: json.RawMessage(`{
   "type": "object",

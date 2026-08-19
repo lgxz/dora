@@ -18,7 +18,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	call := dora.ToolCall{
 		ID:    "call-1",
-		Name:  "bash",
+		Name:  "Bash",
 		Input: json.RawMessage(`{"command":"pwd"}`),
 	}
 	renderer.Observe(dora.Update{
@@ -54,8 +54,8 @@ func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
 	calls := []dora.ToolCall{
-		{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"uptime"}`)},
-		{ID: "call-2", Name: "bash", Input: json.RawMessage(`{"command":"df -h"}`)},
+		{ID: "call-1", Name: "Bash", Input: json.RawMessage(`{"command":"uptime"}`)},
+		{ID: "call-2", Name: "Bash", Input: json.RawMessage(`{"command":"df -h"}`)},
 	}
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
@@ -122,7 +122,7 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 		Message: dora.Message{
 			Role:      dora.RoleAssistant,
 			Content:   "我先检查系统状态。",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "Bash"}},
 		},
 	})
 	if !strings.Contains(output.String(), "\x1b[1A\r\x1b[2K") ||
@@ -140,7 +140,7 @@ func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
 		Message: dora.Message{
 			Role:      dora.RoleAssistant,
 			Content:   "我先检查系统状态。\n\n",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "Bash"}},
 		},
 	})
 	// Trailing newlines must not render as empty continuation lines.
@@ -154,7 +154,7 @@ func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
 
 func TestCommandSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 	call := dora.ToolCall{
-		Name:  "bash",
+		Name:  "Bash",
 		Input: json.RawMessage(`{"command":"first   line\n` + strings.Repeat("x", 100) + `"}`),
 	}
 	summary := presentTool(call, dora.Message{}).summary
@@ -165,7 +165,7 @@ func TestCommandSummaryCollapsesAndTruncatesCommand(t *testing.T) {
 
 func TestCommandSummaryShowsPowerShellCommand(t *testing.T) {
 	summary := presentTool(dora.ToolCall{
-		Name:  "powershell",
+		Name:  "PowerShell",
 		Input: json.RawMessage(`{"command":"Get-Process"}`),
 	}, dora.Message{}).summary
 	if summary != "Get-Process" {
@@ -192,8 +192,8 @@ func TestRendererAlignsCommandResultColumns(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
 	calls := []dora.ToolCall{
-		{ID: "short", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)},
-		{ID: "long", Name: "bash", Input: json.RawMessage(`{"command":"` + strings.Repeat("x", commandSummaryWidth+10) + `"}`)},
+		{ID: "short", Name: "Bash", Input: json.RawMessage(`{"command":"pwd"}`)},
+		{ID: "long", Name: "Bash", Input: json.RawMessage(`{"command":"` + strings.Repeat("x", commandSummaryWidth+10) + `"}`)},
 	}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: calls}})
 	for _, call := range calls {
@@ -221,7 +221,7 @@ func TestRendererAlignsCommandResultColumns(t *testing.T) {
 
 func TestSkillSummaryShowsName(t *testing.T) {
 	summary := presentTool(
-		dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)},
+		dora.ToolCall{Name: "Skill", Input: json.RawMessage(`{"name":"system-status"}`)},
 		dora.Message{},
 	).summary
 	if summary != "system-status" {
@@ -241,14 +241,14 @@ func TestToolPresentations(t *testing.T) {
 	}{
 		{
 			name:        "command success",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"go   test ./..."}`)},
+			call:        dora.ToolCall{Name: "Bash", Input: json.RawMessage(`{"command":"go   test ./..."}`)},
 			message:     dora.Message{Content: `{"exit_code":0,"stdout":"ok","stderr":"","timed_out":false,"truncated":false}`},
 			wantSummary: "go test ./...",
 			wantResult:  "2B/0B",
 		},
 		{
 			name:        "command failure",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"false"}`)},
+			call:        dora.ToolCall{Name: "Bash", Input: json.RawMessage(`{"command":"false"}`)},
 			message:     dora.Message{Content: `{"exit_code":1,"stderr":"failed"}`},
 			wantSummary: "false",
 			wantResult:  "0B/6B",
@@ -256,14 +256,14 @@ func TestToolPresentations(t *testing.T) {
 		},
 		{
 			name:        "command combines stream sizes",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"mixed-output"}`)},
+			call:        dora.ToolCall{Name: "Bash", Input: json.RawMessage(`{"command":"mixed-output"}`)},
 			message:     dora.Message{Content: `{"exit_code":0,"stdout":"hello","stderr":"warn"}`},
 			wantSummary: "mixed-output",
 			wantResult:  "5B/4B",
 		},
 		{
 			name:        "command timeout",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"sleep 10"}`)},
+			call:        dora.ToolCall{Name: "Bash", Input: json.RawMessage(`{"command":"sleep 10"}`)},
 			message:     dora.Message{Content: `{"exit_code":-1,"timed_out":true}`},
 			wantSummary: "sleep 10",
 			wantResult:  "timed out",
@@ -271,7 +271,7 @@ func TestToolPresentations(t *testing.T) {
 		},
 		{
 			name:        "command truncated",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"generate-output"}`)},
+			call:        dora.ToolCall{Name: "Bash", Input: json.RawMessage(`{"command":"generate-output"}`)},
 			message:     dora.Message{Content: `{"exit_code":0,"truncated":true}`},
 			wantSummary: "generate-output",
 			wantResult:  "output truncated",
@@ -279,109 +279,109 @@ func TestToolPresentations(t *testing.T) {
 		},
 		{
 			name:        "read range",
-			call:        dora.ToolCall{Name: "read", Input: json.RawMessage(`{"path":"agent.go","offset":2,"limit":3}`)},
+			call:        dora.ToolCall{Name: "Read", Input: json.RawMessage(`{"path":"agent.go","offset":2,"limit":3}`)},
 			message:     dora.Message{Content: "2:a\n3:b\n"},
-			wantName:    "read",
+			wantName:    "Read",
 			wantSummary: "agent.go:2-4",
 			wantResult:  "2 lines",
 		},
 		{
 			name:        "read binary",
-			call:        dora.ToolCall{Name: "read", Input: json.RawMessage(`{"path":"image.png"}`)},
+			call:        dora.ToolCall{Name: "Read", Input: json.RawMessage(`{"path":"image.png"}`)},
 			message:     dora.Message{Content: "(binary file; use the bash tool to inspect it)"},
-			wantName:    "read",
+			wantName:    "Read",
 			wantSummary: "image.png",
 			wantResult:  "binary file",
 			wantOutcome: outcomeWarning,
 		},
 		{
 			name:        "write created",
-			call:        dora.ToolCall{Name: "write", Input: json.RawMessage(`{"path":"notes.md","content":"private"}`)},
+			call:        dora.ToolCall{Name: "Write", Input: json.RawMessage(`{"path":"notes.md","content":"private"}`)},
 			message:     dora.Message{Content: "bytes_written: 2048, created: true"},
-			wantName:    "write",
+			wantName:    "Write",
 			wantSummary: "notes.md",
 			wantResult:  "created, 2.0 KB",
 		},
 		{
 			name:        "write appended",
-			call:        dora.ToolCall{Name: "write", Input: json.RawMessage(`{"path":"notes.md","content":"x","append":true}`)},
+			call:        dora.ToolCall{Name: "Write", Input: json.RawMessage(`{"path":"notes.md","content":"x","append":true}`)},
 			message:     dora.Message{Content: "bytes_written: 1, created: false"},
-			wantName:    "write",
+			wantName:    "Write",
 			wantSummary: "append notes.md",
 			wantResult:  "appended, 1 B",
 		},
 		{
 			name:        "edit no match",
-			call:        dora.ToolCall{Name: "edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"secret","new_string":"other"}`)},
+			call:        dora.ToolCall{Name: "Edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"secret","new_string":"other"}`)},
 			message:     dora.Message{Content: "old_string not found in file"},
-			wantName:    "edit",
+			wantName:    "Edit",
 			wantSummary: "agent.go",
 			wantResult:  "old_string not found",
 			wantOutcome: outcomeWarning,
 		},
 		{
 			name:        "edit replacements",
-			call:        dora.ToolCall{Name: "edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"a","new_string":"bb","replace_all":true}`)},
+			call:        dora.ToolCall{Name: "Edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"a","new_string":"bb","replace_all":true}`)},
 			message:     dora.Message{Content: "replacements: 2, bytes_changed: 2"},
-			wantName:    "edit",
+			wantName:    "Edit",
 			wantSummary: "agent.go (all)",
 			wantResult:  "2 replacements, +2 B",
 		},
 		{
 			name:        "grep matches",
-			call:        dora.ToolCall{Name: "grep", Input: json.RawMessage(`{"pattern":"ToolStarted","path":"."}`)},
+			call:        dora.ToolCall{Name: "Grep", Input: json.RawMessage(`{"pattern":"ToolStarted","path":"."}`)},
 			message:     dora.Message{Content: "a.go:1:x\nb.go:2:y\n"},
-			wantName:    "grep",
+			wantName:    "Grep",
 			wantSummary: `"ToolStarted" in .`,
 			wantResult:  "2 matches",
 		},
 		{
 			name:        "skill loaded",
-			call:        dora.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"system-status"}`)},
+			call:        dora.ToolCall{Name: "Skill", Input: json.RawMessage(`{"name":"system-status"}`)},
 			message:     dora.Message{Content: "complete skill contents"},
-			wantName:    "skill",
+			wantName:    "Skill",
 			wantSummary: "system-status",
 			wantResult:  "loaded",
 		},
 		{
 			name:        "glob no matches",
-			call:        dora.ToolCall{Name: "glob", Input: json.RawMessage(`{"pattern":"**/*.rs"}`)},
+			call:        dora.ToolCall{Name: "Glob", Input: json.RawMessage(`{"pattern":"**/*.rs"}`)},
 			message:     dora.Message{Content: "(no matches)\n"},
-			wantName:    "glob",
+			wantName:    "Glob",
 			wantSummary: `"**/*.rs" in .`,
 			wantResult:  "no matches",
 			wantOutcome: outcomeWarning,
 		},
 		{
 			name:        "history list",
-			call:        dora.ToolCall{Name: "history", Input: json.RawMessage(`{"action":"list"}`)},
+			call:        dora.ToolCall{Name: "History", Input: json.RawMessage(`{"action":"list"}`)},
 			message:     dora.Message{Content: `{"total":12,"turns":[{},{}]}`},
-			wantName:    "history",
+			wantName:    "History",
 			wantSummary: "list",
 			wantResult:  "2/12 turns",
 		},
 		{
 			name:        "history get",
-			call:        dora.ToolCall{Name: "history", Input: json.RawMessage(`{"action":"get","turn_id":7}`)},
+			call:        dora.ToolCall{Name: "History", Input: json.RawMessage(`{"action":"get","turn_id":7}`)},
 			message:     dora.Message{Content: `{"total":9,"rounds":[{}]}`},
-			wantName:    "history",
+			wantName:    "History",
 			wantSummary: "get turn 7",
 			wantResult:  "1/9 rounds",
 		},
 		{
 			name:        "job error",
-			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"status","job_id":"missing"}`)},
+			call:        dora.ToolCall{Name: "Job", Input: json.RawMessage(`{"action":"status","job_id":"missing"}`)},
 			message:     dora.Message{Content: `{"error":"job not found"}`},
-			wantName:    "job",
+			wantName:    "Job",
 			wantSummary: "status missing",
 			wantResult:  "job not found",
 			wantOutcome: outcomeFailure,
 		},
 		{
 			name:        "job running",
-			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"job-1"}`)},
+			call:        dora.ToolCall{Name: "Job", Input: json.RawMessage(`{"action":"poll","job_id":"job-1"}`)},
 			message:     dora.Message{Content: `{"job_id":"job-1","status":"running","exit_code":0}`},
-			wantName:    "job",
+			wantName:    "Job",
 			wantSummary: "poll job-1",
 			wantResult:  "running, exit 0",
 			wantOutcome: outcomeWarning,
@@ -439,7 +439,7 @@ func TestFormatStreamSizesUsesCompactStdoutStderrPair(t *testing.T) {
 
 func TestKnownPresentationDoesNotLeakPayloadArguments(t *testing.T) {
 	presentation := presentTool(dora.ToolCall{
-		Name:  "write",
+		Name:  "Write",
 		Input: json.RawMessage(`{"path":"notes.md","content":"top-secret"}`),
 	}, dora.Message{Content: "bytes_written: 10, created: false"})
 
@@ -451,20 +451,20 @@ func TestKnownPresentationDoesNotLeakPayloadArguments(t *testing.T) {
 func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
-	command := dora.ToolCall{ID: "command", Name: "bash", Input: json.RawMessage(`{"command":"false"}`)}
+	command := dora.ToolCall{ID: "command", Name: "Bash", Input: json.RawMessage(`{"command":"false"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: command})
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1,"stderr":"failed"}`}})
 
-	read := dora.ToolCall{ID: "read", Name: "read", Input: json.RawMessage(`{"path":"missing.go"}`)}
+	read := dora.ToolCall{ID: "read", Name: "Read", Input: json.RawMessage(`{"path":"missing.go"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{read}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: read})
-	renderer.Observe(dora.Update{Kind: dora.UpdateToolFailed, ToolCall: read, Err: fmt.Errorf(`execute tool "read": read: open missing.go: no such file`)})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFailed, ToolCall: read, Err: fmt.Errorf(`execute tool "Read": read: open missing.go: no such file`)})
 
 	for _, want := range []string{
 		"△ false",
 		"· 0B/6B ·",
-		"△ read missing.go · read: open missing.go: no such file ·",
+		"△ Read missing.go · read: open missing.go: no such file ·",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
@@ -481,7 +481,7 @@ func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
 	// otherwise report ~1ms when the event is delivered after the tool finishes.
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
-	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"sleep 1"}`)}
+	call := dora.ToolCall{ID: "call-1", Name: "Bash", Input: json.RawMessage(`{"command":"sleep 1"}`)}
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
 		Message: dora.Message{
@@ -515,7 +515,7 @@ func TestRendererFallsBackToNowWhenStartedAtZero(t *testing.T) {
 	// render a duration based on the event delivery time.
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
-	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
+	call := dora.ToolCall{ID: "call-1", Name: "Bash", Input: json.RawMessage(`{"command":"pwd"}`)}
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
 		Message: dora.Message{

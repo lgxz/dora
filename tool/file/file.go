@@ -30,7 +30,7 @@ const defaultReadLimit = 200
 // Spec implements dora.Tool.
 func (t *ReadTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "read",
+		Name:        "Read",
 		Description: "Read a file with line numbers.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
@@ -142,7 +142,7 @@ func NewWriteTool() *WriteTool { return &WriteTool{} }
 // Spec implements dora.Tool.
 func (t *WriteTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "write",
+		Name:        "Write",
 		Description: "Write content to a file.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
@@ -204,7 +204,7 @@ func NewEditTool() *EditTool { return &EditTool{} }
 // Spec implements dora.Tool.
 func (t *EditTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "edit",
+		Name:        "Edit",
 		Description: "Edit a file by exact string replacement.",
 		InputSchema: json.RawMessage(`{
   "type": "object",

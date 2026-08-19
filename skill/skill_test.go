@@ -35,7 +35,7 @@ Inspect the machine carefully.
 		t.Fatal(err)
 	}
 	spec := tool.Spec()
-	if spec.Name != "skill" {
+	if spec.Name != "Skill" {
 		t.Fatalf("name = %q", spec.Name)
 	}
 	statusIndex := strings.Index(spec.Description, "system-status")

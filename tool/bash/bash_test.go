@@ -51,7 +51,7 @@ func TestSpecIdentifiesBash(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := tool.Spec()
-	if spec.Name != "bash" ||
+	if spec.Name != "Bash" ||
 		!strings.Contains(spec.Description, "Execute Bash command on "+runtime.GOOS+"/"+runtime.GOARCH) ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "wait_seconds") {
 		t.Fatalf("spec = %#v", spec)

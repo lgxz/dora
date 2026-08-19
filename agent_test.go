@@ -251,7 +251,7 @@ func TestNewRejectsDuplicateTools(t *testing.T) {
 
 func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 	jobTool := stubTool{
-		spec: ToolSpec{Name: "job"},
+		spec: ToolSpec{Name: "Job"},
 		execute: func(context.Context, json.RawMessage) (string, error) {
 			return `{"jobs": []}`, nil
 		},
@@ -266,7 +266,7 @@ func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 			// The job tool is always exposed (like other tools).
 			found := false
 			for _, spec := range request.Tools {
-				if spec.Name == "job" {
+				if spec.Name == "Job" {
 					found = true
 				}
 			}
@@ -275,7 +275,7 @@ func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 			}
 			return Response{ToolCalls: []ToolCall{{
 				ID:    "call-1",
-				Name:  "job",
+				Name:  "Job",
 				Input: json.RawMessage(`{"action":"list"}`),
 			}}}, nil
 		case 2:

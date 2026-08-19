@@ -39,16 +39,16 @@ type toolFormatter struct {
 }
 
 var toolFormatters = map[string]toolFormatter{
-	"bash":       {call: formatCommandCall, result: formatCommandResult},
-	"powershell": {call: formatCommandCall, result: formatCommandResult},
-	"read":       {call: formatReadCall, result: formatReadResult},
-	"write":      {call: formatWriteCall, result: formatWriteResult},
-	"edit":       {call: formatEditCall, result: formatEditResult},
-	"grep":       {call: formatGrepCall, result: formatGrepResult},
-	"glob":       {call: formatGlobCall, result: formatGlobResult},
-	"skill":      {call: formatSkillCall, result: staticResult("loaded")},
-	"history":    {call: formatHistoryCall, result: formatHistoryResult},
-	"job":        {call: formatJobCall, result: formatJobResult},
+	"Bash":       {call: formatCommandCall, result: formatCommandResult},
+	"PowerShell": {call: formatCommandCall, result: formatCommandResult},
+	"Read":       {call: formatReadCall, result: formatReadResult},
+	"Write":      {call: formatWriteCall, result: formatWriteResult},
+	"Edit":       {call: formatEditCall, result: formatEditResult},
+	"Grep":       {call: formatGrepCall, result: formatGrepResult},
+	"Glob":       {call: formatGlobCall, result: formatGlobResult},
+	"Skill":      {call: formatSkillCall, result: staticResult("loaded")},
+	"History":    {call: formatHistoryCall, result: formatHistoryResult},
+	"Job":        {call: formatJobCall, result: formatJobResult},
 }
 
 func presentTool(call dora.ToolCall, message dora.Message) toolPresentation {
@@ -61,7 +61,7 @@ func presentTool(call dora.ToolCall, message dora.Message) toolPresentation {
 		presentation.summary = genericArguments(call.Input)
 		presentation.result = "done"
 	}
-	if call.Name == "bash" || call.Name == "powershell" {
+	if call.Name == "Bash" || call.Name == "PowerShell" {
 		presentation.name = ""
 	}
 	presentation.summary = truncateLine(presentation.summary, maxOperationRunes)
@@ -76,7 +76,7 @@ func presentToolFailure(call dora.ToolCall, err error) toolPresentation {
 		summary = formatter.call(call.Input)
 	}
 	name := call.Name
-	if name == "bash" || name == "powershell" {
+	if name == "Bash" || name == "PowerShell" {
 		name = ""
 	}
 	result := "failed"

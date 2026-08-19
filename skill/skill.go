@@ -142,7 +142,7 @@ func New(cfg Config) (dora.Tool, error) {
 		fmt.Fprintf(&description, "\n- %s: %s", loaded.name, loaded.description)
 	}
 	result.spec = dora.ToolSpec{
-		Name:        "skill",
+		Name:        "Skill",
 		Description: description.String(),
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name to load"}},"required":["name"],"additionalProperties":false}`),
 	}

@@ -2,6 +2,8 @@ package events
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -36,6 +38,7 @@ type Config struct {
 // hides which transport (and future routing) backs it.
 type Events struct {
 	enabled   bool
+	name      string
 	transport Transport
 }
 
@@ -51,7 +54,11 @@ func New(cfg Config) (*Events, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open events: %w", err)
 	}
-	return &Events{enabled: true, transport: transport}, nil
+	name := cfg.Transports.Memberlist.Name
+	if name == "" {
+		name = cfg.Transports.Memberlist.Bind
+	}
+	return &Events{enabled: true, name: name, transport: transport}, nil
 }
 
 // Enabled reports whether event daemon mode is active.
@@ -68,10 +75,39 @@ func (e *Events) Next(ctx context.Context) (Event, error) {
 	return e.transport.Next(ctx)
 }
 
+// Send delivers an event into the cluster, filling in the source node name and
+// an ID when absent, and returns the finalized event.
+func (e *Events) Send(ev Event) (Event, error) {
+	if e.transport == nil {
+		return Event{}, fmt.Errorf("events: not enabled")
+	}
+	if ev.Sender == "" {
+		ev.Sender = e.name
+	}
+	if ev.ID == "" {
+		ev.ID = newEventID()
+	}
+	if err := e.transport.Send(ev); err != nil {
+		return Event{}, err
+	}
+	return ev, nil
+}
+
 // Close releases the underlying transport.
 func (e *Events) Close() error {
 	if e.transport == nil {
 		return nil
 	}
 	return e.transport.Close()
+}
+
+// newEventID returns a short random hex identifier for an event.
+func newEventID() string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Randomness is effectively always available; fall back to a fixed
+		// prefix rather than fail the send on an exotic error.
+		return "evt-0000000000000000"
+	}
+	return "evt-" + hex.EncodeToString(buf[:])
 }

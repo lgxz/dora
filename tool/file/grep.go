@@ -34,7 +34,7 @@ const defaultGrepMaxResults = 100
 // Spec implements dora.Tool.
 func (t *GrepTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "grep",
+		Name:        "Grep",
 		Description: "Search file contents",
 		InputSchema: json.RawMessage(`{
   "type": "object",
