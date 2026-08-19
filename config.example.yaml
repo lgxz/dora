@@ -57,6 +57,16 @@ policy:
 agent:
   max_rounds: 256
 
+# Event daemon. When events.enabled is true, dora runs as a long-running
+# daemon that processes inbound events. Phase one supports only the memberlist
+# transport.
+# events:
+#   enabled: true
+#   transports:
+#     memberlist:
+#       bind: 0.0.0.0:8848   # host:port to bind; default 0.0.0.0:8848
+#       name: dora           # memberlist node name; default derived from bind
+
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
 # followed by ~/.agents/skills/, independent of this file's location. Absent
 # default directories are silently skipped. Setting skills.directories replaces

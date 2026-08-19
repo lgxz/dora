@@ -417,6 +417,57 @@ and tool output, so treat them as sensitive.
 Use `--config`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
 
+### Server mode
+
+Set `events.enabled: true` in the config to run Dora as a long-running daemon
+that processes events from a
+[memberlist](https://github.com/hashicorp/memberlist) cluster. Dora starts as
+the first node of the cluster; other processes join it and broadcast or direct
+events to it. Each received event assembles into the next turn's prompt, runs a
+complete turn, and commits it to the session store.
+
+```yaml
+events:
+  enabled: true
+  transports:
+    memberlist:
+      bind: 0.0.0.0:8848   # host:port to bind
+      name: dora           # node name (optional)
+```
+
+```sh
+./dora                       # daemon mode when events.enabled is true
+./dora -s ./events.sqlite    # also persist completed turns
+```
+
+`bind` defaults to `0.0.0.0:8848`; `name` defaults to a name derived from `bind`.
+Combined with `-s`, every successfully completed turn is persisted so the
+`history` tool stays available across events.
+
+An event is a JSON message with a one-byte `0x01` tag prefix carrying these
+fields:
+
+```json
+{"id":"evt-123","type":"code-review","sender":"node-a","receiver":"","msg":"please review","meta":{"branch":"main"}}
+```
+
+- `id` uniquely identifies the event.
+- `type` is the business category (free-form).
+- `sender` is the originating node name; `receiver` leaves empty for broadcast
+  or names a specific node for a directed event.
+- `msg` is the human-readable message body.
+- `meta` holds arbitrary key/value payload.
+
+Dora renders the event into a natural-language prompt and runs one independent
+turn per event, sequentially. A turn that hits the round limit (or any run-time
+error) is logged on stderr and the daemon continues with the next event; it does
+not exit. Send `SIGINT` (Ctrl-C) to shut the daemon down.
+
+Receiving is transport-neutral internally: the CLI talks to an `events` facade
+that currently selects the memberlist transport. Sending replies and multiple
+transports are reserved for a later phase.
+
+
 ### Skills
 
 Skills are local instruction packages loaded by the model only when relevant.

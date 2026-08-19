@@ -433,6 +433,31 @@ agent:
 	}
 }
 
+func TestLoadEventsConfig(t *testing.T) {
+	clearBuiltinAPIKeys(t)
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    profiles: [{name: model}]
+events:
+  enabled: true
+  transports:
+    memberlist:
+      bind: 127.0.0.1:4444
+      name: dora
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Events.Enabled {
+		t.Fatal("events.enabled should be true")
+	}
+	ml := cfg.Events.Transports.Memberlist
+	if ml.Bind != "127.0.0.1:4444" || ml.Name != "dora" {
+		t.Fatalf("memberlist = %+v", ml)
+	}
+}
+
 func providerByName(t *testing.T, cfg Config, name string) Provider {
 	t.Helper()
 	for _, provider := range cfg.Providers {

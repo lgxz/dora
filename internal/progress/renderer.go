@@ -40,14 +40,6 @@ func New(output io.Writer, terminal, color bool) *Renderer {
 	return &Renderer{output: output, terminal: terminal, color: color, tools: make(map[string]toolRun)}
 }
 
-// Session reports the SQLite history file used by this turn.
-func (r *Renderer) Session(path string) {
-	if r == nil || r.output == nil {
-		return
-	}
-	fmt.Fprintf(r.output, "%s Session \"%s\"\n", r.paint(blue, "⌁"), path)
-}
-
 // Observe implements dora.Observer.
 func (r *Renderer) Observe(update dora.Update) {
 	if r == nil || r.output == nil {
@@ -68,7 +60,21 @@ func (r *Renderer) Observe(update dora.Update) {
 		r.startTool(update)
 	case dora.UpdateToolFailed:
 		r.renderToolFailure(update)
+	case dora.UpdateInfo:
+		if update.Info != "" {
+			fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "⌁"), update.Info)
+		}
+	case dora.UpdateTurnStarted:
+		r.renderTurnStarted(update.Info)
 	}
+}
+
+// renderTurnStarted prints the prompt that starts a new turn.
+func (r *Renderer) renderTurnStarted(prompt string) {
+	if prompt == "" {
+		return
+	}
+	fmt.Fprintf(r.output, "%s %s\n", r.paint(blue, "▶"), prompt)
 }
 
 func (r *Renderer) renderThinking() {

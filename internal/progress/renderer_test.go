@@ -104,10 +104,10 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestRendererShowsSessionState(t *testing.T) {
+func TestRendererShowsInfoUpdate(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false)
-	renderer.Session("system-status.sqlite")
+	renderer.Observe(dora.Update{Kind: dora.UpdateInfo, Info: "Session \"system-status.sqlite\""})
 	if !strings.Contains(output.String(), "Session \"system-status.sqlite\"") {
 		t.Fatalf("output = %q", output.String())
 	}
@@ -531,5 +531,23 @@ func TestRendererFallsBackToNowWhenStartedAtZero(t *testing.T) {
 	})
 	if !strings.Contains(output.String(), "ms") {
 		t.Fatalf("output %q does not report a duration when StartedAt is zero", output.String())
+	}
+}
+
+func TestRendererShowsTurnStarted(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: "hello prompt"})
+	if !strings.Contains(output.String(), "hello prompt") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRendererSkipsEmptyTurnStarted(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateTurnStarted})
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want empty", output.String())
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -84,19 +85,25 @@ func openSession(ctx context.Context, path string) (*sqlitesession.Store, bool, 
 	return store, page.Total > 0, nil
 }
 
-func buildObserver(streams IO, quiet bool, sessionPath string) dora.Observer {
+func buildObserver(streams IO, quiet bool) dora.Observer {
 	if quiet {
 		return nil
 	}
-	renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
-	if sessionPath != "" {
-		renderer.Session(sessionPath)
-	}
-	return renderer
+	return progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress)
 }
 
-func buildTurn(prompt string) *dora.Turn {
-	return dora.NewTurn(systemPrompt(), prompt)
+// info emits an informational line through the observer, so it is silenced by
+// --quiet (a nil observer). Informational output must go through this channel
+// instead of printing directly to stderr.
+func info(observer dora.Observer, format string, args ...any) {
+	if observer == nil {
+		return
+	}
+	observer.Observe(dora.Update{Kind: dora.UpdateInfo, Info: fmt.Sprintf(format, args...)})
+}
+
+func buildTurn(system, prompt string) *dora.Turn {
+	return dora.NewTurn(system, prompt)
 }
 
 // systemPrompt returns the content of <doraHome>/AGENTS.md when it exists, or

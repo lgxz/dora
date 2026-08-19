@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/events"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +29,7 @@ type Config struct {
 	Agent  Agent             `yaml:"agent,omitempty"`
 	Tools  Tools             `yaml:"tools,omitempty"`
 	Skills Skills            `yaml:"skills,omitempty"`
+	Events Events            `yaml:"events,omitempty"`
 
 	providerDefaults map[string]providerDefault
 }
@@ -105,6 +107,10 @@ type PowerShell struct {
 type Skills struct {
 	Directories []string `yaml:"directories,omitempty"`
 }
+
+// Events is the event source configuration. It is the events package's Config
+// type so the CLI can pass it straight through to events.New.
+type Events = events.Config
 
 // Default returns the validated built-in configuration. Environment variable
 // references are resolved before the configuration is returned.
