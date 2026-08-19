@@ -63,6 +63,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 
+	// --events forces event daemon mode regardless of events.enabled.
+	if opts.events {
+		cfg.Events.Enabled = true
+	}
+
 	// Open the event source from the events configuration. Enabled reports
 	// whether to run in event daemon mode.
 	source, err := events.New(cfg.Events)

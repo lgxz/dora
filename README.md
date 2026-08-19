@@ -414,8 +414,8 @@ session format, `--fresh`, and automatic migration are not supported. Omit
 `--session`/`-s` for an ephemeral turn. Session databases can contain commands
 and tool output, so treat them as sensitive.
 
-Use `--config`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
-corresponding configuration for one invocation.
+Use `--config`, `--thinking`, `--max-rounds`, `--no-skills`, or `--events` to
+override the corresponding configuration for one invocation.
 
 ### Server mode
 
@@ -437,12 +437,14 @@ events:
 
 ```sh
 ./dora                       # daemon mode when events.enabled is true
+./dora --events              # force daemon mode even if events.enabled is unset
 ./dora -s ./events.sqlite    # also persist completed turns
 ```
 
 `bind` defaults to `0.0.0.0:8848`; `name` defaults to a name derived from `bind`.
 Combined with `-s`, every successfully completed turn is persisted so the
-`history` tool stays available across events.
+`history` tool stays available across events. The `--events` flag enables daemon
+mode on the command line without editing the config.
 
 An event is a JSON message with a one-byte `0x01` tag prefix carrying these
 fields:

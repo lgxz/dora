@@ -21,6 +21,7 @@ type options struct {
 	forceUpdate  bool
 	noSkills     bool
 	quiet        bool
+	events       bool
 	sessionPath  string
 	promptArgs   []string
 	usage        func()
@@ -49,6 +50,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.quiet, "q", false, "hide run progress (shorthand)")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query completed turns")
 	flags.StringVar(&opts.sessionPath, "s", "", "SQLite session file (shorthand)")
+	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: dora [options] <prompt>\n")
 		fmt.Fprintf(stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
