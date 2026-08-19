@@ -3,18 +3,21 @@ providers:
     base_url: https://api.deepseek.com
     profiles:
       - name: deepseek-v4-flash
-        context_window: 1048576
+        context_window: 1000000
         capabilities: [text]
       - name: deepseek-v4-pro
-        context_window: 1048576
+        context_window: 1000000
         capabilities: [text]
 
   - name: trust
     base_url: https://api.trustoken.cn/v1
     profiles:
       - name: deepseek-v4-flash
-        context_window: 1048576
+        context_window: 1000000
         capabilities: [text]
       - name: deepseek-v4-pro
-        context_window: 1048576
+        context_window: 1000000
+        capabilities: [text]
+      - name: qwen3.7-plus
+        context_window: 1000000
         capabilities: [text]
