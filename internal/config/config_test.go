@@ -25,7 +25,7 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	}
 	m := modelByName(t, p, "deepseek-v4-flash")
 	if m.MaxTokens == nil || *m.MaxTokens != 32768 ||
-		m.ContextWindow == nil || *m.ContextWindow != 1<<20 {
+		m.ContextWindow == nil || *m.ContextWindow != 1000000 {
 		t.Fatalf("profiles = %#v", p.Profiles)
 	}
 	if cfg.Policy.Text.Provider != "" || cfg.Policy.Text.Profile != "" {
