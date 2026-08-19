@@ -95,10 +95,20 @@ func buildObserver(streams IO, quiet bool, sessionPath string) dora.Observer {
 	return renderer
 }
 
-func buildTurn(cfg config.Config, prompt string) *dora.Turn {
-	systemPrompt := defaultSystemPrompt
-	if cfg.Agent.SystemPrompt != "" {
-		systemPrompt = cfg.Agent.SystemPrompt
+func buildTurn(prompt string) *dora.Turn {
+	return dora.NewTurn(systemPrompt(), prompt)
+}
+
+// systemPrompt returns the content of <doraHome>/AGENTS.md when it exists, or
+// an empty string otherwise. An empty result means no system message is sent.
+func systemPrompt() string {
+	path, err := paths.AgentsFile()
+	if err != nil {
+		return ""
 	}
-	return dora.NewTurn(systemPrompt, prompt)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(content)
 }

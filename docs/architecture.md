@@ -145,9 +145,10 @@ err := agent.Run(ctx, turn)
 result, complete := turn.Result()
 ```
 
-`Turn` is the Agent's mutable run state. It begins with exactly one system and
-one user message, appends only complete rounds, and ends with a final assistant
-result without tool calls. A round contains one assistant message with one or
+`Turn` is the Agent's mutable run state. It begins with one optional system
+message followed by one user message (the system message is omitted when no
+system prompt is configured), appends only complete rounds, and ends with a
+final assistant result without tool calls. A round contains one assistant message with one or
 more tool calls and all corresponding tool messages in call order. Provider
 continuation is opaque and exists only in the live Turn; it is not persisted.
 All exported accessors return defensive copies.
@@ -192,7 +193,7 @@ Current execution semantics:
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Declining does not persist the incomplete Turn. Non-interactive runs report the error directly.
-- The CLI creates every Turn with either the configured or concise built-in system prompt. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
+- The CLI creates every Turn with the content of `~/.dora/AGENTS.md` (or `$DORA_HOME/AGENTS.md`) as the system prompt when that file exists; otherwise no system message is sent. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 
 ## CLI Run Flow
 

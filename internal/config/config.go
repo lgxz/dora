@@ -48,9 +48,6 @@ type PolicySettings struct {
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
-	// SystemPrompt overrides the built-in default agent system prompt. Empty
-	// uses the built-in default.
-	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
 // Provider describes one provider endpoint with multiple profiles.

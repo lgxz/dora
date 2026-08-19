@@ -33,6 +33,14 @@ func TestTurnBuildsMessagesAndDefensivelyCopiesRounds(t *testing.T) {
 	}
 }
 
+func TestTurnOmitsEmptySystemMessage(t *testing.T) {
+	turn := NewTurn("", "user")
+	messages := turn.Messages()
+	if len(messages) != 1 || messages[0].Role != RoleUser || messages[0].Content != "user" {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
 func TestTurnRejectsIncompleteRoundAndMutationAfterCompletion(t *testing.T) {
 	turn := NewTurn("system", "user")
 	err := turn.AppendRound(Round{Assistant: Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1"}}}}, "")

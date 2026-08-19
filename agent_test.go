@@ -68,7 +68,7 @@ func runAgentObserved(agent *Agent, ctx context.Context, input []Message, observ
 
 func TestRunReturnsFinalResponse(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		if len(request.Messages) != 2 || request.Messages[1].Content != "hello" {
+		if len(request.Messages) != 1 || request.Messages[0].Content != "hello" {
 			t.Fatalf("unexpected messages: %#v", request.Messages)
 		}
 		return Response{Content: "hi"}, nil
@@ -88,7 +88,6 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 		t.Fatalf("content = %q, want %q", result.Content, "hi")
 	}
 	want := []Message{
-		{Role: RoleSystem},
 		{Role: RoleUser, Content: "hello"},
 		{Role: RoleAssistant, Content: "hi"},
 	}
@@ -112,10 +111,10 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 				Input: json.RawMessage(`{"city":"Shanghai"}`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 4 {
-				t.Fatalf("message count = %d, want 4", len(request.Messages))
+			if len(request.Messages) != 3 {
+				t.Fatalf("message count = %d, want 3", len(request.Messages))
 			}
-			result := request.Messages[3]
+			result := request.Messages[2]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" || result.Content != "sunny" {
 				t.Fatalf("unexpected tool result: %#v", result)
 			}
@@ -309,10 +308,10 @@ func TestRunFeedsBackMissingToolError(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "missing"}}}, nil
 		case 2:
-			if len(request.Messages) != 4 {
-				t.Fatalf("message count = %d, want 4", len(request.Messages))
+			if len(request.Messages) != 3 {
+				t.Fatalf("message count = %d, want 3", len(request.Messages))
 			}
-			result := request.Messages[3]
+			result := request.Messages[2]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `tool "missing" not found`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -349,10 +348,10 @@ func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
 				Input: json.RawMessage(`{"bad":true}`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 4 {
-				t.Fatalf("message count = %d, want 4", len(request.Messages))
+			if len(request.Messages) != 3 {
+				t.Fatalf("message count = %d, want 3", len(request.Messages))
 			}
-			result := request.Messages[3]
+			result := request.Messages[2]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `tool "fail" failed`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -395,10 +394,10 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 				Input: json.RawMessage(`not-json`),
 			}}}, nil
 		case 2:
-			if len(request.Messages) != 4 {
-				t.Fatalf("message count = %d, want 4", len(request.Messages))
+			if len(request.Messages) != 3 {
+				t.Fatalf("message count = %d, want 3", len(request.Messages))
 			}
-			result := request.Messages[3]
+			result := request.Messages[2]
 			if result.Role != RoleTool || result.ToolCallID != "call-1" ||
 				!strings.Contains(result.Content, `arguments for tool "weather" were not valid JSON: not-json`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
@@ -474,15 +473,15 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 				{ID: "call-fast", Name: "fast", Input: json.RawMessage(`{}`)},
 			}}, nil
 		case 2:
-			if len(request.Messages) != 5 {
-				t.Fatalf("message count = %d, want 5", len(request.Messages))
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
 			}
 			// Tool results must appear in the model's call order.
-			if request.Messages[3].ToolCallID != "call-slow" || request.Messages[3].Content != "slow-done" {
-				t.Fatalf("unexpected first tool result: %#v", request.Messages[3])
+			if request.Messages[2].ToolCallID != "call-slow" || request.Messages[2].Content != "slow-done" {
+				t.Fatalf("unexpected first tool result: %#v", request.Messages[2])
 			}
-			if request.Messages[4].ToolCallID != "call-fast" || request.Messages[4].Content != "fast-done" {
-				t.Fatalf("unexpected second tool result: %#v", request.Messages[4])
+			if request.Messages[3].ToolCallID != "call-fast" || request.Messages[3].Content != "fast-done" {
+				t.Fatalf("unexpected second tool result: %#v", request.Messages[3])
 			}
 			return Response{Content: "done"}, nil
 		default:
@@ -675,7 +674,7 @@ func TestRunHonorsConfiguredMaximumRounds(t *testing.T) {
 	if !errors.Is(err, ErrMaxRounds) || !strings.Contains(err.Error(), "limit 2") || calls != 2 {
 		t.Fatalf("error = %v, calls = %d", err, calls)
 	}
-	if len(result.Messages) != 6 {
+	if len(result.Messages) != 5 {
 		t.Fatalf("messages = %#v, want resumable state", result.Messages)
 	}
 }
@@ -807,7 +806,7 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			toolMessage := request.Messages[3]
+			toolMessage := request.Messages[2]
 			if toolMessage.Content != "plain output" {
 				t.Fatalf("tool message = %#v", toolMessage)
 			}
@@ -845,7 +844,7 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 		case 1:
 			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			toolMessage := request.Messages[3]
+			toolMessage := request.Messages[2]
 			if toolMessage.Content != content {
 				t.Fatalf("content = %q", toolMessage.Content)
 			}

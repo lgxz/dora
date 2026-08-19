@@ -70,7 +70,7 @@ func TestObserverCannotMutateConversation(t *testing.T) {
 				Input: json.RawMessage(`{"value":1}`),
 			}}}, nil
 		}
-		call := request.Messages[2].ToolCalls[0]
+		call := request.Messages[1].ToolCalls[0]
 		if call.Name != "echo" || string(call.Input) != `{"value":1}` {
 			t.Fatalf("history was mutated: %#v", call)
 		}

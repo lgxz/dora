@@ -27,6 +27,16 @@ func SkillsDir() (string, error) {
 	return filepath.Join(home, "skills"), nil
 }
 
+// AgentsFile returns Dora's default agent instructions path. It lives at
+// <doraHome>/AGENTS.md and may not exist.
+func AgentsFile() (string, error) {
+	home, err := doraHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "AGENTS.md"), nil
+}
+
 // doraHome returns Dora's home directory. It uses the DORA_HOME environment
 // variable when set, otherwise it falls back to $HOME/.dora.
 func doraHome() (string, error) {

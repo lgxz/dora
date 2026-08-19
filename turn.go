@@ -12,9 +12,10 @@ type Round struct {
 	Tools     []Message `json:"tools"`
 }
 
-// Turn is one independent Agent run. It starts with a system and user message,
-// accumulates complete tool rounds, and ends with one final assistant result.
-// A Turn is mutable while it is running and cannot be changed after Complete.
+// Turn is one independent Agent run. It starts with an optional system message
+// (omitted when empty) and a user message, accumulates complete tool rounds,
+// and ends with one final assistant result. A Turn is mutable while it is
+// running and cannot be changed after Complete.
 type Turn struct {
 	system       string
 	user         string
@@ -35,7 +36,10 @@ func (t *Turn) Messages() []Message {
 	if t == nil {
 		return nil
 	}
-	count := 2
+	count := 1
+	if t.system != "" {
+		count++
+	}
 	for _, round := range t.rounds {
 		count += 1 + len(round.Tools)
 	}
@@ -43,10 +47,10 @@ func (t *Turn) Messages() []Message {
 		count++
 	}
 	messages := make([]Message, 0, count)
-	messages = append(messages,
-		Message{Role: RoleSystem, Content: t.system},
-		Message{Role: RoleUser, Content: t.user},
-	)
+	if t.system != "" {
+		messages = append(messages, Message{Role: RoleSystem, Content: t.system})
+	}
+	messages = append(messages, Message{Role: RoleUser, Content: t.user})
 	for _, round := range t.rounds {
 		messages = append(messages, cloneMessage(round.Assistant))
 		messages = append(messages, cloneMessages(round.Tools)...)

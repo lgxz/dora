@@ -86,7 +86,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	turn := buildTurn(cfg, prompt)
+	turn := buildTurn(prompt)
 	completed, err := runTurn(ctx, agent, turn, buildObserver(streams, opts.quiet, opts.sessionPath), streams)
 	if err != nil {
 		return err
