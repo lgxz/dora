@@ -14,6 +14,9 @@ type MemberlistConfig struct {
 	// Name is the memberlist node name. Empty derives a name from the bind
 	// address.
 	Name string `yaml:"name,omitempty"`
+	// Join lists existing memberlist nodes to join on startup, each in
+	// "host:port" form.
+	Join []string `yaml:"join,omitempty"`
 	// BufferSize bounds the number of queued events before they are dropped.
 	// Zero uses a sensible default.
 	BufferSize int `yaml:"-"`
@@ -99,6 +102,17 @@ func (e *Events) Close() error {
 		return nil
 	}
 	return e.transport.Close()
+}
+
+// Nodes returns the current memberlist node list, or nil when not enabled.
+func (e *Events) Nodes() []Node {
+	if e.transport == nil {
+		return nil
+	}
+	if lister, ok := e.transport.(interface{ ListNodes() []Node }); ok {
+		return lister.ListNodes()
+	}
+	return nil
 }
 
 // newEventID returns a short random hex identifier for an event.

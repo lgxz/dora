@@ -445,6 +445,9 @@ events:
     memberlist:
       bind: 127.0.0.1:4444
       name: dora
+      join:
+        - 10.0.0.2:8848
+        - 10.0.0.3:8848
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -455,6 +458,9 @@ events:
 	ml := cfg.Events.Transports.Memberlist
 	if ml.Bind != "127.0.0.1:4444" || ml.Name != "dora" {
 		t.Fatalf("memberlist = %+v", ml)
+	}
+	if len(ml.Join) != 2 || ml.Join[0] != "10.0.0.2:8848" || ml.Join[1] != "10.0.0.3:8848" {
+		t.Fatalf("join = %+v", ml.Join)
 	}
 }
 

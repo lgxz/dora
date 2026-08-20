@@ -17,6 +17,7 @@ type memberlistTransport struct {
 	list  *memberlist.Memberlist
 	msgs  chan Event
 	queue *memberlist.TransmitLimitedQueue
+	self  string
 	done  chan struct{}
 	close chan struct{}
 }
@@ -25,6 +26,8 @@ const (
 	defaultBind       = "0.0.0.0:8848"
 	defaultBufferSize = 256
 )
+
+var _ memberlist.EventDelegate = (*memberlistTransport)(nil)
 
 // newMemberlistTransport starts dora as the first node of a memberlist
 // cluster, bound to host:port.
@@ -58,11 +61,14 @@ func newMemberlistTransport(cfg MemberlistConfig) (*memberlistTransport, error) 
 	conf.BindAddr = host
 	conf.BindPort = portNum
 	conf.Delegate = t
+	conf.Events = t
 	// Use the configured name, falling back to the bind address, so multiple
 	// dora nodes on the same host do not collide on the hostname-based default.
 	if cfg.Name != "" {
+		t.self = cfg.Name
 		conf.Name = cfg.Name
 	} else {
+		t.self = cfg.Bind
 		conf.Name = cfg.Bind
 	}
 	// Memberlist emits its own logs to stderr by default; silence them to keep
@@ -75,7 +81,44 @@ func newMemberlistTransport(cfg MemberlistConfig) (*memberlistTransport, error) 
 	}
 	t.list = list
 	t.queue.NumNodes = func() int { return list.NumMembers() }
+	// Record the actual local node name so self-detection matches the name
+	// memberlist advertises (the fallback name is the bind address, which may
+	// be a wildcard; the real name is resolved once the node is created).
+	t.self = list.LocalNode().Name
+
+	// Join any configured existing nodes. An empty list means this node starts
+	// its own cluster.
+	if len(cfg.Join) > 0 {
+		if _, err := list.Join(cfg.Join); err != nil {
+			list.Shutdown()
+			return nil, fmt.Errorf("join memberlist: %w", err)
+		}
+	}
 	return t, nil
+}
+
+// Node is one member of the memberlist cluster.
+type Node struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	// Self is true for the local node, so consumers can tell which node is
+	// "this" one.
+	Self bool `json:"self"`
+}
+
+// ListNodes returns the set of nodes currently known to the memberlist
+// cluster, including this node, marking the local node with Self.
+func (t *memberlistTransport) ListNodes() []Node {
+	members := t.list.Members()
+	nodes := make([]Node, 0, len(members))
+	for _, m := range members {
+		nodes = append(nodes, Node{
+			Name:    m.Name,
+			Address: m.Address(),
+			Self:    m.Name == t.self,
+		})
+	}
+	return nodes
 }
 
 // Send delivers an event into the cluster. An empty Receiver broadcasts via
@@ -154,6 +197,47 @@ func (t *memberlistTransport) NotifyMsg(buf []byte) {
 // broadcasts for the memberlist layer to deliver.
 func (t *memberlistTransport) GetBroadcasts(overhead, limit int) [][]byte {
 	return t.queue.GetBroadcasts(overhead, limit)
+}
+
+// NotifyJoin implements memberlist.EventDelegate. It enqueues a membership
+// event so the daemon loop can start a turn for it.
+func (t *memberlistTransport) NotifyJoin(node *memberlist.Node) {
+	t.enqueueMemberEvent("join", node)
+}
+
+// NotifyLeave implements memberlist.EventDelegate.
+func (t *memberlistTransport) NotifyLeave(node *memberlist.Node) {
+	t.enqueueMemberEvent("leave", node)
+}
+
+// NotifyUpdate implements memberlist.EventDelegate.
+func (t *memberlistTransport) NotifyUpdate(node *memberlist.Node) {
+	t.enqueueMemberEvent("update", node)
+}
+
+// enqueueMemberEvent delivers a memberlist membership change as an Event. It
+// never blocks, dropping the event when the buffer is full. The local node's
+// own join is skipped as it is not meaningful to process.
+func (t *memberlistTransport) enqueueMemberEvent(action string, node *memberlist.Node) {
+	if node == nil || node.Name == t.self {
+		return
+	}
+	ev := Event{
+		ID:     newEventID(),
+		Type:   TypeMemberlist,
+		Sender: node.Name,
+		Msg:    fmt.Sprintf("node %s %s", node.Name, action),
+		Meta: map[string]string{
+			"action":  action,
+			"node":    node.Name,
+			"address": node.Address(),
+		},
+	}
+	select {
+	case t.msgs <- ev:
+	default:
+		// Drop when the buffer is full rather than block the gossip loop.
+	}
 }
 
 // LocalState implements memberlist.Delegate with no state.

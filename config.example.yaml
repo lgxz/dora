@@ -66,6 +66,9 @@ agent:
 #     memberlist:
 #       bind: 0.0.0.0:8848   # host:port to bind; default 0.0.0.0:8848
 #       name: dora           # memberlist node name; default derived from bind
+#       # join:              # existing nodes to join on startup (host:port each)
+#       #   - 10.0.0.2:8848
+#       #   - 10.0.0.3:8848
 
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
 # followed by ~/.agents/skills/, independent of this file's location. Absent

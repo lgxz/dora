@@ -108,6 +108,12 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		tools = append(tools, sendTool)
+
+		nodesTool, err := events.NewNodesTool(source)
+		if err != nil {
+			return err
+		}
+		tools = append(tools, nodesTool)
 	}
 
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{

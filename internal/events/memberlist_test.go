@@ -10,6 +10,21 @@ import (
 	"github.com/hashicorp/memberlist"
 )
 
+// nextEvent returns the next non-membership event, skipping memberlist
+// membership events that arrive as nodes join the test cluster.
+func nextEvent(t *testing.T, ctx context.Context, transport *memberlistTransport) Event {
+	t.Helper()
+	for {
+		ev, err := transport.Next(ctx)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if ev.Type != TypeMemberlist {
+			return ev
+		}
+	}
+}
+
 // freePort returns a free TCP port on localhost and its string form. Ports are
 // bound then released so the test may reuse them; there is a small race window
 // but it is acceptable for tests.
@@ -81,10 +96,7 @@ func TestMemberlistReceive(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := receiver.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
+	got := nextEvent(t, ctx, receiver)
 	if got.ID != "evt-1" || got.Type != "test" || got.Sender != "sender" || got.Msg != "hello" || got.Meta["n"] != "1" {
 		t.Fatalf("unexpected event: %+v", got)
 	}
@@ -146,11 +158,125 @@ func TestEventsSendBroadcastFillsSenderAndID(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := receiver.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
+	got := nextEvent(t, ctx, receiver.transport.(*memberlistTransport))
 	if got.Sender != "sender-node" || got.ID != sent.ID || got.Msg != "broadcast" {
 		t.Fatalf("received event = %+v", got)
+	}
+}
+
+func TestMemberlistJoinAndListNodes(t *testing.T) {
+	_, firstPort := freePort(t)
+	_, secondPort := freePort(t)
+
+	first, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(firstPort)),
+				Name: "first-node",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New first: %v", err)
+	}
+	defer first.Close()
+
+	firstAddr := first.transport.(*memberlistTransport).list.LocalNode().Address()
+
+	second, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(secondPort)),
+				Name: "second-node",
+				Join: []string{firstAddr},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New second: %v", err)
+	}
+	defer second.Close()
+
+	// Wait for convergence on both sides.
+	secondList := second.transport.(*memberlistTransport).list
+	for i := 0; i < 100 && secondList.NumMembers() < 2; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := secondList.NumMembers(); n != 2 {
+		t.Fatalf("second expected 2 members, got %d", n)
+	}
+
+	nodes := second.Nodes()
+	if len(nodes) != 2 {
+		t.Fatalf("Nodes() = %+v", nodes)
+	}
+	names := map[string]bool{}
+	selfCount := 0
+	for _, n := range nodes {
+		names[n.Name] = true
+		if n.Self {
+			selfCount++
+		}
+	}
+	if !names["first-node"] || !names["second-node"] {
+		t.Fatalf("expected both node names, got %+v", nodes)
+	}
+	if selfCount != 1 {
+		t.Fatalf("expected exactly one self node, got %d (%+v)", selfCount, nodes)
+	}
+}
+
+func TestMemberlistJoinEmitsMembershipEvent(t *testing.T) {
+	_, firstPort := freePort(t)
+	_, secondPort := freePort(t)
+
+	first, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(firstPort)),
+				Name: "first-node",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New first: %v", err)
+	}
+	defer first.Close()
+
+	firstAddr := first.transport.(*memberlistTransport).list.LocalNode().Address()
+
+	second, err := New(Config{
+		Enabled: true,
+		Transports: Transports{
+			Memberlist: MemberlistConfig{
+				Bind: net.JoinHostPort("127.0.0.1", strconv.Itoa(secondPort)),
+				Name: "second-node",
+				Join: []string{firstAddr},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New second: %v", err)
+	}
+	defer second.Close()
+
+	// The first node observes membership events; the first is its own join,
+	// so drain until we see the second node's join.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		got, err := first.Next(ctx)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if got.Type == TypeMemberlist && got.Meta["node"] == "second-node" {
+			if got.Meta["action"] != "join" {
+				t.Fatalf("membership event = %+v", got)
+			}
+			return
+		}
 	}
 }

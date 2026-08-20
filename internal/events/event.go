@@ -26,6 +26,11 @@ type Event struct {
 	Meta map[string]string `json:"meta,omitempty"`
 }
 
+// TypeMemberlist is the reserved event Type for memberlist membership changes.
+// Such events are emitted locally (not transported) and carry an "action" meta
+// value of "join", "leave", or "update", plus "node" and "address".
+const TypeMemberlist = "memberlist"
+
 // encode serializes an Event into the wire format prefixed with a one-byte
 // type tag. A single tag value (eventTag) is used today; the prefix leaves
 // room for future message kinds without breaking compatibility.

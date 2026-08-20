@@ -433,6 +433,9 @@ events:
     memberlist:
       bind: 0.0.0.0:8848   # host:port to bind
       name: dora           # node name (optional)
+      join:                # existing nodes to join (optional)
+        - 10.0.0.2:8848
+        - 10.0.0.3:8848
 ```
 
 ```sh
@@ -442,9 +445,20 @@ events:
 ```
 
 `bind` defaults to `0.0.0.0:8848`; `name` defaults to a name derived from `bind`.
-Combined with `-s`, every successfully completed turn is persisted so the
-`history` tool stays available across events. The `--events` flag enables daemon
-mode on the command line without editing the config.
+`join` lists existing memberlist nodes to contact on startup (each `host:port`);
+omit it to start a fresh cluster. Combined with `-s`, every successfully
+completed turn is persisted so the `history` tool stays available across events.
+The `--events` flag enables daemon mode on the command line without editing the
+config.
+
+In daemon mode Dora also exposes the `ListNodes` tool, so the model can query
+the current memberlist node names and addresses, and the `SendEvent` tool to
+send events back into the cluster.
+
+Besides transported events, node join/leave/update changes are delivered
+locally as events with `type` of `memberlist` and an `action` meta value of
+`join`, `leave`, or `update`, plus `node` and `address`, so the model is
+notified of cluster membership changes.
 
 An event is a JSON message with a one-byte `0x01` tag prefix carrying these
 fields:
