@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -167,7 +167,7 @@ func (s *Store) GetRounds(ctx context.Context, id int64, options session.RoundOp
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT round_index, position, role, content, tool_calls_json, tool_call_id
+SELECT round_index, position, role, content, reasoning, tool_calls_json, tool_call_id
 FROM messages
 WHERE turn_id = ? AND round_index >= ? AND round_index < ?
 ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limit)
@@ -180,11 +180,11 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 	for rows.Next() {
 		var roundIndex, position int
 		var role string
-		var content, callsJSON, callID sql.NullString
-		if err := rows.Scan(&roundIndex, &position, &role, &content, &callsJSON, &callID); err != nil {
+		var content, reasoning, callsJSON, callID sql.NullString
+		if err := rows.Scan(&roundIndex, &position, &role, &content, &reasoning, &callsJSON, &callID); err != nil {
 			return session.RoundPage{}, fmt.Errorf("scan turn %d message: %w", id, err)
 		}
-		message, err := decodeMessage(role, content.String, callsJSON.String, callID.String)
+		message, err := decodeMessage(role, content.String, reasoning.String, callsJSON.String, callID.String)
 		if err != nil {
 			return session.RoundPage{}, fmt.Errorf("decode turn %d round %d position %d: %w", id, roundIndex, position, err)
 		}
@@ -246,7 +246,7 @@ func (s *Store) initialize(ctx context.Context) error {
 			return fmt.Errorf("create sqlite session schema: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("write sqlite schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -258,7 +258,7 @@ func (s *Store) initialize(ctx context.Context) error {
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
 		`SELECT id, system, user, result, round_count, committed_at FROM turns LIMIT 0`,
-		`SELECT turn_id, round_index, position, role, content, tool_calls_json, tool_call_id FROM messages LIMIT 0`,
+		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
 		rows, err := s.db.QueryContext(ctx, query)
@@ -287,6 +287,7 @@ var schemaStatements = []string{
         position INTEGER NOT NULL,
         role TEXT NOT NULL,
         content TEXT,
+        reasoning TEXT,
         tool_calls_json TEXT,
         tool_call_id TEXT,
         PRIMARY KEY (turn_id, round_index, position),
@@ -307,9 +308,9 @@ func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, po
 		return fmt.Errorf("encode turn %d round %d position %d tool calls: %w", turnID, roundIndex, position, err)
 	}
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO messages (turn_id, round_index, position, role, content, tool_calls_json, tool_call_id)
-VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`,
-		turnID, roundIndex, position, string(message.Role), message.Content, calls, message.ToolCallID,
+INSERT INTO messages (turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id)
+VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`,
+		turnID, roundIndex, position, string(message.Role), message.Content, message.Reasoning, calls, message.ToolCallID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert turn %d round %d position %d: %w", turnID, roundIndex, position, err)
@@ -332,8 +333,8 @@ func encodeToolCalls(calls []dora.ToolCall) (string, error) {
 	return string(encoded), err
 }
 
-func decodeMessage(role, content, callsJSON, callID string) (dora.Message, error) {
-	message := dora.Message{Role: dora.Role(role), Content: content, ToolCallID: callID}
+func decodeMessage(role, content, reasoning, callsJSON, callID string) (dora.Message, error) {
+	message := dora.Message{Role: dora.Role(role), Content: content, Reasoning: reasoning, ToolCallID: callID}
 	if callsJSON != "" {
 		var records []toolCallRecord
 		if err := json.Unmarshal([]byte(callsJSON), &records); err != nil {

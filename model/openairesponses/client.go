@@ -357,6 +357,10 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 			if emit != nil && event.Delta != "" {
 				emit(dora.ModelEvent{Kind: dora.ModelEventContentDelta, Delta: event.Delta})
 			}
+		case "response.reasoning_summary_text.delta":
+			if emit != nil && event.Delta != "" {
+				emit(dora.ModelEvent{Kind: dora.ModelEventReasoningDelta, Delta: event.Delta})
+			}
 		case "response.output_item.added":
 			items[event.Item.ID] = event.Item
 		case "response.function_call_arguments.done":
@@ -434,6 +438,10 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 				if content.Type == "output_text" {
 					result.Content += content.Text
 				}
+			}
+		case "reasoning":
+			for _, summary := range item.Summary {
+				result.Reasoning += summary.Text
 			}
 		case "function_call":
 			arguments := json.RawMessage(item.Arguments)
@@ -519,7 +527,14 @@ type responseItem struct {
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
-	Content   []struct {
+	// Summary holds the reasoning summaries of reasoning output items. The
+	// items themselves are preserved byte-for-byte in the continuation via
+	// their raw JSON; only the summary text is surfaced on the response.
+	Summary []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"summary"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`

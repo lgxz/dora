@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/model/openai"
 )
 
 func TestNewCatalogPreservesOrder(t *testing.T) {
@@ -94,6 +95,45 @@ func TestConstructResponses(t *testing.T) {
 	if model == nil {
 		t.Fatal("Construct returned nil model")
 	}
+}
+
+// TestConstructPreserveThinking verifies the constructed chat adapter
+// surfaces the profile-level PreserveThinking flag, and that the default
+// (nil) leaves it disabled.
+func TestConstructPreserveThinking(t *testing.T) {
+	trueVal := true
+	t.Run("enabled when profile sets it", func(t *testing.T) {
+		model, err := Construct(
+			ProviderConfig{Name: "deepseek", BaseURL: "https://example.test/v1", API: "chat_completions", HTTPClient: &http.Client{}},
+			Profile{Name: "m", Model: "test-model", PreserveThinking: &trueVal},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oc, ok := model.(*openai.Client)
+		if !ok {
+			t.Fatalf("model type = %T, want *openai.Client", model)
+		}
+		if !oc.PreserveThinking() {
+			t.Fatal("deepseek construct result must preserve thinking")
+		}
+	})
+	t.Run("disabled by default", func(t *testing.T) {
+		model, err := Construct(
+			ProviderConfig{Name: "trust", BaseURL: "https://example.test/v1", API: "chat_completions", HTTPClient: &http.Client{}},
+			Profile{Name: "m", Model: "test-model"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oc, ok := model.(*openai.Client)
+		if !ok {
+			t.Fatalf("model type = %T, want *openai.Client", model)
+		}
+		if oc.PreserveThinking() {
+			t.Fatal("default construct result must not preserve thinking")
+		}
+	})
 }
 
 func TestConstructUnknownAPI(t *testing.T) {

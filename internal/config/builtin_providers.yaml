@@ -5,9 +5,13 @@ providers:
       - name: deepseek-v4-flash
         context_window: 1000000
         capabilities: [text]
+        thinking: high
+        preserve_thinking: true
       - name: deepseek-v4-pro
         context_window: 1000000
         capabilities: [text]
+        thinking: high
+        preserve_thinking: true
 
   - name: trust
     base_url: https://api.trustoken.cn/v1

@@ -26,6 +26,10 @@ providers:
       - name: deepseek-reasoning
         model: deepseek-v4-flash
         thinking: high
+        # preserve_thinking: when true, captured reasoning is resent as
+        # reasoning_content on tool-calling assistant history messages.
+        # Default (unset) is off. DeepSeek requires this mode.
+        preserve_thinking: true
         capabilities: [text]
   - name: trust
     # base_url: https://api.trustoken.cn/v1

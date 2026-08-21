@@ -18,13 +18,15 @@ type StreamingModel interface {
 type ModelEventKind string
 
 const (
-	ModelEventContentDelta  ModelEventKind = "content_delta"
-	ModelEventToolCallReady ModelEventKind = "tool_call_ready"
+	ModelEventContentDelta   ModelEventKind = "content_delta"
+	ModelEventReasoningDelta ModelEventKind = "reasoning_delta"
+	ModelEventToolCallReady  ModelEventKind = "tool_call_ready"
 )
 
 // ModelEvent reports content as it arrives or a tool call whose arguments have
-// finished streaming. The Agent currently waits for the complete response
-// before executing any reported tool call.
+// finished streaming. ReasoningDelta carries the model's chain-of-thought,
+// which typically streams before the content. The Agent currently waits for
+// the complete response before executing any reported tool call.
 type ModelEvent struct {
 	Kind     ModelEventKind
 	Delta    string
@@ -40,9 +42,13 @@ type Request struct {
 }
 
 // Response is either a final assistant response, one or more tool calls, or
-// both. Tool calls are executed before the model is invoked again.
+// both. Tool calls are executed before the model is invoked again. Reasoning
+// holds the chain-of-thought that reasoning models emit alongside Content; it
+// is for display and persistence only and is resent to a provider solely
+// according to the adapter's provider-specific policy.
 type Response struct {
 	Content      string
+	Reasoning    string
 	ToolCalls    []ToolCall
 	Continuation string
 }

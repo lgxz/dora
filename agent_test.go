@@ -211,6 +211,62 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 	}
 }
 
+func TestRunForwardsReasoningDeltasAndHistory(t *testing.T) {
+	var calls int
+	model := streamingModelFunc(func(_ context.Context, _ Request, emit func(ModelEvent)) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			emit(ModelEvent{Kind: ModelEventReasoningDelta, Delta: "think "})
+			emit(ModelEvent{Kind: ModelEventReasoningDelta, Delta: "hard"})
+			emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "checking"})
+			return Response{
+				Reasoning: "think hard",
+				Content:   "checking",
+				ToolCalls: []ToolCall{{ID: "call-1", Name: "weather", Input: json.RawMessage(`{}`)}},
+			}, nil
+		case 2:
+			return Response{Content: "sunny", Reasoning: "done thinking"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{spec: ToolSpec{Name: "weather"}, execute: func(context.Context, json.RawMessage) (string, error) {
+		return "sunny", nil
+	}}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reasonings []string
+	var reasoning string
+	result, err := runAgentObserved(agent, context.Background(), []Message{{Role: RoleUser, Content: "weather?"}}, ObserverFunc(func(update Update) {
+		switch update.Kind {
+		case UpdateReasoningDelta:
+			reasoning += update.Delta
+		case UpdateMessageAdded:
+			if update.Message.Role == RoleAssistant {
+				reasonings = append(reasonings, update.Message.Reasoning)
+			}
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "sunny" || reasoning != "think hard" {
+		t.Fatalf("result = %#v, reasoning = %q", result, reasoning)
+	}
+	// The tool round's assistant message keeps its reasoning in the history
+	// that subsequent model calls see.
+	if len(reasonings) != 2 || reasonings[0] != "think hard" || reasonings[1] != "done thinking" {
+		t.Fatalf("assistant reasonings = %#v", reasonings)
+	}
+	if result.Messages[1].Reasoning != "think hard" {
+		t.Fatalf("round assistant reasoning = %q", result.Messages[1].Reasoning)
+	}
+}
+
 func TestRunTurnCarriesContinuation(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		if request.Continuation != "saved-state" {

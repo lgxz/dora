@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -474,6 +475,124 @@ func TestGenerateSendsMaxTokensOnWire(t *testing.T) {
 	if response.Content != "ok" {
 		t.Fatalf("content = %q", response.Content)
 	}
+}
+
+func TestGenerateStreamEmitsReasoningDeltas(t *testing.T) {
+	// Providers expose the chain-of-thought under different delta field names;
+	// every known variant must stream as reasoning, separate from content.
+	fields := []string{"reasoning_content", "reasoning", "reason"}
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return streamResponse(
+					fmt.Sprintf(`{"choices":[{"index":0,"delta":{%q:"think "}}]}`, field),
+					fmt.Sprintf(`{"choices":[{"index":0,"delta":{%q:"hard"}}]}`, field),
+					`{"choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+				), nil
+			})}
+			client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var events []dora.ModelEvent
+			response, err := client.GenerateStream(context.Background(), dora.Request{}, func(event dora.ModelEvent) {
+				events = append(events, event)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Reasoning != "think hard" {
+				t.Fatalf("reasoning = %q", response.Reasoning)
+			}
+			if response.Content != "answer" {
+				t.Fatalf("content = %q, want %q with no reasoning leak", response.Content, "answer")
+			}
+			if len(events) != 3 || events[0].Kind != dora.ModelEventReasoningDelta || events[1].Kind != dora.ModelEventReasoningDelta ||
+				events[2].Kind != dora.ModelEventContentDelta || events[0].Delta != "think " || events[1].Delta != "hard" {
+				t.Fatalf("events = %#v", events)
+			}
+		})
+	}
+}
+
+func TestReasoningDeltaPreferReasoningContent(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return streamResponse(`{"choices":[{"index":0,"delta":{"reasoning_content":"primary","reasoning":"secondary","reason":"tertiary"}}]}`), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Reasoning != "primary" {
+		t.Fatalf("reasoning = %q, want the reasoning_content value", response.Reasoning)
+	}
+}
+
+func TestRequestBodyResendsReasoningPerPolicy(t *testing.T) {
+	toolCall := dora.ToolCall{ID: "call-1", Name: "weather", Input: json.RawMessage(`{}`)}
+	request := dora.Request{Messages: []dora.Message{
+		{Role: dora.RoleUser, Content: "hi"},
+		{Role: dora.RoleAssistant, Content: "checking", Reasoning: "chain", ToolCalls: []dora.ToolCall{toolCall}},
+		{Role: dora.RoleTool, ToolCallID: "call-1", Content: "sunny"},
+		{Role: dora.RoleAssistant, Content: "final", Reasoning: "done thinking"},
+	}}
+
+	decodedRequest := func(t *testing.T, preserve *bool) []map[string]any {
+		t.Helper()
+		client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", PreserveThinking: preserve})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := client.requestBody(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded.Messages
+	}
+
+	trueVal := true
+	t.Run("preserve keeps reasoning on tool-calling messages only", func(t *testing.T) {
+		messages := decodedRequest(t, &trueVal)
+		// messages[0] user, [1] assistant with tool calls, [2] tool, [3] final assistant.
+		if messages[1]["reasoning_content"] != "chain" {
+			t.Fatalf("tool-calling assistant reasoning_content = %#v, want %q", messages[1]["reasoning_content"], "chain")
+		}
+		if _, exists := messages[3]["reasoning_content"]; exists {
+			t.Fatalf("final assistant message unexpectedly carries reasoning_content: %#v", messages[3])
+		}
+	})
+
+	t.Run("unset preserver thinking strips reasoning from history", func(t *testing.T) {
+		for i, message := range decodedRequest(t, nil) {
+			if _, exists := message["reasoning_content"]; exists {
+				t.Fatalf("message %d unexpectedly carries reasoning_content: %#v", i, message)
+			}
+		}
+	})
+
+	t.Run("explicit false strips reasoning from history", func(t *testing.T) {
+		falseVal := false
+		for i, message := range decodedRequest(t, &falseVal) {
+			if _, exists := message["reasoning_content"]; exists {
+				t.Fatalf("message %d unexpectedly carries reasoning_content: %#v", i, message)
+			}
+		}
+	})
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

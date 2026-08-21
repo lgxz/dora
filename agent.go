@@ -119,8 +119,11 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		var err error
 		if _, ok := a.model.(StreamingModel); ok {
 			response, err = a.generateWithRetry(ctx, request, func(event ModelEvent) {
-				if event.Kind == ModelEventContentDelta {
+				switch event.Kind {
+				case ModelEventContentDelta:
 					notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
+				case ModelEventReasoningDelta:
+					notify(observer, Update{Kind: UpdateReasoningDelta, Delta: event.Delta})
 				}
 			})
 		} else {
@@ -133,6 +136,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		assistant := Message{
 			Role:      RoleAssistant,
 			Content:   response.Content,
+			Reasoning: response.Reasoning,
 			ToolCalls: cloneToolCalls(response.ToolCalls),
 		}
 		notify(observer, Update{Kind: UpdateMessageAdded, Message: assistant})

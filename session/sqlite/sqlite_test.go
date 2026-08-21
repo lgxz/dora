@@ -90,6 +90,71 @@ func TestStoreReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+
+	turn := dora.NewTurn("system", "weather?")
+	round := dora.Round{
+		Assistant: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "checking",
+			Reasoning: "let me look",
+			ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}},
+		},
+		Tools: []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "output"}},
+	}
+	if err := turn.AppendRound(round, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.Complete("sunny", ""); err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.CommitTurn(ctx, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rounds) != 1 || page.Rounds[0].Assistant.Reasoning != "let me look" {
+		t.Fatalf("rounds = %#v", page.Rounds)
+	}
+}
+
+func TestStoreRejectsVersionTwoWithoutMigration(t *testing.T) {
+	// v2 databases predate the reasoning column and are rejected rather than
+	// migrated, by design.
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil {
+		t.Fatal("expected unsupported schema error")
+	}
+}
+
 func TestOpenRejectsLegacyJSONSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.json")
 	if err := os.WriteFile(path, []byte(`{"version":5,"messages":[]}`), 0o600); err != nil {

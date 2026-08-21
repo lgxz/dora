@@ -22,10 +22,14 @@ type Image struct {
 //
 // ToolCalls is populated on assistant messages that request tools. ToolCallID
 // is populated on tool messages so a model can match a result to its request.
-// Images holds images attached to the message for multimodal models.
+// Images holds images attached to the message for multimodal models. Reasoning
+// is populated on assistant messages from reasoning models and carries their
+// chain-of-thought; adapters resend it only according to their
+// provider-specific policy.
 type Message struct {
 	Role       Role       `json:"role"`
 	Content    string     `json:"content,omitempty"`
+	Reasoning  string     `json:"reasoning,omitempty"`
 	Images     []Image    `json:"images,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`

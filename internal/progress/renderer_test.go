@@ -131,6 +131,81 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	}
 }
 
+func TestRendererStreamsReasoningInTerminal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "让我想想 "})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "怎么查天气"})
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我来查一下。",
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+		},
+	})
+
+	rendered := output.String()
+	// The "Thinking..." placeholder is erased exactly once, by the first
+	// reasoning delta; the reasoning text itself is never erased.
+	if erases := strings.Count(rendered, "\x1b[1A\r\x1b[2K"); erases != 1 {
+		t.Fatalf("output %q contains %d erase sequences, want 1", rendered, erases)
+	}
+	if !strings.Contains(rendered, "○ 让我想想 怎么查天气") {
+		t.Fatalf("output = %q", rendered)
+	}
+	// The assistant line that follows starts on a fresh line.
+	if !strings.Contains(rendered, "怎么查天气\n● 我来查一下。") {
+		t.Fatalf("output = %q", rendered)
+	}
+}
+
+func TestRendererStreamsReasoningWithoutTerminal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "考虑中"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+		Role:    dora.RoleAssistant,
+		Content: "答案",
+	}})
+
+	rendered := output.String()
+	if strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("output = %q, want no escape sequences", rendered)
+	}
+	if !strings.Contains(rendered, "dora: thinking...") || !strings.Contains(rendered, "○ 考虑中\n") {
+		t.Fatalf("output = %q", rendered)
+	}
+}
+
+func TestRendererColorsReasoningWhenEnabled(t *testing.T) {
+	var output bytes.Buffer
+	New(&output, true, true).Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "思考"})
+	if !strings.Contains(output.String(), "\x1b[2m") {
+		t.Fatalf("output = %q, want dim styling", output.String())
+	}
+}
+
+func TestRendererResetsReasoningMarkerEachRound(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第一轮"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+		Role:      dora.RoleAssistant,
+		Content:   "调用工具",
+		ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+	}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第二轮"})
+
+	rendered := output.String()
+	if markers := strings.Count(rendered, "○ "); markers != 2 {
+		t.Fatalf("output %q contains %d reasoning markers, want 2", rendered, markers)
+	}
+}
+
 func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, true, false)

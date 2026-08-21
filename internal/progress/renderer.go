@@ -26,7 +26,10 @@ type Renderer struct {
 	color    bool
 	terminal bool
 	waiting  bool
-	tools    map[string]toolRun
+	// reasoning tracks whether reasoning has been streamed in the current
+	// round, so the assistant message that follows starts on a fresh line.
+	reasoning bool
+	tools      map[string]toolRun
 }
 
 type toolRun struct {
@@ -57,6 +60,8 @@ func (r *Renderer) Observe(update dora.Update) {
 	switch update.Kind {
 	case dora.UpdateThinking:
 		r.renderThinking()
+	case dora.UpdateReasoningDelta:
+		r.renderReasoning(update.Delta)
 	case dora.UpdateMessageAdded:
 		switch update.Message.Role {
 		case dora.RoleAssistant:
@@ -78,9 +83,29 @@ func (r *Renderer) renderThinking() {
 		fmt.Fprintln(r.output, "dora: thinking...")
 	}
 	r.waiting = true
+	r.reasoning = false
+}
+
+// renderReasoning streams the model's chain-of-thought in dim style. The
+// "Thinking..." placeholder is replaced by the first delta of a round; the
+// reasoning text itself is never erased afterwards.
+func (r *Renderer) renderReasoning(delta string) {
+	if r.terminal && r.waiting {
+		r.waiting = false
+		fmt.Fprint(r.output, "\x1b[1A\r\x1b[2K")
+	}
+	if !r.reasoning {
+		r.reasoning = true
+		fmt.Fprint(r.output, r.paint(dim, "○ "))
+	}
+	fmt.Fprint(r.output, r.paint(dim, delta))
 }
 
 func (r *Renderer) renderAssistantMessage(message dora.Message) {
+	if r.reasoning {
+		r.reasoning = false
+		fmt.Fprintln(r.output)
+	}
 	r.replaceThinking(message)
 	if len(message.ToolCalls) == 0 {
 		return

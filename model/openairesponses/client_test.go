@@ -106,6 +106,49 @@ func TestGenerateStreamReportsCompletedToolCall(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamEmitsReasoningSummary(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return eventStream(strings.Join([]string{
+			`data: {"type":"response.reasoning_summary_text.delta","delta":"think "}`,
+			"",
+			`data: {"type":"response.reasoning_summary_text.delta","delta":"hard"}`,
+			"",
+			`data: {"type":"response.completed","response":{"id":"resp-1","output":[{"id":"rs-1","type":"reasoning","summary":[{"type":"summary_text","text":"think "},{"type":"summary_text","text":"hard"}],"encrypted_content":"opaque"},{"type":"message","content":[{"type":"output_text","text":"hello"}]}]}}`,
+			"",
+		}, "\n")), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas strings.Builder
+	response, err := client.GenerateStream(context.Background(), dora.Request{}, func(event dora.ModelEvent) {
+		if event.Kind == dora.ModelEventReasoningDelta {
+			deltas.WriteString(event.Delta)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The completed payload's summary parts are the authoritative reasoning;
+	// the streamed deltas mirror them.
+	if response.Reasoning != "think hard" || deltas.String() != "think hard" {
+		t.Fatalf("reasoning = %q, deltas = %q", response.Reasoning, deltas.String())
+	}
+	if response.Content != "hello" {
+		t.Fatalf("content = %q", response.Content)
+	}
+	// The raw reasoning item must pass through the continuation untouched so
+	// follow-up requests keep the encrypted reasoning context.
+	continued, err := decodeContinuation(response.Continuation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(continued.Items) != 2 || !strings.Contains(string(continued.Items[0]), `"encrypted_content":"opaque"`) {
+		t.Fatalf("continuation items = %#v", continued.Items)
+	}
+}
+
 func TestContinuationReplaysTypedOutputAndToolResults(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any

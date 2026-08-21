@@ -128,7 +128,7 @@ type Observer interface {
 }
 ```
 
-The Observer synchronously receives semantic events such as `thinking`, content deltas, message additions, tool starts, and tool failures. It only consumes run data, does not participate in Agent decisions, and cannot modify the session history.
+The Observer synchronously receives semantic events such as `thinking`, reasoning deltas, content deltas, message additions, tool starts, and tool failures. It only consumes run data, does not participate in Agent decisions, and cannot modify the session history.
 
 Callbacks run on the Agent's current goroutine, so implementations should return quickly. `internal/progress.Renderer` is the Observer used by the CLI.
 
@@ -167,8 +167,9 @@ sequenceDiagram
     loop up to MaxRounds rounds
         A->>O: thinking
         A->>M: Request(messages, tools, continuation)
+        M-->>O: reasoning delta (optional)
         M-->>O: content delta (optional)
-        M-->>A: Response(content, tool calls, continuation)
+        M-->>A: Response(content, reasoning, tool calls, continuation)
         A->>O: assistant message
         alt no tool calls
             A->>A: turn.Complete(result)
@@ -222,9 +223,13 @@ The CLI's standard output carries only the final result; run progress and errors
 
 `model/openai` converts Dora messages and tool structures into `/chat/completions` requests. It always requests an SSE stream, aggregates text and chunked tool arguments into a complete response, and implements `StreamingModel`; `Continuation` is empty.
 
+Reasoning models expose their chain-of-thought in a non-standard delta field, and providers disagree on the name. The adapter decodes the known candidates (`reasoning_content`, `reasoning`, `reason`, first non-empty wins per event), aggregates them into `Response.Reasoning`, and streams them as reasoning deltas before the content deltas. Whether captured reasoning is resent on tool-calling assistant history messages is controlled by the profile-level `preserve_thinking` switch (default off): DeepSeek requires `reasoning_content` to be present in tool-calling turns and rejects the request otherwise, so its built-in configuration enables the switch; other providers either ignore it or expect it stripped, and keep it off. The final (tool-free) assistant message is never resent within a turn.
+
 ### Responses API
 
 `model/openairesponses` calls `/responses` and parses SSE. It implements `StreamingModel`, passes text deltas to the Agent, and encodes the typed items from the Responses protocol into an opaque continuation.
+
+Reasoning summaries surface when the provider sends them: `response.reasoning_summary_text.delta` events stream as reasoning deltas, and reasoning output items contribute their summary text to `Response.Reasoning`. Summaries are not requested proactively, so providers that only return them on demand keep an empty `Reasoning`.
 
 This continuation is used to preserve data across different CLI processes, such as reasoning, function calls, and function call output, which cannot be fully expressed by generic messages alone. It belongs only to the provider and backend that created it and should not be parsed or modified by other modules.
 
@@ -270,13 +275,16 @@ concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
 the SQLite database itself. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 2 and two tables:
+The database uses schema version 3 and two tables:
 
 - `turns`: one row per successfully completed invocation, including plain-text
   `system`, `user`, and final `result`, round count, and commit time;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls and images are JSON columns because
-  they are structured fields of a message.
+  they are structured fields of a message. Assistant messages also store their
+  captured `reasoning`; like the provider continuation, the final response's
+  reasoning is displayed live but intentionally not stored, because the final
+  assistant message never enters this table.
 
 `CommitTurn` inserts the turn and all messages in one transaction (no backend
 metadata). Incomplete Turns are rejected, so there is no status column. Provider

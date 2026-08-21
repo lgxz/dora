@@ -6,11 +6,12 @@ import "time"
 type UpdateKind string
 
 const (
-	UpdateThinking     UpdateKind = "thinking"
-	UpdateContentDelta UpdateKind = "content_delta"
-	UpdateMessageAdded UpdateKind = "message_added"
-	UpdateToolStarted  UpdateKind = "tool_started"
-	UpdateToolFailed   UpdateKind = "tool_failed"
+	UpdateThinking       UpdateKind = "thinking"
+	UpdateContentDelta   UpdateKind = "content_delta"
+	UpdateReasoningDelta UpdateKind = "reasoning_delta"
+	UpdateMessageAdded   UpdateKind = "message_added"
+	UpdateToolStarted    UpdateKind = "tool_started"
+	UpdateToolFailed     UpdateKind = "tool_failed"
 )
 
 // Update describes transient run progress. Message is populated for

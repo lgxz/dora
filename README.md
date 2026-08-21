@@ -389,6 +389,11 @@ Redirected or piped stdout is identical, preserving stable output for scripts:
 Colors are enabled automatically for terminal output. Set `NO_COLOR=1` to keep
 the layout without ANSI colors; progress remains visible on stderr.
 
+Reasoning models stream their chain-of-thought before the final answer. Dora
+shows it live in a dim style in place of the "Thinking..." placeholder; the
+final answer still goes to stdout on its own line, and `--quiet` suppresses
+the reasoning display along with all other progress.
+
 ### Sessions
 
 Pass a SQLite file to retain completed turns across CLI invocations:
@@ -409,8 +414,11 @@ appended atomically; provider continuation is kept only while that turn runs.
 
 The SQLite database contains `turns` and `messages` tables and records the
 system prompt, user input, final result, backend metadata, and intermediate
-tool rounds. Newly created files use `0600` permissions. The old named JSON
-session format, `--fresh`, and automatic migration are not supported. Omit
+tool rounds, including the reasoning captured on round assistant messages.
+Newly created files use `0600` permissions. The old named JSON
+session format, `--fresh`, and automatic migration are not supported (schema
+version 2 databases from earlier releases are rejected; start a new file).
+Omit
 `--session`/`-s` for an ephemeral turn. Session databases can contain commands
 and tool output, so treat them as sensitive.
 

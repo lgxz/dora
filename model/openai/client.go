@@ -51,18 +51,26 @@ type Config struct {
 	// it over Chat Completions (e.g. DeepSeek's disabled control). Nil sends
 	// no value and leaves it to the provider default.
 	Thinking *ThinkingControl
+	// PreserveThinking controls whether assistant history messages that carry
+	// tool calls include their captured reasoning as reasoning_content in the
+	// request. When enabled, captured reasoning is resent on tool-calling turns
+	// (some providers such as DeepSeek require it and reject the request
+	// otherwise); providers that expect reasoning to be stripped from history
+	// (e.g. Qwen/DashScope) must leave it disabled (the default).
+	PreserveThinking *bool
 }
 
 // Client is an OpenAI-compatible dora.Model. Connection-level concerns live
 // in the embedded *provider.Provider; this struct only holds the model name
 // and generation parameters.
 type Client struct {
-	provider        *provider.Provider
-	model           string
-	maxTokens       *int
-	temperature     *float64
-	reasoningEffort *string
-	thinking        *thinkingControl
+	provider         *provider.Provider
+	model            string
+	maxTokens        *int
+	temperature      *float64
+	reasoningEffort  *string
+	thinking         *thinkingControl
+	preserveThinking bool
 }
 
 // New creates an OpenAI-compatible model client.
@@ -84,13 +92,20 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("openai: model is required")
 	}
 	return &Client{
-		provider:        p,
-		model:           cfg.Model,
-		maxTokens:       cfg.MaxTokens,
-		temperature:     cfg.Temperature,
-		reasoningEffort: cfg.ReasoningEffort,
-		thinking:        cfg.Thinking,
+		provider:         p,
+		model:            cfg.Model,
+		maxTokens:        cfg.MaxTokens,
+		temperature:      cfg.Temperature,
+		reasoningEffort:  cfg.ReasoningEffort,
+		thinking:         cfg.Thinking,
+		preserveThinking: cfg.PreserveThinking != nil && *cfg.PreserveThinking,
 	}, nil
+}
+
+// PreserveThinking reports whether the configured flag is enabled. It is used
+// by tests and by the registry to surface the profile-level setting.
+func (c *Client) PreserveThinking() bool {
+	return c.preserveThinking
 }
 
 // Generate implements dora.Model. The response is received as a stream even
@@ -158,6 +173,13 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 						Arguments: string(call.Input),
 					},
 				})
+			}
+			// When PreserveThinking is enabled, intermediate tool-calling
+			// assistant messages carry their reasoning back; the final
+			// (tool-free) assistant message is never resent, and providers that
+			// expect reasoning to be stripped keep it off entirely.
+			if c.preserveThinking && message.Reasoning != "" && len(message.ToolCalls) > 0 {
+				converted.ReasoningContent = message.Reasoning
 			}
 		case dora.RoleTool:
 			if message.ToolCallID == "" {
@@ -263,6 +285,12 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 			if choice.Index != 0 {
 				continue
 			}
+			if reasoning := reasoningDelta(choice.Delta); reasoning != "" {
+				result.Reasoning += reasoning
+				if emit != nil {
+					emit(dora.ModelEvent{Kind: dora.ModelEventReasoningDelta, Delta: reasoning})
+				}
+			}
 			if choice.Delta.Content != "" {
 				result.Content += choice.Delta.Content
 				if emit != nil {
@@ -344,10 +372,11 @@ func NewThinkingControl(ctrlType string) *thinkingControl {
 }
 
 type chatMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	ToolCalls  []chatToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []chatToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
 }
 
 type chatTool struct {
@@ -374,19 +403,43 @@ type chatFunctionCall struct {
 
 type chatStreamEvent struct {
 	Choices []struct {
-		Index int `json:"index"`
-		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
-				Index    int    `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
+		Index int             `json:"index"`
+		Delta chatStreamDelta `json:"delta"`
 	} `json:"choices"`
+}
+
+// chatStreamDelta is one streamed message delta. Reasoning models expose their
+// chain-of-thought in a non-standard field; providers disagree on the name, so
+// all known candidates are decoded and reasoningDelta picks the first
+// non-empty one.
+type chatStreamDelta struct {
+	Content          string               `json:"content"`
+	ReasoningContent string               `json:"reasoning_content"`
+	Reasoning        string               `json:"reasoning"`
+	Reason           string               `json:"reason"`
+	ToolCalls        []chatStreamToolCall `json:"tool_calls"`
+}
+
+type chatStreamToolCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// reasoningDelta extracts the chain-of-thought chunk from a stream delta,
+// preferring the DeepSeek-style reasoning_content field over the shorter
+// reasoning and reason variants some providers use.
+func reasoningDelta(delta chatStreamDelta) string {
+	if delta.ReasoningContent != "" {
+		return delta.ReasoningContent
+	}
+	if delta.Reasoning != "" {
+		return delta.Reasoning
+	}
+	return delta.Reason
 }
 
 var _ dora.StreamingModel = (*Client)(nil)

@@ -38,14 +38,15 @@ type ProviderConfig struct {
 // Profile describes one named model profile under a provider. Name selects
 // the profile; Model is the model identifier sent to the provider.
 type Profile struct {
-	Name          string
-	Model         string
-	API           string // overrides provider API when non-empty
-	Thinking      *string
-	MaxTokens     *int
-	ContextWindow *int
-	Temperature   *float64
-	Capabilities  []dora.Capability
+	Name             string
+	Model            string
+	API              string // overrides provider API when non-empty
+	Thinking         *string
+	PreserveThinking *bool
+	MaxTokens        *int
+	ContextWindow    *int
+	Temperature      *float64
+	Capabilities     []dora.Capability
 }
 
 // Config is the registry input.
@@ -108,6 +109,7 @@ func Construct(p ProviderConfig, profile Profile) (dora.Model, error) {
 			Temperature:       profile.Temperature,
 			ReasoningEffort:   reasoningEffort,
 			Thinking:          thinking,
+			PreserveThinking:  profile.PreserveThinking,
 		})
 	case "responses":
 		reasoning := mapResponsesThinking(p.Name, profile.Thinking)
