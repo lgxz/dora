@@ -115,7 +115,7 @@ func New(cfg Config) (dora.Tool, error) {
 			if info.Size() > maxFileSize {
 				return nil, fmt.Errorf("skill: %q exceeds %d bytes", path, maxFileSize)
 			}
-			loaded, err := load(path, child.Name(), maxFileSize)
+			loaded, err := load(path, maxFileSize)
 			if err != nil {
 				return nil, err
 			}
@@ -197,7 +197,7 @@ func (t *tool) Execute(ctx context.Context, input json.RawMessage) (dora.ToolRes
 	)}, nil
 }
 
-func load(path, directoryName string, maxFileSize int64) (entry, error) {
+func load(path string, maxFileSize int64) (entry, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return entry{}, fmt.Errorf("skill: open %q: %w", path, err)
@@ -242,9 +242,6 @@ func load(path, directoryName string, maxFileSize int64) (entry, error) {
 	}
 	if !namePattern.MatchString(meta.Name) {
 		return entry{}, fmt.Errorf("skill: %q has invalid name %q", path, meta.Name)
-	}
-	if meta.Name != directoryName {
-		return entry{}, fmt.Errorf("skill: %q name %q must match directory %q", path, meta.Name, directoryName)
 	}
 	description := strings.Join(strings.Fields(meta.Description), " ")
 	if description == "" {

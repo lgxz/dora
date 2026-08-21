@@ -94,7 +94,7 @@ Instructions.
 	}
 }
 
-func TestNewRejectsDirectoryNameMismatch(t *testing.T) {
+func TestNewAcceptsDirectoryNameMismatch(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "directory-name", `---
 name: another-name
@@ -103,9 +103,12 @@ description: Mismatched name.
 Instructions.
 `)
 
-	_, err := New(Config{Directories: []string{root}})
-	if err == nil || !strings.Contains(err.Error(), "must match directory") {
-		t.Fatalf("error = %v", err)
+	tool, err := New(Config{Directories: []string{root}})
+	if err != nil {
+		t.Fatalf("unexpected error = %v", err)
+	}
+	if _, err := tool.Execute(context.Background(), []byte(`{"name":"another-name"}`)); err != nil {
+		t.Fatalf("execute by name = %v", err)
 	}
 }
 
