@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultTimeout        = 120 * time.Second
+	defaultTimeout        = 60 * time.Second
 	maxTimeout            = time.Hour
 	defaultMaxOutputBytes = 1 << 20
 )
@@ -81,7 +81,7 @@ func New(cfg Config) (*Tool, error) {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        t.name,
-		Description: t.description,
+		Description: t.description + " Automatically move long-running commands to the background after wait_seconds and return a job_id; the command is not terminated. Use the job tool to manage background jobs.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -92,7 +92,7 @@ func (t *Tool) Spec() dora.ToolSpec {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max time to wait before transitioning to background. Default 60"
+      "description": "Max seconds to wait for completion before moving the command to the background. Default 60"
     }
   },
   "required": ["command"],
