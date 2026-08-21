@@ -22,6 +22,7 @@ type options struct {
 	forceUpdate  bool
 	noSkills     bool
 	quiet        bool
+	reasoning    bool
 	sessionPath  string
 	promptArgs   []string
 	usage        func()
@@ -50,6 +51,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.noSkills, "no-skills", false, "disable all skills")
 	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress")
 	flags.BoolVar(&opts.quiet, "q", false, "hide run progress (shorthand)")
+	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query completed turns")
 	flags.StringVar(&opts.sessionPath, "s", "", "SQLite session file (shorthand)")
 	flags.Usage = func() {

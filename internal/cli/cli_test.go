@@ -88,8 +88,63 @@ policy:
 	if stdout.String() != "hello from model\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "dora: thinking") {
+	if !strings.Contains(stderr.String(), "Thinking...") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunStreamsReasoningOnlyWithFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	t.Setenv("OPENAI_API_KEY", "")
+	newHTTPClient := func() *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return fakeChatResponse(`{"choices":[{"index":0,"delta":{"reasoning_content":"考虑中"}}]}`), nil
+		})}
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configContents := fmt.Sprintf(`
+providers:
+  - name: openai
+    base_url: %s
+    profiles:
+      - name: fast
+        model: test-model
+        capabilities: [text]
+env:
+  OPENAI_API_KEY: secret
+policy:
+  text:
+    provider: openai
+    profile: fast
+`, "https://example.test/v1")
+	if err := writeTestConfig(t, configPath, configContents); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(reasoningFlag bool) string {
+		args := []string{"--config", configPath}
+		if reasoningFlag {
+			args = append(args, "--reasoning")
+		}
+		args = append(args, "hello")
+		var stderr bytes.Buffer
+		if err := Run(context.Background(), args, IO{
+			Stdin:           strings.NewReader(""),
+			Stdout:          io.Discard,
+			Stderr:          &stderr,
+			StdinIsTerminal: true,
+			HTTPClient:      newHTTPClient(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return stderr.String()
+	}
+
+	if stderr := run(false); strings.Contains(stderr, "考虑中") {
+		t.Fatalf("stderr without --reasoning = %q, want reasoning hidden", stderr)
+	}
+	if stderr := run(true); !strings.Contains(stderr, "考虑中") {
+		t.Fatalf("stderr with --reasoning = %q, want reasoning streamed", stderr)
 	}
 }
 

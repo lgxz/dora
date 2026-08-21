@@ -14,7 +14,7 @@ import (
 
 func TestRendererShowsDoraProgress(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	call := dora.ToolCall{
 		ID:    "call-1",
@@ -40,7 +40,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 
 	for _, want := range []string{
-		"dora: thinking",
+		"Thinking...",
 		"我先看看当前目录",
 		"pwd",
 	} {
@@ -52,7 +52,7 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 
 func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	calls := []dora.ToolCall{
 		{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"uptime"}`)},
 		{ID: "call-2", Name: "bash", Input: json.RawMessage(`{"command":"df -h"}`)},
@@ -92,13 +92,13 @@ func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 
 func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 	var colored bytes.Buffer
-	New(&colored, true, true).Observe(dora.Update{Kind: dora.UpdateThinking})
+	New(&colored, true, true, false).Observe(dora.Update{Kind: dora.UpdateThinking})
 	if !strings.Contains(colored.String(), "\x1b[") {
 		t.Fatalf("colored output = %q", colored.String())
 	}
 
 	var plain bytes.Buffer
-	New(&plain, true, false).Observe(dora.Update{Kind: dora.UpdateThinking})
+	New(&plain, true, false, false).Observe(dora.Update{Kind: dora.UpdateThinking})
 	if strings.Contains(plain.String(), "\x1b[") {
 		t.Fatalf("plain output = %q", plain.String())
 	}
@@ -106,7 +106,7 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 
 func TestRendererShowsSessionState(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	renderer.Session("system-status.sqlite")
 	if !strings.Contains(output.String(), "Session \"system-status.sqlite\"") {
 		t.Fatalf("output = %q", output.String())
@@ -115,7 +115,7 @@ func TestRendererShowsSessionState(t *testing.T) {
 
 func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, true, false)
+	renderer := New(&output, true, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
@@ -133,7 +133,7 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 
 func TestRendererStreamsReasoningInTerminal(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, true, false)
+	renderer := New(&output, true, false, true)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "让我想想 "})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "怎么查天气"})
@@ -163,7 +163,7 @@ func TestRendererStreamsReasoningInTerminal(t *testing.T) {
 
 func TestRendererStreamsReasoningWithoutTerminal(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, true)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "考虑中"})
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
@@ -175,14 +175,14 @@ func TestRendererStreamsReasoningWithoutTerminal(t *testing.T) {
 	if strings.Contains(rendered, "\x1b[") {
 		t.Fatalf("output = %q, want no escape sequences", rendered)
 	}
-	if !strings.Contains(rendered, "dora: thinking...") || !strings.Contains(rendered, "○ 考虑中\n") {
+	if !strings.Contains(rendered, "Thinking...") || !strings.Contains(rendered, "○ 考虑中\n") {
 		t.Fatalf("output = %q", rendered)
 	}
 }
 
 func TestRendererColorsReasoningWhenEnabled(t *testing.T) {
 	var output bytes.Buffer
-	New(&output, true, true).Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "思考"})
+	New(&output, true, true, true).Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "思考"})
 	if !strings.Contains(output.String(), "\x1b[2m") {
 		t.Fatalf("output = %q, want dim styling", output.String())
 	}
@@ -190,7 +190,7 @@ func TestRendererColorsReasoningWhenEnabled(t *testing.T) {
 
 func TestRendererResetsReasoningMarkerEachRound(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, true)
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第一轮"})
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
 		Role:      dora.RoleAssistant,
@@ -206,9 +206,81 @@ func TestRendererResetsReasoningMarkerEachRound(t *testing.T) {
 	}
 }
 
+func TestRendererHidesReasoningByDefault(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "考虑中"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+		Role:    dora.RoleAssistant,
+		Content: "答案",
+	}})
+
+	rendered := output.String()
+	if strings.Contains(rendered, "考虑中") || strings.Contains(rendered, "○ ") {
+		t.Fatalf("output = %q, want reasoning hidden without --reasoning", rendered)
+	}
+	// The placeholder is still replaced by the assistant message.
+	if !strings.Contains(rendered, "Thinking...") {
+		t.Fatalf("output = %q", rendered)
+	}
+}
+
+func TestRendererStreamsReasoningLineByLine(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false, true)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第一行完整\n"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第二行尚未结束"})
+
+	// The complete line is written eagerly; the partial line stays buffered.
+	rendered := output.String()
+	if !strings.Contains(rendered, "第一行完整\n") {
+		t.Fatalf("output = %q, want the complete line flushed", rendered)
+	}
+	if strings.Contains(rendered, "第二行尚未结束") {
+		t.Fatalf("output = %q, want the partial line buffered", rendered)
+	}
+
+	// The round's end flushes the partial line before the assistant output.
+	renderer.Observe(dora.Update{
+		Kind: dora.UpdateMessageAdded,
+		Message: dora.Message{
+			Role:      dora.RoleAssistant,
+			Content:   "我来查一下。",
+			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
+		},
+	})
+	if rendered = output.String(); !strings.Contains(rendered, "第二行尚未结束\n● 我来查一下。") {
+		t.Fatalf("output = %q", rendered)
+	}
+}
+
+func TestRendererFlushesReasoningWithoutNewlineAtCap(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, true)
+	// A single line longer than the cap must still stream.
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: strings.Repeat("长", 2*reasoningFlushBytes)})
+	if !strings.Contains(output.String(), "长") {
+		t.Fatal("output has no reasoning, want the oversized line flushed at the cap")
+	}
+}
+
+func TestRendererFlushesPendingReasoningWhenRoundAborts(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, true)
+	// A model call that fails after reasoning never emits an assistant
+	// message; the next round's placeholder must not swallow the buffer.
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "中断的推理"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	if rendered := output.String(); !strings.Contains(rendered, "○ 中断的推理\nThinking...") {
+		t.Fatalf("output = %q", rendered)
+	}
+}
+
 func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, true, false)
+	renderer := New(&output, true, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
@@ -265,7 +337,7 @@ func TestCommandSummariesUseFixedDisplayWidth(t *testing.T) {
 
 func TestRendererAlignsCommandResultColumns(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	calls := []dora.ToolCall{
 		{ID: "short", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)},
 		{ID: "long", Name: "bash", Input: json.RawMessage(`{"command":"` + strings.Repeat("x", commandSummaryWidth+10) + `"}`)},
@@ -525,7 +597,7 @@ func TestKnownPresentationDoesNotLeakPayloadArguments(t *testing.T) {
 
 func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	command := dora.ToolCall{ID: "command", Name: "bash", Input: json.RawMessage(`{"command":"false"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: command})
@@ -555,7 +627,7 @@ func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
 	// must use it to compute the duration instead of time.Now(), which would
 	// otherwise report ~1ms when the event is delivered after the tool finishes.
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"sleep 1"}`)}
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,
@@ -589,7 +661,7 @@ func TestRendererFallsBackToNowWhenStartedAtZero(t *testing.T) {
 	// Backward compatibility: callers that do not populate StartedAt must still
 	// render a duration based on the event delivery time.
 	var output bytes.Buffer
-	renderer := New(&output, false, false)
+	renderer := New(&output, false, false, false)
 	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
 	renderer.Observe(dora.Update{
 		Kind: dora.UpdateMessageAdded,

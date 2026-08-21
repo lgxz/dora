@@ -87,7 +87,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	turn := buildTurn(prompt)
-	completed, err := runTurn(ctx, agent, turn, buildObserver(streams, opts.quiet, opts.sessionPath), streams)
+	completed, err := runTurn(ctx, agent, turn, buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath), streams)
 	if err != nil {
 		return err
 	}

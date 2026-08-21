@@ -240,6 +240,8 @@ policy:
 ./dora --thinking high "Solve a hard problem"
 ```
 
+`preserve_thinking` 是 profile 级开关（默认关闭），面向 Chat Completions 上的推理模型。开启后，此前工具调用轮次捕获的推理会以 `reasoning_content` 回传到对应的 assistant 历史消息上。DeepSeek 在工具调用轮次中要求此行为，缺失时会拒绝请求，因此其内置 profile 已开启；忽略或拒绝回传推理的提供商（以及像 Qwen/DashScope 这样要求剔除的）保持关闭。
+
 Dora 默认每个片段最多运行 256 轮模型-工具循环。请保留这一安全机制，但在工具工作流异常冗长时进行调整：
 
 ```yaml
@@ -278,6 +280,8 @@ git diff | ./dora "Review this change"
 
 颜色会自动在终端输出中启用。设置 `NO_COLOR=1` 以在无 ANSI 颜色的情况下保留布局；进度仍显示在 stderr 上。
 
+推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，替代 "Thinking..." 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
+
 ### 会话
 
 传入一个 SQLite 文件，可以跨多次 CLI 调用保留已完成的 turns：
@@ -289,7 +293,7 @@ git diff | ./dora "Review this change"
 
 每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。指定的 session 数据库已经包含 completed turns 时，Dora 才会加入 `history` 工具：模型可以用 `list` 列出已完成的 turns 及各自的 round 数量，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库不会暴露该工具。一个 round 是一条 assistant tool-call 消息及其对应的全部 tool 结果消息。只有获得最终 assistant 结果的 turn 才会一次性原子追加；provider continuation 只在当前 turn 运行期间保存在内存中。
 
-SQLite 数据库包含 `turns` 和 `messages` 表，记录 system prompt、用户输入、最终结果、后端元数据及中间工具 rounds。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持。省略 `--session`/`-s` 时 turn 不持久化。Session 数据库可能包含命令和工具输出，因此请将其视为敏感内容。
+SQLite 数据库包含 `turns` 和 `messages` 表，记录 system prompt、用户输入、最终结果、后端元数据及中间工具 rounds（包括 round assistant 消息上捕获的推理）。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（早期版本的 schema version 2 数据库会被拒绝，请新建文件）。省略 `--session`/`-s` 时 turn 不持久化。Session 数据库可能包含命令和工具输出，因此请将其视为敏感内容。
 
 使用 `--config`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 

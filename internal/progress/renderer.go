@@ -2,6 +2,7 @@
 package progress
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -20,16 +21,27 @@ const (
 
 const commandSummaryWidth = 72
 
+// reasoningFlushBytes bounds how much reasoning may buffer without a newline
+// before it is flushed anyway, so a pathologically long single line still
+// streams.
+const reasoningFlushBytes = 4 << 10
+
 // Renderer gives semantic Agent updates a concise Dora personality.
 type Renderer struct {
 	output   io.Writer
 	color    bool
 	terminal bool
-	waiting  bool
+	// showReasoning controls whether reasoning deltas are streamed. Streaming
+	// them writes to the output for every reasoning token, which can slow the
+	// run on slow terminals, so display is opt-in (--reasoning).
+	showReasoning bool
+	waiting       bool
 	// reasoning tracks whether reasoning has been streamed in the current
 	// round, so the assistant message that follows starts on a fresh line.
 	reasoning bool
-	tools      map[string]toolRun
+	// pending holds reasoning bytes that have not formed a complete line yet.
+	pending []byte
+	tools   map[string]toolRun
 }
 
 type toolRun struct {
@@ -39,8 +51,10 @@ type toolRun struct {
 
 // New creates a progress Renderer. Terminal enables in-place status updates;
 // color controls ANSI styling independently so NO_COLOR can be respected.
-func New(output io.Writer, terminal, color bool) *Renderer {
-	return &Renderer{output: output, terminal: terminal, color: color, tools: make(map[string]toolRun)}
+// showReasoning enables streaming captured model reasoning (opt-in because
+// per-token writes slow runs on slow terminals).
+func New(output io.Writer, terminal, color, showReasoning bool) *Renderer {
+	return &Renderer{output: output, terminal: terminal, color: color, showReasoning: showReasoning, tools: make(map[string]toolRun)}
 }
 
 // Session reports the SQLite history file used by this turn.
@@ -61,7 +75,9 @@ func (r *Renderer) Observe(update dora.Update) {
 	case dora.UpdateThinking:
 		r.renderThinking()
 	case dora.UpdateReasoningDelta:
-		r.renderReasoning(update.Delta)
+		if r.showReasoning {
+			r.renderReasoning(update.Delta)
+		}
 	case dora.UpdateMessageAdded:
 		switch update.Message.Role {
 		case dora.RoleAssistant:
@@ -77,18 +93,23 @@ func (r *Renderer) Observe(update dora.Update) {
 }
 
 func (r *Renderer) renderThinking() {
+	// A round that aborted without an assistant message still ends its
+	// reasoning run here, so the next placeholder starts on a fresh line.
+	r.endReasoning()
 	if r.terminal {
 		fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
 	} else {
-		fmt.Fprintln(r.output, "dora: thinking...")
+		fmt.Fprintln(r.output, "Thinking...")
 	}
 	r.waiting = true
-	r.reasoning = false
 }
 
 // renderReasoning streams the model's chain-of-thought in dim style. The
 // "Thinking..." placeholder is replaced by the first delta of a round; the
-// reasoning text itself is never erased afterwards.
+// reasoning text itself is never erased afterwards. Deltas are buffered and
+// written one complete line at a time (with a size cap for lines without
+// newlines), because terminal writes run on the Agent's goroutine and
+// per-token writes slow the model stream on slow terminals.
 func (r *Renderer) renderReasoning(delta string) {
 	if r.terminal && r.waiting {
 		r.waiting = false
@@ -98,14 +119,37 @@ func (r *Renderer) renderReasoning(delta string) {
 		r.reasoning = true
 		fmt.Fprint(r.output, r.paint(dim, "○ "))
 	}
-	fmt.Fprint(r.output, r.paint(dim, delta))
+	r.pending = append(r.pending, delta...)
+	for {
+		index := bytes.IndexByte(r.pending, '\n')
+		if index < 0 {
+			break
+		}
+		fmt.Fprint(r.output, r.paint(dim, string(r.pending[:index+1])))
+		r.pending = r.pending[index+1:]
+	}
+	if len(r.pending) >= reasoningFlushBytes {
+		fmt.Fprint(r.output, r.paint(dim, string(r.pending)))
+		r.pending = nil
+	}
+}
+
+// endReasoning writes any buffered partial line and moves following output to
+// a fresh line. It is a no-op unless reasoning streamed in this round.
+func (r *Renderer) endReasoning() {
+	if !r.reasoning {
+		return
+	}
+	r.reasoning = false
+	if len(r.pending) > 0 {
+		fmt.Fprint(r.output, r.paint(dim, string(r.pending)))
+		r.pending = nil
+	}
+	fmt.Fprintln(r.output)
 }
 
 func (r *Renderer) renderAssistantMessage(message dora.Message) {
-	if r.reasoning {
-		r.reasoning = false
-		fmt.Fprintln(r.output)
-	}
+	r.endReasoning()
 	r.replaceThinking(message)
 	if len(message.ToolCalls) == 0 {
 		return

@@ -343,6 +343,13 @@ model's setting with one of `off`, `minimal`, `low`, `medium`, or `high`:
 ./dora --thinking high "Solve a hard problem"
 ```
 
+`preserve_thinking` is a per-profile switch (default off) for reasoning models
+on Chat Completions. When true, the reasoning captured from earlier tool-calling
+rounds is resent as `reasoning_content` on those assistant history messages.
+DeepSeek requires this in tool-calling turns and rejects the request otherwise,
+so its built-in profiles enable it; providers that ignore or reject resent
+reasoning (or expect it stripped, like Qwen/DashScope) keep it off.
+
 For one invocation, `-m`/`--model` overrides the configured conversation model
 as `PROVIDER/PROFILE`, selecting a provider and an optional profile by name. A
 bare `PROVIDER` (or trailing slash) selects that provider's default profile (the
@@ -405,9 +412,11 @@ Colors are enabled automatically for terminal output. Set `NO_COLOR=1` to keep
 the layout without ANSI colors; progress remains visible on stderr.
 
 Reasoning models stream their chain-of-thought before the final answer. Dora
-shows it live in a dim style in place of the "Thinking..." placeholder; the
-final answer still goes to stdout on its own line, and `--quiet` suppresses
-the reasoning display along with all other progress.
+hides it by default because streaming it to the terminal slows runs on slow
+terminals; pass `--reasoning` to show it live in a dim style in place of the
+"Thinking..." placeholder. The final answer still goes to stdout on its own
+line, and `--quiet` suppresses the reasoning display along with all other
+progress.
 
 ### Sessions
 
