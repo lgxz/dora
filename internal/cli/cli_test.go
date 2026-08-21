@@ -1663,6 +1663,131 @@ func TestRunRejectsRemovedFreshFlag(t *testing.T) {
 	}
 }
 
+func TestRunModelFlagOverridesConfiguredProfile(t *testing.T) {
+	// -m trust/deepseek-v4-pro must beat the configured policy default
+	// (deepseek-v4-flash) and route to the deepseek-v4-pro model.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "deepseek-v4-pro" {
+			t.Fatalf("model = %#v, want \"deepseek-v4-pro\"", body["model"])
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"pro answer"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+providers:
+  - name: trust
+    base_url: https://api.trustoken.cn/v1
+    profiles:
+      - name: deepseek-v4-flash
+        model: deepseek-v4-flash
+        capabilities: [text]
+      - name: deepseek-v4-pro
+        model: deepseek-v4-pro
+        capabilities: [text]
+env:
+  TRUST_API_KEY: trust-secret
+policy:
+  text:
+    provider: trust
+    profile: deepseek-v4-flash
+`); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "-m", "trust/deepseek-v4-pro", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "pro answer\n" {
+		t.Fatalf("stdout = %q, want \"pro answer\\n\"", stdout.String())
+	}
+}
+
+func TestRunModelFlagProviderOnlySelectsDefaultProfile(t *testing.T) {
+	// -m trust (no slash) selects the trust provider's first matching profile,
+	// overriding the configured deepseek default.
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "trust-default" {
+			t.Fatalf("model = %#v, want \"trust-default\"", body["model"])
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"trust default"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+providers:
+  - name: deepseek
+    base_url: https://api.deepseek.com
+    profiles:
+      - name: deepseek-v4-flash
+        model: deepseek-v4-flash
+        capabilities: [text]
+  - name: trust
+    base_url: https://api.trustoken.cn/v1
+    profiles:
+      - name: trust-default
+        model: trust-default
+        capabilities: [text]
+env:
+  DEEPSEEK_API_KEY: deepseek-secret
+  TRUST_API_KEY: trust-secret
+policy:
+  text:
+    provider: deepseek
+    profile: deepseek-v4-flash
+`); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"-q", "-m", "trust", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "trust default\n" {
+		t.Fatalf("stdout = %q, want \"trust default\\n\"", stdout.String())
+	}
+}
+
+func TestRunRejectsInvalidModelFlag(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected model request %s", request.URL.String())
+		return nil, nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, "model:\n  provider: deepseek\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []string{"/deepseek-v4-flash", "a/b/c", "a//b"} {
+		err := Run(context.Background(), []string{"-q", "-m", spec, "--config", configPath, "hello"}, IO{
+			Stdin:           strings.NewReader(""),
+			Stdout:          io.Discard,
+			Stderr:          io.Discard,
+			StdinIsTerminal: true,
+			HTTPClient:      httpClient,
+		})
+		if err == nil || !strings.Contains(err.Error(), "expected PROVIDER or PROVIDER/PROFILE") {
+			t.Fatalf("-m %q error = %v", spec, err)
+		}
+	}
+}
+
 // schema. Production config loading intentionally provides no such legacy
 // conversion; this helper keeps the behavioral CLI tests focused on Run.
 func writeTestConfig(t *testing.T, path, contents string) error {

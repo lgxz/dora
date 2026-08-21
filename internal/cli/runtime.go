@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -37,10 +39,14 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 	if err != nil {
 		return config.Config{}, nil, err
 	}
-	textConstraints := dora.Constraints{
-		Provider: cfg.Policy.Text.Provider,
-		Profile:  cfg.Policy.Text.Profile,
-		Needs:    []dora.Capability{dora.CapabilityText},
+	textConstraints := buildTextConstraints(cfg)
+	if opts.model != "" {
+		provider, profile, err := parseModelSpec(opts.model)
+		if err != nil {
+			return config.Config{}, nil, fmt.Errorf("invalid -m %q (expected PROVIDER or PROVIDER/PROFILE): %w", opts.model, err)
+		}
+		textConstraints.Provider = provider
+		textConstraints.Profile = profile
 	}
 	imageConstraints := dora.Constraints{
 		Provider: cfg.Policy.Image.Provider,
@@ -66,6 +72,40 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 		cfg.Agent.MaxRounds = opts.maxRounds
 	}
 	return cfg, r, nil
+}
+
+// buildTextConstraints constructs the text model constraints from the
+// configured policy. The -m flag may later override the provider and profile
+// on the returned value.
+func buildTextConstraints(cfg config.Config) dora.Constraints {
+	return dora.Constraints{
+		Provider: cfg.Policy.Text.Provider,
+		Profile:  cfg.Policy.Text.Profile,
+		Needs:    []dora.Capability{dora.CapabilityText},
+	}
+}
+
+// parseModelSpec splits a PROVIDER/PROFILE model override into its provider and
+// profile components. Supported forms are "provider/profile", "provider/" and
+// "provider" (the latter two select the provider's default profile). Everything
+// else returns an error.
+func parseModelSpec(s string) (provider, profile string, err error) {
+	if s == "" {
+		return "", "", errors.New("empty model spec")
+	}
+	slash := strings.IndexByte(s, '/')
+	if slash < 0 {
+		return s, "", nil
+	}
+	provider = s[:slash]
+	profile = s[slash+1:]
+	if provider == "" {
+		return "", "", errors.New("missing provider")
+	}
+	if strings.Contains(profile, "/") {
+		return "", "", errors.New("model spec must contain at most one '/'")
+	}
+	return provider, profile, nil
 }
 
 func openSession(ctx context.Context, path string) (*sqlitesession.Store, bool, error) {

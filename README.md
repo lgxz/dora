@@ -343,6 +343,21 @@ model's setting with one of `off`, `minimal`, `low`, `medium`, or `high`:
 ./dora --thinking high "Solve a hard problem"
 ```
 
+For one invocation, `-m`/`--model` overrides the configured conversation model
+as `PROVIDER/PROFILE`, selecting a provider and an optional profile by name. A
+bare `PROVIDER` (or trailing slash) selects that provider's default profile (the
+first profile matching the requested capabilities). It does not change the
+configuration file:
+
+```sh
+./dora -m trust/deepseek-v4-flash "Explain this repository"
+./dora -m deepseek "Explain this repository"
+```
+
+`-m` only affects the text conversation model; the image and skill models are
+unaffected. Unknown provider or profile names, or a provider with no usable API
+key, result in `router: no model satisfies the constraints`.
+
 Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:
 
@@ -422,7 +437,7 @@ Omit
 `--session`/`-s` for an ephemeral turn. Session databases can contain commands
 and tool output, so treat them as sensitive.
 
-Use `--config`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
+Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
 
 ### Skills
