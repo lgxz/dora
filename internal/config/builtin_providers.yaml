@@ -12,6 +12,10 @@ providers:
         capabilities: [text]
         thinking: high
         preserve_thinking: true
+      - name: deepseek-v4-flash-vision
+        model: deepseek-v4-flash-vision-exp
+        context_window: 48000000
+        capabilities: [image_input]
 
   - name: trust
     base_url: https://api.trustoken.cn/v1
@@ -24,4 +28,4 @@ providers:
         capabilities: [text]
       - name: qwen3.7-plus
         context_window: 1000000
-        capabilities: [text]
+        capabilities: [image_input, text]
