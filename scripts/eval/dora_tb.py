@@ -128,17 +128,10 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     SYSTEM_DEPENDENCIES: tuple[str, ...] = ("curl", "python3", "ca_certificates")
 
     @staticmethod
+    @override
     def name() -> str:
         """Static agent name, used by Harbor via ``import_path``."""
-        return "dora"
-
-    def version(self) -> str | None:
-        """Return the dora version string, if known.
-
-        A concrete value is resolved at install time from ``dora --version``;
-        statically we return None so Harbor does not assume any version.
-        """
-        return None
+        return "aipymini"
 
     @override
     def get_version_command(self) -> str | None:
@@ -228,7 +221,10 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
         The instruction is written into a random shell environment variable and
         piped to dora's stdin (following the ``claude_code`` pattern), the
-        merged output is teed to ``/logs/agent/dora.txt``.
+        merged output is teed to ``/logs/agent/dora.txt``. Passing the
+        instruction via stdin (rather than as a command-line positional
+        argument) avoids Go's ``flag`` parser treating an instruction that
+        starts with ``-`` (e.g. a Markdown list item) as a flag.
         """
         if _HARBOR_IMPORT_ERROR is not None:
             raise RuntimeError(
@@ -250,11 +246,22 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         # self.extra_env (from AgentConfig.env / --ae) is layered onto each exec
         # by the orchestrator via scoped_exec_env; no need to splice it ourselves.
 
-        command = (
-            f"{BINARY_PATH} {extra_flags} {shlex.quote(instruction)} 2>&1 | tee /logs/agent/dora.txt"
-        )
+        # Pass the instruction to dora via stdin instead of argv. dora parses
+        # argv with Go's flag package, which would reject an instruction that
+        # starts with '-' (e.g. a Markdown list item). A random var name avoids
+        # leaking/conflicting; unset keeps the value out of the process env.
+        instruction_shell_var = "dora_instruction_" + uuid.uuid4().hex
+        instruction_env_var = instruction_shell_var.upper()
+        run_env[instruction_env_var] = instruction
 
-        self.logger.info("Running dora with CLI flags: %s", cli_flags)
+        command = (
+            "export PATH=\"$HOME/.local/bin:$PATH\"; "
+            f"{instruction_shell_var}=\"${instruction_env_var}\"; "
+            f"unset {instruction_env_var}; "
+            "set -o pipefail; "
+            f'printf "%s" "${{{instruction_shell_var}}}" | '
+            f"{BINARY_PATH} {extra_flags} 2>&1 | stdbuf -oL tee /logs/agent/dora.txt"
+        )
 
         try:
             result = await self.exec_as_agent(environment, command=command, env=run_env)
