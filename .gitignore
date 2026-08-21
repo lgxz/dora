@@ -3,4 +3,5 @@
 /build/
 /.release/
 /dist/
-/jobs/
+jobs/
+__pycache__/
