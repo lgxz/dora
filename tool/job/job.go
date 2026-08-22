@@ -30,13 +30,13 @@ func New(manager *job.Manager) *Tool {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "job",
-		Description: "Manage background jobs",
+		Description: "Manage background jobs (kill, list, poll). Poll with wait_seconds:0 returns a non-blocking status snapshot.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["status", "kill", "list", "poll"]
+      "enum": ["kill", "list", "poll"]
     },
     "job_id": {
       "type": "string",
@@ -45,7 +45,7 @@ func (t *Tool) Spec() dora.ToolSpec {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "For poll: max time to wait for the job to finish. Default 60."
+      "description": "For poll: max time to wait for the job to finish. Use 0 for a non-blocking status snapshot that returns immediately. Default 60."
     }
   },
   "required": ["action"],
@@ -65,13 +65,6 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	}
 
 	switch input.Action {
-	case "status":
-		job, ok := t.manager.Status(input.JobID)
-		if !ok {
-			return t.result(`{"error": "job not found"}`), nil
-		}
-		return t.result(encodeJob(job)), nil
-
 	case "kill":
 		if err := t.manager.Kill(input.JobID); err != nil {
 			return t.result(fmt.Sprintf(`{"error": %q}`, err.Error())), nil
@@ -143,11 +136,6 @@ func decodeInput(raw json.RawMessage) (input, error) {
 		return input{}, fmt.Errorf("job: decode input: %w", err)
 	}
 	return value, nil
-}
-
-func encodeJob(j *job.Job) string {
-	return fmt.Sprintf(`{"job_id": %q, "status": %q, "exit_code": %d, "command": %q}`,
-		j.ID, j.Status, j.ExitCode, j.Command)
 }
 
 var _ dora.Tool = (*Tool)(nil)

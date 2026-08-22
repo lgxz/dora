@@ -157,14 +157,6 @@ func (m *Manager) Adopt(
 	return job
 }
 
-// Status returns a job by ID.
-func (m *Manager) Status(id string) (*Job, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	job, ok := m.jobs[id]
-	return job, ok
-}
-
 // Kill terminates a running job.
 func (m *Manager) Kill(id string) error {
 	m.mu.Lock()
