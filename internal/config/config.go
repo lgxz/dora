@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	maxToolTimeoutSeconds     = 3600
 	defaultModelContextWindow = 1 << 20
 )
 
@@ -95,15 +94,13 @@ type Tools struct {
 
 // Bash configures the Bash command tool. Nil Enabled uses the platform default.
 type Bash struct {
-	Enabled        *bool `yaml:"enabled,omitempty"`
-	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // PowerShell configures the PowerShell command tool. Nil Enabled uses the
 // platform default.
 type PowerShell struct {
-	Enabled        *bool `yaml:"enabled,omitempty"`
-	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // Skills configures local directories containing SKILL.md packages. Skills
@@ -215,18 +212,6 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if err := cfg.resolveProviders(); err != nil {
 		return err
-	}
-	if cfg.Tools.Bash.TimeoutSeconds < 0 {
-		return errors.New("tools.bash.timeout_seconds cannot be negative")
-	}
-	if cfg.Tools.Bash.TimeoutSeconds > maxToolTimeoutSeconds {
-		return fmt.Errorf("tools.bash.timeout_seconds cannot exceed %d", maxToolTimeoutSeconds)
-	}
-	if cfg.Tools.PowerShell.TimeoutSeconds < 0 {
-		return errors.New("tools.powershell.timeout_seconds cannot be negative")
-	}
-	if cfg.Tools.PowerShell.TimeoutSeconds > maxToolTimeoutSeconds {
-		return fmt.Errorf("tools.powershell.timeout_seconds cannot exceed %d", maxToolTimeoutSeconds)
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")

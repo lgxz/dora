@@ -78,11 +78,11 @@ Key constraints on dependency direction:
 | `model/registry` | Catalog registration/query (order = priority) and per-protocol adapter construction | `NewCatalog`, `Catalog.Providers`, `Construct` |
 | `model/router` | Constraint-based selection, `dora.Model` routing with caching; internal `selection` | `New`, `Router.Generate`, `Router.GenerateStream`, `Router.View`, `Router.SetThinking` |
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
-| `tool/bash` | Executes Bash within the current directory and under timeout and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/bash` | Executes Bash within the current directory with background transition and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/viewimage` | Loads a local image file or remote URL and returns a text description via a transient visual model | `New`, `Tool.SetViewer`, `Tool.Spec`, `Tool.Execute` |
-| `tool/internal/commandexec` | Implements input validation, timeout, cancellation, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/internal/commandexec` | Implements input validation, process execution, background transition via wait_seconds, output limits, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
 
 ## Core Interfaces
 
@@ -322,11 +322,10 @@ The tool execution result contains the skill's absolute directory and the comple
 
 Bash is enabled automatically on Linux and macOS and disabled automatically on other platforms. When it is auto-enabled but the `bash` executable cannot be found, the CLI skips the tool; `enabled: true` can explicitly enable it on any platform, in which case a missing executable causes startup to fail. Discovery currently only checks `PATH` and does not launch a shell to probe the runtime environment. When the tool is available, each invocation executes via `bash -lc` in Dora's current directory; when the model needs to change directories, it uses `cd` within the command. The tool has the following boundaries:
 
-- a default timeout of 120 seconds;
-- each tool call can override the configured default with `timeout_seconds`, ranging from 1 to 3600 seconds;
+- a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 60; `0` moves it to the background immediately);
 - stdout and stderr are each subject to output limits;
-- context cancellation terminates the child process;
-- the result returns the exit code, stdout, stderr, timeout, and truncation status as JSON;
+- context cancellation does not terminate an adopted background process (it uses its own lifetime);
+- the result returns the exit code, stdout, stderr, and truncation status as JSON; a moved-to-background result returns a `job_id`;
 - a non-zero command exit is a tool result the model can handle; infrastructure errors such as startup failures are returned as Go errors.
 
 Bash is not a security sandbox. Enabling it is equivalent to allowing the model to execute commands with the system privileges of the Dora process.
@@ -335,9 +334,9 @@ Bash is not a security sandbox. Enabling it is equivalent to allowing the model 
 
 PowerShell is a separate `powershell` tool from Bash, and its input Schema likewise accepts only `command`, preventing the model from mixing the syntax of the two shells in a single call. It is enabled automatically on Windows and disabled automatically on other platforms, and looks for `pwsh` and then `powershell.exe` in order. In automatic mode, when neither exists the CLI skips the tool; when explicitly enabled, it reports an error. Bash and PowerShell can be exposed simultaneously only when the user explicitly overrides the platform policy.
 
-PowerShell executes commands in Dora's current directory using `-NoLogo -NoProfile -NonInteractive -Command`, and the model uses `Set-Location` within the command to change directories. It shares the same 120-second configured default timeout, the 1-to-3600-second per-call override range, output limits, and structured results as Bash, and is likewise not a security sandbox.
+PowerShell executes commands in Dora's current directory using `-NoLogo -NoProfile -NonInteractive -Command`, and the model uses `Set-Location` within the command to change directories. It shares the same `wait_seconds` background behavior, output limits, and structured results as Bash, and is likewise not a security sandbox.
 
-Bash and PowerShell remain separate public tools with separate shell-launch policies, and both delegate to `tool/internal/commandexec` for input validation, timeout and cancellation, process execution, output truncation, and result encoding. This internal package cannot be imported from outside the module.
+Bash and PowerShell remain separate public tools with separate shell-launch policies, and both delegate to `tool/internal/commandexec` for input validation, process execution, output truncation, and result encoding. This internal package cannot be imported from outside the module.
 
 ## Configuration and Paths
 

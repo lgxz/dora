@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
@@ -21,7 +20,6 @@ var ErrUnavailable = errors.New("bash: executable unavailable")
 
 // Config controls Bash command execution.
 type Config struct {
-	Timeout        time.Duration
 	MaxOutputBytes int
 	// JobManager is required and enables background execution via wait_seconds.
 	JobManager *job.Manager
@@ -33,7 +31,7 @@ type Tool struct {
 }
 
 // New creates a Bash tool. Commands inherit the process's current directory.
-// Zero timeout and output limit values use safe defaults.
+// Zero output limit uses a safe default.
 func New(cfg Config) (*Tool, error) {
 	binary, err := exec.LookPath("bash")
 	if err != nil {
@@ -48,7 +46,6 @@ func New(cfg Config) (*Tool, error) {
 		Description:    fmt.Sprintf("Execute Bash command on %s/%s.", runtime.GOOS, runtime.GOARCH),
 		Binary:         binary,
 		CommandArgs:    commandArgs,
-		Timeout:        cfg.Timeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
 		JobManager:     cfg.JobManager,
 	})

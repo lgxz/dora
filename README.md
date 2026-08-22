@@ -528,10 +528,8 @@ or set it explicitly to override the platform default:
 tools:
   bash:
     enabled: false
-    timeout_seconds: 120
   powershell:
     enabled: true
-    timeout_seconds: 120
 ```
 
 Automatic tools whose executable is absent are skipped. A tool explicitly
@@ -541,10 +539,10 @@ the shell to probe its runtime environment.
 
 The Bash tool runs `bash -lc` in Dora's current directory. The model can use
 `cd` inside a command when it needs another directory. The tool returns exit
-code, stdout, stderr, timeout, and truncation information to the model as JSON.
-Output is limited to 1 MiB per stream. This tool grants the model the same
-filesystem and process permissions as the `dora` process, so disable it unless
-you trust the environment in which Dora runs.
+code, stdout, stderr, and truncation information to the model as JSON. Output
+is limited to 1 MiB per stream. This tool grants the model the same filesystem
+and process permissions as the `dora` process, so disable it unless you trust
+the environment in which Dora runs.
 
 The independent `powershell` tool prefers PowerShell Core (`pwsh`) and falls
 back to Windows PowerShell (`powershell.exe`). If both tools are explicitly
@@ -553,18 +551,19 @@ enabled, they are exposed separately so their command syntaxes remain distinct.
 PowerShell also starts in Dora's current directory and can use `Set-Location`
 inside a command when needed.
 
-Both command tools accept an optional per-command timeout. It overrides the
-configured default for that call and cannot exceed 3600 seconds:
+Both command tools use a single `wait_seconds` knob. It is the maximum number
+of seconds to wait for the command to finish before moving it to the
+background; once in the background it continues running (it is not terminated)
+and Dora returns a `job_id` that the job tool can use to inspect it. By default
+(omitted) Dora waits 60 seconds, and a value of `0` moves the command to the
+background immediately:
 
 ```json
 {
   "command": "go build ./...",
-  "timeout_seconds": 300
+  "wait_seconds": 300
 }
 ```
-
-When omitted, `timeout_seconds` comes from the corresponding YAML tool setting,
-or defaults to 120 seconds when that setting is zero or absent.
 
 ## Image understanding
 

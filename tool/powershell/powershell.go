@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
@@ -19,7 +18,6 @@ var ErrUnavailable = errors.New("powershell: executable unavailable")
 
 // Config controls PowerShell command execution.
 type Config struct {
-	Timeout        time.Duration
 	MaxOutputBytes int
 	// JobManager is required and enables background execution via wait_seconds.
 	JobManager *job.Manager
@@ -46,7 +44,6 @@ func New(cfg Config) (*Tool, error) {
 		Description:    "Execute PowerShell command.",
 		Binary:         binary,
 		CommandArgs:    commandArgs,
-		Timeout:        cfg.Timeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
 		JobManager:     cfg.JobManager,
 	})

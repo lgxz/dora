@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lgxz/dora/internal/job"
 )
@@ -48,7 +47,7 @@ func TestNewReportsUnavailableExecutable(t *testing.T) {
 }
 
 func TestSpecIdentifiesBash(t *testing.T) {
-	tool, err := New(Config{Timeout: 45 * time.Second, JobManager: job.New()})
+	tool, err := New(Config{JobManager: job.New()})
 	if err != nil {
 		t.Fatal(err)
 	}

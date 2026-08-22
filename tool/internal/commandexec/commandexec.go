@@ -15,11 +15,7 @@ import (
 	"github.com/lgxz/dora/internal/job"
 )
 
-const (
-	defaultTimeout        = 60 * time.Second
-	maxTimeout            = time.Hour
-	defaultMaxOutputBytes = 1 << 20
-)
+const defaultMaxOutputBytes = 1 << 20
 
 // defaultWaitSeconds is applied when the caller omits wait_seconds.
 var defaultWaitSeconds = 60
@@ -30,7 +26,6 @@ type Config struct {
 	Description    string
 	Binary         string
 	CommandArgs    func(string) []string
-	Timeout        time.Duration
 	MaxOutputBytes int
 	// JobManager is required and enables background execution: a command that
 	// does not finish within wait_seconds is adopted as a background job and a
@@ -44,7 +39,6 @@ type Tool struct {
 	description    string
 	binary         string
 	commandArgs    func(string) []string
-	timeout        time.Duration
 	maxOutputBytes int
 	jobManager     *job.Manager
 }
@@ -53,16 +47,6 @@ type Tool struct {
 func New(cfg Config) (*Tool, error) {
 	if cfg.JobManager == nil {
 		return nil, fmt.Errorf("%s: job manager is required", cfg.Name)
-	}
-	timeout := cfg.Timeout
-	if timeout < 0 {
-		return nil, fmt.Errorf("%s: timeout cannot be negative", cfg.Name)
-	}
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	if timeout > maxTimeout {
-		return nil, fmt.Errorf("%s: timeout cannot exceed %s", cfg.Name, maxTimeout)
 	}
 	maxOutputBytes := cfg.MaxOutputBytes
 	if maxOutputBytes < 0 {
@@ -77,7 +61,6 @@ func New(cfg Config) (*Tool, error) {
 		description:    cfg.Description,
 		binary:         cfg.Binary,
 		commandArgs:    cfg.CommandArgs,
-		timeout:        timeout,
 		maxOutputBytes: maxOutputBytes,
 		jobManager:     cfg.JobManager,
 	}, nil

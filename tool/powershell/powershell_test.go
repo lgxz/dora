@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lgxz/dora/internal/job"
 )
@@ -50,7 +49,7 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecIdentifiesPowerShell(t *testing.T) {
-	tool, err := New(Config{Timeout: 120 * time.Second, JobManager: job.New()})
+	tool, err := New(Config{JobManager: job.New()})
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("PowerShell is not installed")
 	}

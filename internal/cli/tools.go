@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -88,7 +87,6 @@ func buildCommandTools(cfg config.Tools, jobManager *job.Manager) ([]dora.Tool, 
 			defaultPlatforms: []string{"darwin", "linux"},
 			create: func() (dora.Tool, error) {
 				return bashtool.New(bashtool.Config{
-					Timeout:    time.Duration(cfg.Bash.TimeoutSeconds) * time.Second,
 					JobManager: jobManager,
 				})
 			},
@@ -99,7 +97,6 @@ func buildCommandTools(cfg config.Tools, jobManager *job.Manager) ([]dora.Tool, 
 			defaultPlatforms: []string{"windows"},
 			create: func() (dora.Tool, error) {
 				return powershelltool.New(powershelltool.Config{
-					Timeout:    time.Duration(cfg.PowerShell.TimeoutSeconds) * time.Second,
 					JobManager: jobManager,
 				})
 			},

@@ -27,8 +27,8 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 	}
 }
 
-func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
-	tool := newTestTool(t, Config{Timeout: 45 * time.Second})
+func TestSpecReportsWaitSeconds(t *testing.T) {
+	tool := newTestTool(t, Config{})
 	spec := tool.Spec()
 	if spec.Name != "test-command" ||
 		!strings.Contains(spec.Description, "Execute a test command") ||
@@ -39,8 +39,6 @@ func TestSpecReportsConfiguredDefaultTimeout(t *testing.T) {
 
 func TestNewRejectsInvalidLimits(t *testing.T) {
 	for _, cfg := range []Config{
-		{Timeout: -time.Second},
-		{Timeout: time.Hour + time.Second},
 		{MaxOutputBytes: -1},
 	} {
 		cfg.Name = "test-command"
