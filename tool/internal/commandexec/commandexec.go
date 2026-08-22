@@ -21,6 +21,9 @@ const (
 	defaultMaxOutputBytes = 1 << 20
 )
 
+// defaultWaitSeconds is applied when the caller omits wait_seconds.
+var defaultWaitSeconds = 60
+
 // Config describes a command tool and controls its execution.
 type Config struct {
 	Name           string
@@ -29,8 +32,8 @@ type Config struct {
 	CommandArgs    func(string) []string
 	Timeout        time.Duration
 	MaxOutputBytes int
-	// JobManager, when set, enables background execution: a command that does
-	// not finish within wait_seconds is adopted as a background job and a
+	// JobManager is required and enables background execution: a command that
+	// does not finish within wait_seconds is adopted as a background job and a
 	// job_id is returned.
 	JobManager *job.Manager
 }
@@ -48,6 +51,9 @@ type Tool struct {
 
 // New creates a command execution tool.
 func New(cfg Config) (*Tool, error) {
+	if cfg.JobManager == nil {
+		return nil, fmt.Errorf("%s: job manager is required", cfg.Name)
+	}
 	timeout := cfg.Timeout
 	if timeout < 0 {
 		return nil, fmt.Errorf("%s: timeout cannot be negative", cfg.Name)
@@ -109,12 +115,20 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		return dora.ToolResult{}, err
 	}
 
-	// Background mode: wait up to wait_seconds, then adopt as a background job.
-	if t.jobManager != nil && input.WaitSeconds != nil && *input.WaitSeconds > 0 {
-		return t.executeWithBackground(ctx, input)
+	// Decide the execution mode. Since the job manager is always required,
+	// background mode is always available. wait_seconds defaults to
+	// defaultWaitSeconds (60); wait_seconds = 0 means "wait forever in the
+	// foreground" (no auto-transition to background).
+	waitSeconds := defaultWaitSeconds
+	if input.WaitSeconds != nil {
+		waitSeconds = *input.WaitSeconds
+	}
+	if waitSeconds > 0 {
+		return t.executeWithBackground(ctx, input, waitSeconds)
 	}
 
-	// Foreground mode (original behavior).
+	// Foreground-only mode (wait_seconds == 0): run with the configured timeout
+	// and never transition to background.
 	runCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 
@@ -160,8 +174,8 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 // executeWithBackground waits up to wait_seconds for the command to finish. If
 // it finishes in time, the result is returned. If not, the running process is
 // adopted as a background job (not restarted) and a job_id is returned.
-func (t *Tool) executeWithBackground(ctx context.Context, input input) (dora.ToolResult, error) {
-	waitDuration := time.Duration(*input.WaitSeconds) * time.Second
+func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSeconds int) (dora.ToolResult, error) {
+	waitDuration := time.Duration(waitSeconds) * time.Second
 
 	// Use an independent context for the process so the foreground wait
 	// timeout does not kill it when transitioning to background.

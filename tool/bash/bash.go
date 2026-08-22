@@ -23,7 +23,7 @@ var ErrUnavailable = errors.New("bash: executable unavailable")
 type Config struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
-	// JobManager, when set, enables background execution via wait_seconds.
+	// JobManager is required and enables background execution via wait_seconds.
 	JobManager *job.Manager
 }
 
@@ -38,6 +38,9 @@ func New(cfg Config) (*Tool, error) {
 	binary, err := exec.LookPath("bash")
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if cfg.JobManager == nil {
+		return nil, errors.New("bash: job manager is required")
 	}
 
 	core, err := commandexec.New(commandexec.Config{

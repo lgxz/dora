@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lgxz/dora/internal/job"
 )
 
 func TestNewReportsUnavailableExecutable(t *testing.T) {
@@ -20,7 +22,7 @@ func TestNewReportsUnavailableExecutable(t *testing.T) {
 }
 
 func TestExecuteReturnsCommandOutput(t *testing.T) {
-	tool, err := New(Config{})
+	tool, err := New(Config{JobManager: job.New()})
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("PowerShell is not installed")
 	}
@@ -48,7 +50,7 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 }
 
 func TestSpecIdentifiesPowerShell(t *testing.T) {
-	tool, err := New(Config{Timeout: 120 * time.Second})
+	tool, err := New(Config{Timeout: 120 * time.Second, JobManager: job.New()})
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip("PowerShell is not installed")
 	}

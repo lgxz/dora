@@ -45,9 +45,52 @@ func TestNewRejectsInvalidLimits(t *testing.T) {
 		{MaxOutputBytes: -1},
 	} {
 		cfg.Name = "test-command"
+		cfg.JobManager = job.New()
 		if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), "test-command:") {
 			t.Fatalf("New(%#v) error = %v", cfg, err)
 		}
+	}
+}
+
+func TestNewRequiresJobManager(t *testing.T) {
+	if _, err := New(Config{Name: "test-command"}); err == nil || !strings.Contains(err.Error(), "job manager is required") {
+		t.Fatalf("New without job manager error = %v", err)
+	}
+}
+
+func TestExecuteDefaultWaitUsesBackground(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	// Default wait_seconds transitions a command that exceeds it to the
+	// background instead of terminating it. Override the default to keep the
+	// test fast.
+	original := defaultWaitSeconds
+	defaultWaitSeconds = 1
+	t.Cleanup(func() { defaultWaitSeconds = original })
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep"}`))
+	output := toolResult.Content
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(output), &bg); err != nil {
+		t.Fatalf("decode background result: %v (output=%s)", err, output)
+	}
+	if bg.JobID == "" || bg.Status != "running" {
+		t.Fatalf("expected job_id + running, got %#v", bg)
+	}
+
+	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	if !ok {
+		t.Fatalf("job not found")
+	}
+	if done.Status != job.StatusDone {
+		t.Fatalf("expected done, got %s", done.Status)
 	}
 }
 
@@ -69,7 +112,8 @@ func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 func TestExecuteTimesOut(t *testing.T) {
 	tool := newTestTool(t, Config{Timeout: 20 * time.Millisecond})
 
-	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep"}`))
+	// wait_seconds = 0 forces foreground-only mode so the configured timeout applies.
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep","wait_seconds":0}`))
 
 	output := toolResult.Content
 	if err != nil {
@@ -150,7 +194,8 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 func TestExecuteTruncatesOutput(t *testing.T) {
 	tool := newTestTool(t, Config{MaxOutputBytes: 4})
 
-	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"output"}`))
+	// wait_seconds = 0 forces foreground-only mode so truncation applies.
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"output","wait_seconds":0}`))
 
 	output := toolResult.Content
 	if err != nil {
@@ -167,7 +212,8 @@ func TestExecuteHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := tool.Execute(ctx, json.RawMessage(`{"command":"hello"}`))
+	// wait_seconds = 0 forces foreground-only mode so cancellation is honored.
+	_, err := tool.Execute(ctx, json.RawMessage(`{"command":"hello","wait_seconds":0}`))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
@@ -175,6 +221,9 @@ func TestExecuteHonorsCancellation(t *testing.T) {
 
 func newTestTool(t *testing.T, cfg Config) *Tool {
 	t.Helper()
+	if cfg.JobManager == nil {
+		cfg.JobManager = job.New()
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

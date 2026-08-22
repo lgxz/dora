@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lgxz/dora/internal/job"
 )
 
 func TestExecuteReturnsCommandOutput(t *testing.T) {
-	tool, err := New(Config{})
+	tool, err := New(Config{JobManager: job.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func TestNewReportsUnavailableExecutable(t *testing.T) {
 }
 
 func TestSpecIdentifiesBash(t *testing.T) {
-	tool, err := New(Config{Timeout: 45 * time.Second})
+	tool, err := New(Config{Timeout: 45 * time.Second, JobManager: job.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
