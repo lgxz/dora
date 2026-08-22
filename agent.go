@@ -111,7 +111,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		notify(observer, Update{Kind: UpdateThinking})
 
 		request := Request{
-			Messages:     turn.Messages(),
+			Messages:     a.requestMessages(turn.Messages()),
 			Tools:        a.specs,
 			Continuation: turn.Continuation(),
 		}
