@@ -97,9 +97,13 @@ type StreamingModel interface {
     Model
     GenerateStream(context.Context, Request, func(ModelEvent)) (Response, error)
 }
+
+type ContextSize interface {
+    ContextSize() int
+}
 ```
 
-`Model` is the minimal interface that every model implementation must satisfy. `StreamingModel` is an optional capability; when the Agent detects it, it uses the streaming method, otherwise it falls back to `Generate`.
+`Model` is the minimal interface that every model implementation must satisfy. `StreamingModel` and `ContextSize` are optional capabilities: when the Agent detects `StreamingModel` it uses the streaming method, otherwise it falls back to `Generate`; when it detects `ContextSize` and the reported value is positive it uses it as the context byte budget for compaction, otherwise it falls back to `DefaultContextWindowBytes`. `ContextSize` reports an approximate context capacity in content bytes and leaves the `Model` and `StreamingModel` contracts unchanged.
 
 `Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls.
 
@@ -195,6 +199,7 @@ Current execution semantics:
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Declining does not persist the incomplete Turn. Non-interactive runs report the error directly.
 - The CLI creates every Turn with the content of `~/.dora/AGENTS.md` (or `$DORA_HOME/AGENTS.md`) as the system prompt when that file exists; otherwise no system message is sent. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
+- Before building a request for the model, the Agent compacts long histories: it always keeps the leading system/user messages and the most recent `defaultCompactionRounds` rounds (a round is an assistant message together with the tool messages it triggered, and is never split in half). Historical rounds are further compressed against the model-reported `contextWindow` byte budget by dropping images and truncating oversized content and JSON tool input; the current (last) round is retained unchanged. A non-positive budget disables truncation (images are still dropped). Truncation applies to a copy of the request messages, never rewriting the persisted Turn history.
 
 ## CLI Run Flow
 
@@ -357,7 +362,7 @@ The `DORA_HOME` environment variable can override the home directory and must be
 ### Adding a model provider
 
 1. A common OpenAI-protocol-compatible provider can register built-in connection defaults; profiles remain explicit catalog entries.
-2. A new protocol requires implementing `dora.StreamingModel` in a separate `model/<protocol>` package.
+2. A new protocol requires implementing `dora.StreamingModel` in a separate `model/<protocol>` package. If the adapter can report its context capacity, it may also implement `dora.ContextSize` so compaction can use the real budget instead of the default.
 3. Encapsulate protocol-specific state in `Continuation`; do not leak it into the Agent core.
 4. Create the implementation in the composition logic of `internal/cli`.
 5. Add tests for defaults, protocol conversion, error responses, and CLI assembly.
