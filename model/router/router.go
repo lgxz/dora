@@ -71,6 +71,16 @@ func (r *Router) Generate(ctx context.Context, req dora.Request) (dora.Response,
 	return r.textModel.Generate(ctx, req)
 }
 
+// ContextSize reports the text model's approximate context capacity in content
+// bytes from the selected profile. It implements dora.ContextSize. A nil or
+// non-positive profile value falls back to dora.DefaultContextWindowBytes.
+func (r *Router) ContextSize() int {
+	if r.textSel.profile.ContextWindow != nil && *r.textSel.profile.ContextWindow > 0 {
+		return *r.textSel.profile.ContextWindow
+	}
+	return dora.DefaultContextWindowBytes
+}
+
 // GenerateStream delegates to the cached text model when it supports streaming;
 // otherwise it falls back to Generate.
 func (r *Router) GenerateStream(ctx context.Context, req dora.Request, emit func(dora.ModelEvent)) (dora.Response, error) {

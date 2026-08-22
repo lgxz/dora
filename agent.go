@@ -34,6 +34,11 @@ type Agent struct {
 	tools     map[string]Tool
 	specs     []ToolSpec
 	maxRounds int
+	// contextWindow is the model's approximate context capacity in content
+	// bytes, probed once at construction and cached for compaction to consume
+	// without re-asserting each round. It falls back to
+	// DefaultContextWindowBytes when the model does not report a positive size.
+	contextWindow int
 }
 
 // AgentConfig controls safeguards for the model-tool loop. A zero
@@ -59,11 +64,18 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
 	}
+	contextWindow := DefaultContextWindowBytes
+	if cs, ok := model.(ContextSize); ok {
+		if v := cs.ContextSize(); v > 0 {
+			contextWindow = v
+		}
+	}
 	a := &Agent{
-		model:     model,
-		tools:     make(map[string]Tool, len(tools)),
-		specs:     make([]ToolSpec, 0, len(tools)),
-		maxRounds: maxRounds,
+		model:         model,
+		tools:         make(map[string]Tool, len(tools)),
+		specs:         make([]ToolSpec, 0, len(tools)),
+		maxRounds:     maxRounds,
+		contextWindow: contextWindow,
 	}
 
 	for _, tool := range tools {

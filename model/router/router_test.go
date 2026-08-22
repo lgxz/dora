@@ -158,3 +158,40 @@ func (c *captureModel) Generate(_ context.Context, req dora.Request) (dora.Respo
 	}
 	return dora.Response{Content: "ok"}, nil
 }
+
+func TestRouterContextSize(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(*registry.Profile)
+		want int
+	}{
+		{"nil", func(p *registry.Profile) {}, dora.DefaultContextWindowBytes},
+		{"zero", func(p *registry.Profile) { p.ContextWindow = intPtr(0) }, dora.DefaultContextWindowBytes},
+		{"negative", func(p *registry.Profile) { p.ContextWindow = intPtr(-5) }, dora.DefaultContextWindowBytes},
+		{"positive", func(p *registry.Profile) { p.ContextWindow = intPtr(8192) }, 8192},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cat := routerCatalog(t)
+			var gotProfile registry.Profile
+			r, err := newRouter(cat, func(p registry.ProviderConfig, m registry.Profile) (dora.Model, error) {
+				gotProfile = m
+				return &stubModel{content: "hello"}, nil
+			},
+				dora.Constraints{Needs: []dora.Capability{dora.CapabilityText}},
+				dora.Constraints{Needs: []dora.Capability{dora.CapabilityImageInput}},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Mutate the selection profile through the cache we captured.
+			tc.set(&gotProfile)
+			r.textSel.profile = gotProfile
+			if got := r.ContextSize(); got != tc.want {
+				t.Fatalf("ContextSize() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func intPtr(v int) *int { return &v }

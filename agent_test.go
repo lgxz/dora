@@ -928,3 +928,51 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 		t.Fatalf("result = %#v, calls = %d", result, calls)
 	}
 }
+
+// contextSizeModel is a Model stub that also reports a context size, used to
+// verify Agent caches the probed ContextSize value at construction.
+type contextSizeModel struct {
+	modelFunc
+	size int
+}
+
+func (m contextSizeModel) ContextSize() int { return m.size }
+
+func TestAgentCapturesContextWindow(t *testing.T) {
+	model := contextSizeModel{modelFunc: modelFunc(noopGenerate), size: 4096}
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.contextWindow != 4096 {
+		t.Fatalf("contextWindow = %d, want 4096", agent.contextWindow)
+	}
+}
+
+func TestAgentFallsBackToDefaultContextWindow(t *testing.T) {
+	// modelFunc does not implement ContextSize; the agent must use the default.
+	agent, err := New(modelFunc(noopGenerate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.contextWindow != DefaultContextWindowBytes {
+		t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowBytes)
+	}
+}
+
+func TestAgentFallsBackWhenContextSizeNonPositive(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		model := contextSizeModel{modelFunc: modelFunc(noopGenerate), size: size}
+		agent, err := New(model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if agent.contextWindow != DefaultContextWindowBytes {
+			t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowBytes)
+		}
+	}
+}
+
+func noopGenerate(context.Context, Request) (Response, error) {
+	return Response{Content: "done"}, nil
+}
