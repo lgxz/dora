@@ -15,18 +15,15 @@ import (
 	"github.com/lgxz/dora/internal/job"
 )
 
-const defaultMaxOutputBytes = 1 << 20
-
 // defaultWaitSeconds is applied when the caller omits wait_seconds.
 var defaultWaitSeconds = 60
 
 // Config describes a command tool and controls its execution.
 type Config struct {
-	Name           string
-	Description    string
-	Binary         string
-	CommandArgs    func(string) []string
-	MaxOutputBytes int
+	Name        string
+	Description string
+	Binary      string
+	CommandArgs func(string) []string
 	// JobManager is required and enables background execution: a command that
 	// does not finish within wait_seconds is adopted as a background job and a
 	// job_id is returned.
@@ -35,12 +32,11 @@ type Config struct {
 
 // Tool executes commands using a configured executable.
 type Tool struct {
-	name           string
-	description    string
-	binary         string
-	commandArgs    func(string) []string
-	maxOutputBytes int
-	jobManager     *job.Manager
+	name        string
+	description string
+	binary      string
+	commandArgs func(string) []string
+	jobManager  *job.Manager
 }
 
 // New creates a command execution tool.
@@ -48,21 +44,12 @@ func New(cfg Config) (*Tool, error) {
 	if cfg.JobManager == nil {
 		return nil, fmt.Errorf("%s: job manager is required", cfg.Name)
 	}
-	maxOutputBytes := cfg.MaxOutputBytes
-	if maxOutputBytes < 0 {
-		return nil, fmt.Errorf("%s: maximum output bytes cannot be negative", cfg.Name)
-	}
-	if maxOutputBytes == 0 {
-		maxOutputBytes = defaultMaxOutputBytes
-	}
-
 	return &Tool{
-		name:           cfg.Name,
-		description:    cfg.Description,
-		binary:         cfg.Binary,
-		commandArgs:    cfg.CommandArgs,
-		maxOutputBytes: maxOutputBytes,
-		jobManager:     cfg.JobManager,
+		name:        cfg.Name,
+		description: cfg.Description,
+		binary:      cfg.Binary,
+		commandArgs: cfg.CommandArgs,
+		jobManager:  cfg.JobManager,
 	}, nil
 }
 
@@ -143,9 +130,8 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 		procCancel()
 		stdout, stderr := out.Drain()
 		result := commandResult{
-			Stdout:    stdout,
-			Stderr:    stderr,
-			Truncated: false,
+			Stdout: stdout,
+			Stderr: stderr,
 		}
 		switch {
 		case runErr == nil:
@@ -203,36 +189,9 @@ func decodeInput(name string, raw json.RawMessage) (input, error) {
 }
 
 type commandResult struct {
-	ExitCode  int    `json:"exit_code"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	TimedOut  bool   `json:"timed_out"`
-	Truncated bool   `json:"truncated"`
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
 }
-
-type limitedBuffer struct {
-	buffer    bytes.Buffer
-	remaining int
-	truncated bool
-}
-
-func newLimitedBuffer(limit int) *limitedBuffer {
-	return &limitedBuffer{remaining: limit}
-}
-
-func (b *limitedBuffer) Write(value []byte) (int, error) {
-	written := len(value)
-	if len(value) > b.remaining {
-		value = value[:b.remaining]
-		b.truncated = true
-	}
-	_, _ = b.buffer.Write(value)
-	b.remaining -= len(value)
-	return written, nil
-}
-
-func (b *limitedBuffer) String() string { return b.buffer.String() }
-
-func (b *limitedBuffer) Truncated() bool { return b.truncated }
 
 var _ dora.Tool = (*Tool)(nil)

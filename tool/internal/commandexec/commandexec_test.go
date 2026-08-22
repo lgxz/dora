@@ -37,18 +37,6 @@ func TestSpecReportsWaitSeconds(t *testing.T) {
 	}
 }
 
-func TestNewRejectsInvalidLimits(t *testing.T) {
-	for _, cfg := range []Config{
-		{MaxOutputBytes: -1},
-	} {
-		cfg.Name = "test-command"
-		cfg.JobManager = job.New()
-		if _, err := New(cfg); err == nil || !strings.HasPrefix(err.Error(), "test-command:") {
-			t.Fatalf("New(%#v) error = %v", cfg, err)
-		}
-	}
-}
-
 func TestNewRequiresJobManager(t *testing.T) {
 	if _, err := New(Config{Name: "test-command"}); err == nil || !strings.Contains(err.Error(), "job manager is required") {
 		t.Fatalf("New without job manager error = %v", err)

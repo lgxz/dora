@@ -18,7 +18,6 @@ var ErrUnavailable = errors.New("powershell: executable unavailable")
 
 // Config controls PowerShell command execution.
 type Config struct {
-	MaxOutputBytes int
 	// JobManager is required and enables background execution via wait_seconds.
 	JobManager *job.Manager
 }
@@ -44,7 +43,6 @@ func New(cfg Config) (*Tool, error) {
 		Description:    "Execute PowerShell command.",
 		Binary:         binary,
 		CommandArgs:    commandArgs,
-		MaxOutputBytes: cfg.MaxOutputBytes,
 		JobManager:     cfg.JobManager,
 	})
 	if err != nil {

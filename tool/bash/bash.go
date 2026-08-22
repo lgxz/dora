@@ -20,7 +20,6 @@ var ErrUnavailable = errors.New("bash: executable unavailable")
 
 // Config controls Bash command execution.
 type Config struct {
-	MaxOutputBytes int
 	// JobManager is required and enables background execution via wait_seconds.
 	JobManager *job.Manager
 }
@@ -31,7 +30,6 @@ type Tool struct {
 }
 
 // New creates a Bash tool. Commands inherit the process's current directory.
-// Zero output limit uses a safe default.
 func New(cfg Config) (*Tool, error) {
 	binary, err := exec.LookPath("bash")
 	if err != nil {
@@ -46,7 +44,6 @@ func New(cfg Config) (*Tool, error) {
 		Description:    fmt.Sprintf("Execute Bash command on %s/%s.", runtime.GOOS, runtime.GOARCH),
 		Binary:         binary,
 		CommandArgs:    commandArgs,
-		MaxOutputBytes: cfg.MaxOutputBytes,
 		JobManager:     cfg.JobManager,
 	})
 	if err != nil {

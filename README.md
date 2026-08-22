@@ -539,10 +539,9 @@ the shell to probe its runtime environment.
 
 The Bash tool runs `bash -lc` in Dora's current directory. The model can use
 `cd` inside a command when it needs another directory. The tool returns exit
-code, stdout, stderr, and truncation information to the model as JSON. Output
-is limited to 1 MiB per stream. This tool grants the model the same filesystem
-and process permissions as the `dora` process, so disable it unless you trust
-the environment in which Dora runs.
+code, stdout, and stderr to the model as JSON. This tool grants the model the
+same filesystem and process permissions as the `dora` process, so disable it
+unless you trust the environment in which Dora runs.
 
 The independent `powershell` tool prefers PowerShell Core (`pwsh`) and falls
 back to Windows PowerShell (`powershell.exe`). If both tools are explicitly
