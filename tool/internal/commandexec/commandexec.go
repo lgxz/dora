@@ -98,7 +98,7 @@ func (t *Tool) Spec() dora.ToolSpec {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max seconds to wait for completion before moving the command to the background. Default 60"
+      "description": "Seconds to wait for completion before moving the command to the background. 0 moves it to the background immediately. Omitted (or negative) uses the default of 60. Default 60"
     }
   },
   "required": ["command"],
@@ -115,60 +115,19 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		return dora.ToolResult{}, err
 	}
 
-	// Decide the execution mode. Since the job manager is always required,
-	// background mode is always available. wait_seconds defaults to
-	// defaultWaitSeconds (60); wait_seconds = 0 means "wait forever in the
-	// foreground" (no auto-transition to background).
+	// Every command runs through executeWithBackground (the only execution
+	// path); there is no pure-foreground branch. wait_seconds selects how long
+	// to wait before adopting the command as a background job: omitted or
+	// negative uses the default (60), 0 adopts immediately, and a positive
+	// value waits that many seconds before adopting.
 	waitSeconds := defaultWaitSeconds
 	if input.WaitSeconds != nil {
 		waitSeconds = *input.WaitSeconds
 	}
-	if waitSeconds > 0 {
-		return t.executeWithBackground(ctx, input, waitSeconds)
+	if waitSeconds < 0 {
+		waitSeconds = defaultWaitSeconds
 	}
-
-	// Foreground-only mode (wait_seconds == 0): run with the configured timeout
-	// and never transition to background.
-	runCtx, cancel := context.WithTimeout(ctx, t.timeout)
-	defer cancel()
-
-	stdout := newLimitedBuffer(t.maxOutputBytes)
-	stderr := newLimitedBuffer(t.maxOutputBytes)
-	command := exec.CommandContext(runCtx, t.binary, t.commandArgs(input.Command)...)
-	command.Stdout = stdout
-	command.Stderr = stderr
-	command.WaitDelay = time.Second
-
-	runErr := command.Run()
-	if err := ctx.Err(); err != nil {
-		return dora.ToolResult{}, err
-	}
-
-	result := commandResult{
-		Stdout:    stdout.String(),
-		Stderr:    stderr.String(),
-		Truncated: stdout.Truncated() || stderr.Truncated(),
-	}
-
-	switch {
-	case runErr == nil:
-		result.ExitCode = 0
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		result.ExitCode = -1
-		result.TimedOut = true
-	default:
-		var exitError *exec.ExitError
-		if !errors.As(runErr, &exitError) {
-			return dora.ToolResult{}, fmt.Errorf("%s: execute command: %w", t.name, runErr)
-		}
-		result.ExitCode = exitError.ExitCode()
-	}
-
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
-	}
-	return t.result(string(encoded)), nil
+	return t.executeWithBackground(ctx, input, waitSeconds)
 }
 
 // executeWithBackground waits up to wait_seconds for the command to finish. If
@@ -249,9 +208,6 @@ func decodeInput(name string, raw json.RawMessage) (input, error) {
 	}
 	if value.Command == "" {
 		return input{}, fmt.Errorf("%s: command is required", name)
-	}
-	if value.WaitSeconds != nil && *value.WaitSeconds < 0 {
-		return input{}, fmt.Errorf("%s: wait_seconds must be non-negative", name)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {

@@ -3,7 +3,6 @@ package commandexec
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -94,6 +93,66 @@ func TestExecuteDefaultWaitUsesBackground(t *testing.T) {
 	}
 }
 
+func TestExecuteZeroWaitAdoptsImmediately(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	// wait_seconds = 0 moves the command to the background immediately.
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep","wait_seconds":0}`))
+	output := toolResult.Content
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(output), &bg); err != nil {
+		t.Fatalf("decode background result: %v (output=%s)", err, output)
+	}
+	if bg.JobID == "" || bg.Status != "running" {
+		t.Fatalf("expected immediate job_id + running, got %#v", bg)
+	}
+	if !jm.HasActiveJobs() {
+		t.Fatalf("expected active job after immediate adoption")
+	}
+
+	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	if !ok {
+		t.Fatalf("job not found")
+	}
+	if done.Status != job.StatusDone {
+		t.Fatalf("expected done, got %s", done.Status)
+	}
+}
+
+func TestExecuteNegativeWaitDefaults(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	// A negative wait_seconds falls back to the default (60) and uses the
+	// background path. Override the default so a long command transitions.
+	original := defaultWaitSeconds
+	defaultWaitSeconds = 1
+	t.Cleanup(func() { defaultWaitSeconds = original })
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"long-sleep","wait_seconds":-5}`))
+	output := toolResult.Content
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(output), &bg); err != nil {
+		t.Fatalf("decode background result: %v (output=%s)", err, output)
+	}
+	if bg.JobID == "" || bg.Status != "running" {
+		t.Fatalf("expected job_id + running after negative wait, got %#v", bg)
+	}
+}
+
 func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 	tool := newTestTool(t, Config{})
 
@@ -105,22 +164,6 @@ func TestExecuteReturnsNonzeroExitToModel(t *testing.T) {
 	}
 	result := decodeResult(t, output)
 	if result.ExitCode != 7 || result.Stderr != "problem" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestExecuteTimesOut(t *testing.T) {
-	tool := newTestTool(t, Config{Timeout: 20 * time.Millisecond})
-
-	// wait_seconds = 0 forces foreground-only mode so the configured timeout applies.
-	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep","wait_seconds":0}`))
-
-	output := toolResult.Content
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := decodeResult(t, output)
-	if !result.TimedOut || result.ExitCode != -1 {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -183,7 +226,6 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 	tool := newTestTool(t, Config{})
 	for _, raw := range []string{
 		`{"command":"hello","extra":1}`,
-		`{"command":"hello","wait_seconds":-1}`,
 	} {
 		if _, err := tool.Execute(context.Background(), json.RawMessage(raw)); err == nil {
 			t.Fatalf("Execute(%s) succeeded", raw)
@@ -191,30 +233,15 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestExecuteTruncatesOutput(t *testing.T) {
-	tool := newTestTool(t, Config{MaxOutputBytes: 4})
-
-	// wait_seconds = 0 forces foreground-only mode so truncation applies.
-	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"output","wait_seconds":0}`))
-
-	output := toolResult.Content
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := decodeResult(t, output)
-	if !result.Truncated || result.Stdout != "1234" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestExecuteHonorsCancellation(t *testing.T) {
+func TestExecuteStartsWithCanceledContext(t *testing.T) {
 	tool := newTestTool(t, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// wait_seconds = 0 forces foreground-only mode so cancellation is honored.
-	_, err := tool.Execute(ctx, json.RawMessage(`{"command":"hello","wait_seconds":0}`))
-	if !errors.Is(err, context.Canceled) {
+	// The background execution path uses an independent context for the
+	// process, so an already-canceled request still starts the command.
+	_, err := tool.Execute(ctx, json.RawMessage(`{"command":"hello"}`))
+	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }
