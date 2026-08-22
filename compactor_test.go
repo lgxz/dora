@@ -3,6 +3,7 @@ package dora
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestCompactMessagesKeepsAllWhenFewerRounds(t *testing.T) {
 		{Role: RoleTool, ToolCallID: "c1", Content: "t1"},
 		{Role: RoleAssistant, Content: "a2"},
 	}
-	got := compactMessages(history, 16)
+	got := compactMessages(history, 16, 0)
 	if len(got) != len(history) {
 		t.Fatalf("len = %d, want %d", len(got), len(history))
 	}
@@ -30,7 +31,7 @@ func TestCompactMessagesKeepsRecentRounds(t *testing.T) {
 		{Role: RoleTool, ToolCallID: "c2", Content: "t2"},
 		{Role: RoleAssistant, Content: "a3"},
 	}
-	got := compactMessages(history, 2)
+	got := compactMessages(history, 2, 0)
 	// Keep system + user + last 2 rounds (a2/t2 and a3).
 	want := []Message{
 		{Role: RoleSystem, Content: "sys"},
@@ -58,7 +59,7 @@ func TestCompactMessagesKeepsRoundIntact(t *testing.T) {
 		{Role: RoleTool, ToolCallID: "c2", Content: "t2"},
 		{Role: RoleAssistant, Content: "a2"},
 	}
-	got := compactMessages(history, 1)
+	got := compactMessages(history, 1, 0)
 	// Keep user + last round (a2). The a1 round (with its tools) is dropped.
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2; got %#v", len(got), got)
@@ -73,7 +74,7 @@ func TestCompactMessagesNoAssistantKeepsAll(t *testing.T) {
 		{Role: RoleSystem, Content: "sys"},
 		{Role: RoleUser, Content: "u1"},
 	}
-	got := compactMessages(history, 2)
+	got := compactMessages(history, 2, 0)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -81,7 +82,7 @@ func TestCompactMessagesNoAssistantKeepsAll(t *testing.T) {
 
 func TestCompactMessagesZeroKeepsAll(t *testing.T) {
 	history := []Message{{Role: RoleUser, Content: "u1"}}
-	got := compactMessages(history, 0)
+	got := compactMessages(history, 0, 0)
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
@@ -95,7 +96,7 @@ func TestRequestMessagesWithinBudgetIsUnchanged(t *testing.T) {
 	for i := 0; i < defaultCompactionRounds; i++ {
 		history = append(history, Message{Role: RoleUser, Content: "u"})
 	}
-	a := &Agent{}
+	a := &Agent{contextWindow: DefaultContextWindowBytes}
 	got := a.requestMessages(history)
 	if len(got) != len(history) {
 		t.Fatalf("len = %d, want %d", len(got), len(history))
@@ -159,5 +160,152 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("calls = %d", calls)
+	}
+}
+func TestCompactMessagesTruncatesLongToolOutput(t *testing.T) {
+	// A small contextWindow forces historical tool output to be truncated to a
+	// bounded per-message budget while the current round stays unchanged.
+	long := strings.Repeat("x", 100)
+	history := []Message{
+		{Role: RoleUser, Content: "u"},
+		{Role: RoleAssistant, Content: "a1"},
+		{Role: RoleTool, ToolCallID: "c1", Content: long},
+		{Role: RoleAssistant, Content: "current"},
+	}
+	// keepRounds 2: current round ("current") plus a1; contextWindow 20 leaves
+	// 13 bytes for the two historical messages (a1, tool1).
+	got := compactMessages(history, 2, 20)
+	if len(got) != 4 {
+		t.Fatalf("len = %d, want 4; got %#v", len(got), got)
+	}
+	// Current round unchanged.
+	if got[3].Content != "current" {
+		t.Fatalf("current round changed: %#v", got[3])
+	}
+	// Historical tool content truncated, no longer the full original.
+	if got[2].Content == long {
+		t.Fatalf("tool content not truncated: len = %d", len(got[2].Content))
+	}
+}
+
+func TestCompactMessagesCompactsJSONInput(t *testing.T) {
+	big := strings.Repeat("y", 200)
+	history := []Message{
+		{Role: RoleUser, Content: "u"},
+		{Role: RoleAssistant, Content: "a", ToolCalls: []ToolCall{{ID: "c", Input: json.RawMessage(`{"k":"` + big + `"}`)}}},
+		{Role: RoleTool, ToolCallID: "c", Content: "t"},
+		{Role: RoleAssistant, Content: "current"},
+	}
+	got := compactMessages(history, 2, 64)
+	if len(got) != 4 {
+		t.Fatalf("len = %d, want 4", len(got))
+	}
+	raw := got[1].ToolCalls[0].Input
+	var v map[string]any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("tool input is not valid JSON after compaction: %v (%s)", err, raw)
+	}
+	s, _ := v["k"].(string)
+	if len(s) >= 200 {
+		t.Fatalf("JSON value not truncated: len = %d", len(s))
+	}
+}
+
+func TestCompactMessagesBudgetEnoughKeepsOriginal(t *testing.T) {
+	content := "short output"
+	history := []Message{
+		{Role: RoleUser, Content: "u"},
+		{Role: RoleAssistant, Content: "a1"},
+		{Role: RoleTool, ToolCallID: "c1", Content: content},
+		{Role: RoleAssistant, Content: "current"},
+	}
+	got := compactMessages(history, 2, 1<<20)
+	// Ample budget triggers compaction (a1/tool1 and current retained) but the
+	// historical tool output is kept unchanged.
+	if len(got) != 4 || got[2].Content != content {
+		t.Fatalf("result = %#v, want content unchanged", got)
+	}
+}
+
+func TestCompactMessagesZeroBudgetKeepsAll(t *testing.T) {
+	history := []Message{
+		{Role: RoleSystem, Content: "sys"},
+		{Role: RoleUser, Content: "u1"},
+		{Role: RoleAssistant, Content: "a1"},
+		{Role: RoleTool, ToolCallID: "c1", Content: "t1"},
+		{Role: RoleAssistant, Content: "a2"},
+	}
+	got := compactMessages(history, 16, 0)
+	if len(got) != len(history) {
+		t.Fatalf("len = %d, want %d", len(got), len(history))
+	}
+	for i := range history {
+		if got[i].Content != history[i].Content {
+			t.Fatalf("message %d content changed: %q", i, got[i].Content)
+		}
+	}
+}
+
+func TestCompactRoundEmptyIsSafe(t *testing.T) {
+	got := compactRound(nil, 16)
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0", len(got))
+	}
+}
+
+func TestCompactRoundCurrentRoundNotTruncated(t *testing.T) {
+	// The current (last) round is appended unchanged by compactMessages; only
+	// historical rounds are passed through compactRound. When the current round
+	// alone exceeds the budget, historical rounds are dropped but the current
+	// one is still kept at full length.
+	long := strings.Repeat("z", 100)
+	history := []Message{
+		{Role: RoleUser, Content: "u"},
+		{Role: RoleAssistant, Content: "a1"},
+		{Role: RoleAssistant, Content: long},
+	}
+	tight := compactMessages(history, 2, 16)
+	// long (100 bytes) alone exceeds the 16-byte budget, so only the current
+	// round survives, unchanged.
+	if len(tight) != 2 || tight[0].Role != RoleUser || tight[1].Content != long {
+		t.Fatalf("tight budget result = %#v, want [user, long current]", tight)
+	}
+	// With an ample budget the current round also survives unchanged.
+	big := compactMessages(history, 2, 1<<20)
+	if len(big) != 3 || big[2].Content != long {
+		t.Fatalf("ample budget result = %#v, want current preserved", big)
+	}
+}
+
+func TestCompactMessagesDoesNotPollutePersistedTurn(t *testing.T) {
+	// Turn.Messages returns a defensive copy; compactMessages mutates it. The
+	// persisted round history must remain untouched.
+	long := string(make([]byte, 100))
+	turn := NewTurn("sys", "u0")
+	turn.rounds = append(turn.rounds, Round{
+		Assistant: Message{Role: RoleAssistant, Content: "a1"},
+		Tools:     []Message{{Role: RoleTool, ToolCallID: "c1", Content: long}},
+	}, Round{
+		Assistant: Message{Role: RoleAssistant, Content: "current"},
+	})
+	// Exceed the round budget so compaction actually runs.
+	for i := 0; i < defaultCompactionRounds; i++ {
+		turn.rounds = append(turn.rounds, Round{
+			Assistant: Message{Role: RoleAssistant, Content: "fill"},
+			Tools:     []Message{{Role: RoleTool, ToolCallID: "cf", Content: "t"}},
+		})
+	}
+	before := turn.Messages()
+	a := &Agent{contextWindow: 16}
+	compacted := a.requestMessages(turn.Messages())
+	if len(compacted) == len(before) {
+		t.Fatal("expected compaction to run")
+	}
+	after := turn.Messages()
+	// Historical content preserved across the full snapshot.
+	for i := range before {
+		if before[i].Content != after[i].Content || before[i].Role != after[i].Role {
+			t.Fatalf("persisted message %d changed: %#v -> %#v", i, before[i], after[i])
+		}
 	}
 }
