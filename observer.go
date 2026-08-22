@@ -12,12 +12,16 @@ const (
 	UpdateMessageAdded   UpdateKind = "message_added"
 	UpdateToolStarted    UpdateKind = "tool_started"
 	UpdateToolFailed     UpdateKind = "tool_failed"
+	UpdateInfo           UpdateKind = "info"
+	UpdateTurnStarted    UpdateKind = "turn_started"
 )
 
 // Update describes transient run progress. Message is populated for
 // UpdateMessageAdded. ToolCall is populated for tool updates. StartedAt is
 // populated for UpdateToolStarted and carries the real time the tool began
-// executing, which may differ from when the event is delivered.
+// executing, which may differ from when the event is delivered. Info carries
+// the text for UpdateInfo and UpdateTurnStarted (the latter reports the prompt
+// that starts a new turn).
 type Update struct {
 	Kind      UpdateKind
 	Delta     string
@@ -25,6 +29,7 @@ type Update struct {
 	ToolCall  ToolCall
 	StartedAt time.Time
 	Err       error
+	Info      string
 }
 
 // Observer receives synchronous progress updates from an Agent run.

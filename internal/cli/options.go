@@ -23,6 +23,7 @@ type options struct {
 	noSkills     bool
 	quiet        bool
 	reasoning    bool
+	events       bool
 	sessionPath  string
 	promptArgs   []string
 	usage        func()
@@ -52,6 +53,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress")
 	flags.BoolVar(&opts.quiet, "q", false, "hide run progress (shorthand)")
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
+	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query completed turns")
 	flags.StringVar(&opts.sessionPath, "s", "", "SQLite session file (shorthand)")
 	flags.Usage = func() {

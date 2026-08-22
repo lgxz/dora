@@ -135,8 +135,14 @@ func buildObserver(streams IO, quiet, reasoning bool, sessionPath string) dora.O
 	return renderer
 }
 
-func buildTurn(prompt string) *dora.Turn {
-	return dora.NewTurn(systemPrompt(), prompt)
+// info emits an informational line through the observer, so it is silenced by
+// --quiet (a nil observer). Informational output must go through this channel
+// instead of printing directly to stderr.
+func info(observer dora.Observer, format string, args ...any) {
+	if observer == nil {
+		return
+	}
+	observer.Observe(dora.Update{Kind: dora.UpdateInfo, Info: fmt.Sprintf(format, args...)})
 }
 
 // systemPrompt returns the content of <doraHome>/AGENTS.md when it exists, or

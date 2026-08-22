@@ -14,6 +14,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/events"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
@@ -57,14 +58,32 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 
-	prompt, err := readPrompt(opts.promptArgs, streams.Stdin, streams.StdinIsTerminal)
-	if err != nil {
-		opts.usage()
-		return err
-	}
 	cfg, model, err := loadRuntimeConfig(opts, streams.HTTPClient)
 	if err != nil {
 		return err
+	}
+
+	// --events forces event daemon mode regardless of events.enabled.
+	if opts.events {
+		cfg.Events.Enabled = true
+	}
+
+	// Open the event source from the events configuration. Enabled reports
+	// whether to run in event daemon mode.
+	source, err := events.New(cfg.Events)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	serverMode := source.Enabled()
+
+	var prompt string
+	if !serverMode {
+		prompt, err = readPrompt(opts.promptArgs, streams.Stdin, streams.StdinIsTerminal)
+		if err != nil {
+			opts.usage()
+			return err
+		}
 	}
 
 	sessionStore, historyAvailable, err := openSession(ctx, opts.sessionPath)
@@ -73,6 +92,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	if sessionStore != nil {
 		defer sessionStore.Close()
+		if serverMode {
+			historyAvailable = true
+		}
 	}
 	jobManager := job.New()
 	defer jobManager.Cleanup()
@@ -80,27 +102,78 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	if serverMode {
+		sendTool, err := events.NewSendTool(source)
+		if err != nil {
+			return err
+		}
+		tools = append(tools, sendTool)
+
+		nodesTool, err := events.NewNodesTool(source)
+		if err != nil {
+			return err
+		}
+		tools = append(tools, nodesTool)
+	}
+
 	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
 		MaxRounds: cfg.Agent.MaxRounds,
 	}, tools...)
 	if err != nil {
 		return err
 	}
-	turn := buildTurn(prompt)
-	completed, err := runTurn(ctx, agent, turn, buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath), streams)
-	if err != nil {
-		return err
-	}
-	if !completed {
-		return nil
-	}
-	if sessionStore != nil {
-		if _, err := sessionStore.CommitTurn(ctx, turn); err != nil {
+	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath)
+
+	// Read the system prompt once; it is reused across every turn so the
+	// daemon loop does not re-read AGENTS.md on each event.
+	system := systemPrompt()
+
+	for {
+		if serverMode {
+			ev, err := source.Next(ctx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				info(observer, "receive event: %v", err)
+				continue
+			}
+			// An event with no meaningful content does not start a turn.
+			if ev.Empty() {
+				continue
+			}
+			prompt = events.EventPrompt(ev)
+		}
+
+		if observer != nil {
+			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
+		}
+		turn := dora.NewTurn(system, prompt)
+		completed, err := runTurn(ctx, agent, turn, observer, streams)
+		if err != nil {
+			if serverMode {
+				info(observer, "run turn: %v", err)
+				continue
+			}
 			return err
 		}
+		if !serverMode && !completed {
+			return nil
+		}
+		if completed && sessionStore != nil {
+			if _, err := sessionStore.CommitTurn(ctx, turn); err != nil {
+				return err
+			}
+		}
+		result, _ := turn.Result()
+		if err := writeAnswer(streams, result); err != nil {
+			return err
+		}
+
+		if !serverMode {
+			return nil
+		}
 	}
-	result, _ := turn.Result()
-	return writeAnswer(streams, result)
 }
 
 func writeAnswer(streams IO, content string) error {
