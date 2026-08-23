@@ -222,7 +222,6 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             self.logger.warning("apt install of extra tooling failed: %s", exc)
 
         local_binary = self._resolve_local_binary()
-        self.logger.info("Uploading dora binary from %s", local_binary)
 
         target = BINARY_PATH
 
