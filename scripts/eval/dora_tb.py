@@ -121,11 +121,31 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     ]
 
     # Minimal set of system commands dora needs inside the container.
-    # bash       - dora's Bash tool.
-    # coreutils  - standard utilities used by dora / its Bash tool.
-    # procps     - ``ps``/``kill`` used by the Bash tool process handling.
-    # ca_certificates - TLS trust store for model API calls.
-    SYSTEM_DEPENDENCIES: tuple[str, ...] = ("curl", "python3", "ca_certificates")
+    # curl / ca_certificates - HTTP + TLS trust store for model API calls and
+    #                         task downloads.
+    # python3     - dora's most-used scripting runtime (agents fall back to it
+    #               for JSON handling, parsing, and one-off automation).
+    # procps      - ``ps``/``kill`` for process inspection; absent in slim
+    #               images and used in ~1/5 of Terminal-Bench trials.
+    # expect      - interactive automation (serial consoles, installers);
+    #               required by the qemu/interactive task family.
+    # telnet      - serial-console client for the qemu task family.
+    # netcat, socat - port probing / forwarding / PTY bridging.
+    # file        - identifying image and binary formats.
+    # Chosen from the jobs/082265 transcripts: what agents used vs. had to
+    # install mid-trial (jq/ripgrep/tmux showed no usage — python3 and grep
+    # already cover them — and are deliberately omitted).
+    SYSTEM_DEPENDENCIES: tuple[str, ...] = (
+        "curl",
+        "python3",
+        "ca_certificates",
+        "procps",
+        "expect",
+        "telnet",
+        "netcat",
+        "socat",
+        "file",
+    )
 
     @staticmethod
     @override
