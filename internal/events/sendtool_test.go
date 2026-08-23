@@ -29,7 +29,7 @@ func TestSendToolBuildsEventAndReportsID(t *testing.T) {
 	}
 
 	spec := tool.Spec()
-	if spec.Name != "SendEvent" {
+	if spec.Name != "send_event" {
 		t.Fatalf("spec name = %q", spec.Name)
 	}
 

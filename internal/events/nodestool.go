@@ -30,7 +30,7 @@ func NewNodesTool(lister NodesLister) (*NodesTool, error) {
 // Spec implements dora.Tool.
 func (t *NodesTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "ListNodes",
+		Name:        "list_nodes",
 		Description: "List the nodes currently known to the memberlist cluster, each with its name and address. The `self` field is true for this node itself, so you can tell which node is you.",
 		InputSchema: json.RawMessage(`{
   "type": "object",

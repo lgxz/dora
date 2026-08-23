@@ -23,7 +23,7 @@ type Sender interface {
 	Send(ev Event) (Event, error)
 }
 
-// NewSendTool creates a SendEvent tool backed by sender.
+// NewSendTool creates a send_event tool backed by sender.
 func NewSendTool(sender Sender) (*SendTool, error) {
 	if sender == nil {
 		return nil, errors.New("events: sender is nil")
@@ -34,7 +34,7 @@ func NewSendTool(sender Sender) (*SendTool, error) {
 // Spec implements dora.Tool.
 func (t *SendTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
-		Name:        "SendEvent",
+		Name:        "send_event",
 		Description: "Send an event into the cluster. Leave receiver empty to broadcast to all nodes, or set it to a node name for a directed event. The source node and an ID are filled in automatically.",
 		InputSchema: json.RawMessage(`{
   "type": "object",

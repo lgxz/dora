@@ -21,7 +21,7 @@ func TestNodesToolListsNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNodesTool: %v", err)
 	}
-	if tool.Spec().Name != "ListNodes" {
+	if tool.Spec().Name != "list_nodes" {
 		t.Fatalf("spec name = %q", tool.Spec().Name)
 	}
 
