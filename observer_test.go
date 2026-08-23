@@ -45,28 +45,67 @@ func TestRunObservedReportsConversationProgress(t *testing.T) {
 	}
 	want := []UpdateKind{
 		UpdateThinking,
-		UpdateUsage,
-		UpdateMessageAdded,
+		UpdateMessageReceived,
 		UpdateToolStarted,
-		UpdateMessageAdded,
+		UpdateToolFinished,
 		UpdateThinking,
-		UpdateUsage,
-		UpdateMessageAdded,
+		UpdateMessageReceived,
 	}
 	if !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("update kinds = %#v, want %#v", kinds, want)
 	}
-	if updates[3].ToolCall.Name != "echo" || updates[4].Message.Content != "hello" {
+	if updates[1].ToolCall.Name != "" || updates[2].ToolCall.Name != "echo" ||
+		updates[3].ToolCall.Name != "echo" || updates[3].Message.Content != "hello" {
 		t.Fatalf("updates = %#v", updates)
 	}
-	// Each usage event follows its round's thinking event and carries a nil
-	// usage payload (the stub model reports none), without panicking.
-	for _, index := range []int{1, 6} {
-		if updates[index].Kind != UpdateUsage {
-			t.Fatalf("update %d = %#v, want UpdateUsage", index, updates[index])
+	// Each message-received event follows its round's thinking event, carries
+	// the assistant message, and has a nil usage payload (the stub model
+	// reports none), without panicking.
+	for _, index := range []int{1, 5} {
+		if updates[index].Kind != UpdateMessageReceived {
+			t.Fatalf("update %d = %#v, want UpdateMessageReceived", index, updates[index])
+		}
+		if updates[index].Message.Role != RoleAssistant {
+			t.Fatalf("update %d message role = %#v, want RoleAssistant", index, updates[index].Message.Role)
 		}
 		if updates[index].Usage != nil {
 			t.Fatalf("update %d usage = %#v, want nil", index, updates[index].Usage)
+		}
+	}
+	// The tool round emits one UpdateToolFinished after its tool starts,
+	// carrying the tool result message and no error.
+	if updates[3].Err != nil {
+		t.Fatalf("update 3 err = %#v, want nil", updates[3].Err)
+	}
+	if updates[3].Message.Role != RoleTool || updates[3].Message.Content != "hello" {
+		t.Fatalf("update 3 message = %#v, want the tool result", updates[3].Message)
+	}
+}
+
+func TestObserverEventsDoNotIncludeRemovedKinds(t *testing.T) {
+	// Regression guard: the removed events UpdateMessageAdded, UpdateToolFailed,
+	// and UpdateUsage must never be emitted. The constants no longer compile, so
+	// an up-to-date tree cannot reference them; this test additionally fails if
+	// the deleted strings are ever re-introduced as kinds.
+	model := modelFunc(func(context.Context, Request) (Response, error) {
+		return Response{Content: "done"}, nil
+	})
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var kinds []UpdateKind
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
+		kinds = append(kinds, update.Kind)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range kinds {
+		switch kind {
+		case "message_added", "tool_failed", "usage":
+			t.Fatalf("observer emitted a removed kind %q", kind)
 		}
 	}
 }

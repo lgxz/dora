@@ -98,8 +98,8 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 
 func TestRunObservedEmitsUsagePerRound(t *testing.T) {
 	// Two rounds: a tool round then a final round. Each must emit an
-	// UpdateUsage observer event carrying the Response.Usage, including the
-	// nil (no usage) case without panicking.
+	// UpdateMessageReceived observer event carrying the assistant message and
+	// the Response.Usage, including the nil (no usage) case without panicking.
 	inputUsage := &Usage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		if len(request.Messages) == 1 {
@@ -116,10 +116,10 @@ func TestRunObservedEmitsUsagePerRound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var usageUpdates []*Usage
+	var messageReceives []Update
 	observer := ObserverFunc(func(update Update) {
-		if update.Kind == UpdateUsage {
-			usageUpdates = append(usageUpdates, update.Usage)
+		if update.Kind == UpdateMessageReceived {
+			messageReceives = append(messageReceives, update)
 		}
 	})
 
@@ -127,14 +127,64 @@ func TestRunObservedEmitsUsagePerRound(t *testing.T) {
 	if _, err := runAgentObserved(agent, context.Background(), input, observer); err != nil {
 		t.Fatal(err)
 	}
-	if len(usageUpdates) != 2 {
-		t.Fatalf("usageUpdates = %#v, want 2 updates", usageUpdates)
+	if len(messageReceives) != 2 {
+		t.Fatalf("messageReceives = %#v, want 2 updates", messageReceives)
 	}
-	if usageUpdates[0] != inputUsage {
-		t.Fatalf("round 1 usage = %#v, want %#v", usageUpdates[0], inputUsage)
+	if messageReceives[0].Usage != inputUsage {
+		t.Fatalf("round 1 usage = %#v, want %#v", messageReceives[0].Usage, inputUsage)
 	}
-	if usageUpdates[1] != nil {
-		t.Fatalf("round 2 usage = %#v, want nil", usageUpdates[1])
+	if messageReceives[1].Usage != nil {
+		t.Fatalf("round 2 usage = %#v, want nil", messageReceives[1].Usage)
+	}
+	for _, update := range messageReceives {
+		if update.Message.Role != RoleAssistant {
+			t.Fatalf("message_received role = %#v, want RoleAssistant", update.Message.Role)
+		}
+	}
+}
+
+func TestRunEmitsToolFinishedOnSuccess(t *testing.T) {
+	// A tool that executes successfully must emit one UpdateToolFinished
+	// carrying the tool result message (RoleTool), the correct ToolCall, and no
+	// error, distinct from the failure path which carries a non-nil Err.
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		if calls == 1 {
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
+		}
+		return Response{Content: "done"}, nil
+	})
+	tool := stubTool{
+		spec:    ToolSpec{Name: "bash"},
+		execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil },
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var finished []Update
+	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
+		if update.Kind == UpdateToolFinished {
+			finished = append(finished, update)
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finished) != 1 {
+		t.Fatalf("finished updates = %#v, want 1", finished)
+	}
+	got := finished[0]
+	if got.Err != nil {
+		t.Fatalf("finished err = %#v, want nil", got.Err)
+	}
+	if got.ToolCall.ID != "call-1" || got.ToolCall.Name != "bash" {
+		t.Fatalf("finished tool call = %#v, want call-1/bash", got.ToolCall)
+	}
+	if got.Message.Role != RoleTool || got.Message.Content != "ok" || got.Message.ToolCallID != "call-1" {
+		t.Fatalf("finished message = %#v, want the tool result", got.Message)
 	}
 }
 
@@ -287,7 +337,7 @@ func TestRunForwardsReasoningDeltasAndHistory(t *testing.T) {
 		switch update.Kind {
 		case UpdateReasoningDelta:
 			reasoning += update.Delta
-		case UpdateMessageAdded:
+		case UpdateMessageReceived:
 			if update.Message.Role == RoleAssistant {
 				reasonings = append(reasonings, update.Message.Reasoning)
 			}
@@ -600,10 +650,8 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 		switch update.Kind {
 		case UpdateToolStarted:
 			events = append(events, "start:"+update.ToolCall.Name)
-		case UpdateMessageAdded:
-			if update.Message.Role == RoleTool {
-				events = append(events, "added:"+update.Message.ToolCallID)
-			}
+		case UpdateToolFinished:
+			events = append(events, "added:"+update.ToolCall.ID)
 		}
 	}))
 	elapsed := time.Since(start)
@@ -717,17 +765,17 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var failed []Update
+	var finished []Update
 	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
-		if update.Kind == UpdateToolFailed {
-			failed = append(failed, update)
+		if update.Kind == UpdateToolFinished {
+			finished = append(finished, update)
 		}
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(failed) != 1 || failed[0].ToolCall.Name != "fail" || failed[0].Err == nil {
-		t.Fatalf("failed updates = %#v", failed)
+	if len(finished) != 1 || finished[0].ToolCall.Name != "fail" || finished[0].Err == nil {
+		t.Fatalf("finished updates = %#v", finished)
 	}
 }
 

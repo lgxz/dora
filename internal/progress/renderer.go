@@ -78,33 +78,13 @@ func (r *Renderer) Observe(update dora.Update) {
 		if r.showReasoning {
 			r.renderReasoning(update.Delta)
 		}
-	case dora.UpdateMessageAdded:
-		switch update.Message.Role {
-		case dora.RoleAssistant:
-			r.renderAssistantMessage(update.Message)
-		case dora.RoleTool:
-			r.renderToolResult(update.Message)
-		}
+	case dora.UpdateMessageReceived:
+		r.renderAssistantMessage(update.Message)
 	case dora.UpdateToolStarted:
 		r.startTool(update)
-	case dora.UpdateToolFailed:
-		r.renderToolFailure(update)
-	case dora.UpdateUsage:
-		r.renderUsage(update.Usage)
+	case dora.UpdateToolFinished:
+		r.renderToolFinished(update)
 	}
-}
-
-// renderUsage prints a concise token summary line for a completed model call.
-// A nil usage payload is a legal "no usage reported" state and renders nothing.
-func (r *Renderer) renderUsage(usage *dora.Usage) {
-	if usage == nil {
-		return
-	}
-	if r.waiting {
-		fmt.Fprint(r.output, "\x1b[1A\r\x1b[2K")
-		r.waiting = false
-	}
-	fmt.Fprintf(r.output, "%s in=%d out=%d tok (total %d)\n", r.paint(dim, "▸"), usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 }
 
 func (r *Renderer) renderThinking() {
@@ -210,27 +190,31 @@ func (r *Renderer) startTool(update dora.Update) {
 	r.tools[call.ID] = run
 }
 
-func (r *Renderer) renderToolResult(message dora.Message) {
-	run, ok := r.tools[message.ToolCallID]
-	if !ok {
-		return
-	}
-	delete(r.tools, message.ToolCallID)
-	r.renderToolLine(presentTool(run.call, message), formatDuration(time.Since(run.started)))
-}
-
-func (r *Renderer) renderToolFailure(update dora.Update) {
+// renderToolFinished renders a tool's completion based on its error. A tool
+// that returned a process-level error (update.Err != nil) is presented as a
+// failure. A tool that executed successfully carries its result message, whose
+// content the formatter inspects to pick success, warning, or failure styling
+// (for example bash exit codes), so no regression to content-level signals.
+func (r *Renderer) renderToolFinished(update dora.Update) {
 	call := update.ToolCall
 	run, ok := r.tools[call.ID]
 	delete(r.tools, call.ID)
 	if !ok {
 		run = toolRun{call: call}
 	}
-	duration := "failed"
+	if update.Err != nil {
+		duration := "failed"
+		if !run.started.IsZero() {
+			duration = formatDuration(time.Since(run.started))
+		}
+		r.renderToolLine(presentToolFailure(call, update.Err), duration)
+		return
+	}
+	duration := "n/a"
 	if !run.started.IsZero() {
 		duration = formatDuration(time.Since(run.started))
 	}
-	r.renderToolLine(presentToolFailure(run.call, update.Err), duration)
+	r.renderToolLine(presentTool(call, update.Message), duration)
 }
 
 func (r *Renderer) renderToolLine(presentation toolPresentation, duration string) {

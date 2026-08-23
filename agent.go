@@ -145,15 +145,13 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 			return fmt.Errorf("dora: generate response: %w", err)
 		}
 
-		notify(observer, Update{Kind: UpdateUsage, Usage: response.Usage})
-
 		assistant := Message{
 			Role:      RoleAssistant,
 			Content:   response.Content,
 			Reasoning: response.Reasoning,
 			ToolCalls: cloneToolCalls(response.ToolCalls),
 		}
-		notify(observer, Update{Kind: UpdateMessageAdded, Message: assistant})
+		notify(observer, Update{Kind: UpdateMessageReceived, Message: assistant, Usage: response.Usage})
 
 		if len(response.ToolCalls) == 0 {
 			if err := turn.Complete(response.Content, response.Continuation); err != nil {
@@ -212,8 +210,8 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 
 			result := results[i]
 			if result.err != nil {
+				notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Err: result.err})
 				if result.invalidJSON {
-					notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
 					toolMessages = append(toolMessages, Message{
 						Role:       RoleTool,
 						ToolCallID: call.ID,
@@ -221,7 +219,6 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 					})
 					continue
 				}
-				notify(observer, Update{Kind: UpdateToolFailed, ToolCall: call, Err: result.err})
 				toolMessages = append(toolMessages, toolErrorMessage(call, result.err))
 				continue
 			}
@@ -232,7 +229,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 				ToolCallID: call.ID,
 			}
 			toolMessages = append(toolMessages, toolMessage)
-			notify(observer, Update{Kind: UpdateMessageAdded, Message: toolMessage})
+			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage})
 		}
 		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages}, response.Continuation); err != nil {
 			return err

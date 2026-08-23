@@ -6,23 +6,24 @@ import "time"
 type UpdateKind string
 
 const (
-	UpdateThinking       UpdateKind = "thinking"
-	UpdateContentDelta   UpdateKind = "content_delta"
-	UpdateReasoningDelta UpdateKind = "reasoning_delta"
-	UpdateMessageAdded   UpdateKind = "message_added"
-	UpdateToolStarted    UpdateKind = "tool_started"
-	UpdateToolFailed     UpdateKind = "tool_failed"
-	UpdateInfo           UpdateKind = "info"
-	UpdateTurnStarted    UpdateKind = "turn_started"
-	UpdateUsage          UpdateKind = "usage"
+	UpdateThinking        UpdateKind = "thinking"
+	UpdateContentDelta    UpdateKind = "content_delta"
+	UpdateReasoningDelta  UpdateKind = "reasoning_delta"
+	UpdateMessageReceived UpdateKind = "message_received"
+	UpdateToolStarted     UpdateKind = "tool_started"
+	UpdateToolFinished    UpdateKind = "tool_finished"
+	UpdateInfo            UpdateKind = "info"
+	UpdateTurnStarted     UpdateKind = "turn_started"
 )
 
 // Update describes transient run progress. Message is populated for
-// UpdateMessageAdded. ToolCall is populated for tool updates. StartedAt is
+// UpdateMessageReceived (the complete assistant message). ToolCall is
+// populated for UpdateToolStarted and UpdateToolFinished. StartedAt is
 // populated for UpdateToolStarted and carries the real time the tool began
-// executing, which may differ from when the event is delivered. Info carries
-// the text for UpdateInfo and UpdateTurnStarted (the latter reports the prompt
-// that starts a new turn).
+// executing, which may differ from when the event is delivered. Err is
+// populated for the failure path of UpdateToolFinished. Info carries the text
+// for UpdateInfo and UpdateTurnStarted (the latter reports the prompt that
+// starts a new turn).
 type Update struct {
 	Kind      UpdateKind
 	Delta     string
@@ -31,7 +32,7 @@ type Update struct {
 	StartedAt time.Time
 	Err       error
 	Info      string
-	Usage     *Usage // populated for UpdateUsage
+	Usage     *Usage // populated for UpdateMessageReceived; nil when the provider reports none
 }
 
 // Observer receives synchronous progress updates from an Agent run.

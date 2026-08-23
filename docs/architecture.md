@@ -107,7 +107,7 @@ type ContextSize interface {
 
 `Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls.
 
-`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional per-category `TokenDetails`). It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Neither the compactor nor session persistence reads `Usage`; it is surfaced to observers (see below) on every complete round and otherwise left untouched.
+`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional per-category `TokenDetails`). It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Neither the compactor nor session persistence reads `Usage`; it is carried by the `UpdateMessageReceived` observer event on every complete round and otherwise left untouched, and the renderer does not display it.
 
 ### Tool
 
@@ -134,9 +134,9 @@ type Observer interface {
 }
 ```
 
-The Observer synchronously receives semantic events such as `thinking`, reasoning deltas, content deltas, message additions, tool starts, and tool failures. It only consumes run data, does not participate in Agent decisions, and cannot modify the session history.
+The Observer synchronously receives semantic events such as `thinking`, reasoning deltas, content deltas, assistant message received (`message_received`), tool started, and tool finished (`tool_finished`, carrying the tool's success result or its error). The former `message_added`, `tool_failed`, and `usage` events have been removed. It only consumes run data, does not participate in Agent decisions, and cannot modify the session history.
 
-After the Agent obtains a complete response for a round (tool or final) it emits an `UpdateUsage` event carrying that round's `Response.Usage` (`nil` when the provider reports none). The `internal/progress.Renderer` prints a concise token summary for non-nil usage and silently ignores nil usage; `--quiet` silences the renderer entirely.
+After the Agent obtains a complete response for a round (tool or final) it emits an `UpdateMessageReceived` event carrying that round's assistant message and the optional `Response.Usage` (`nil` when the provider reports none; usage is carried but never rendered). Each tool call then emits an `UpdateToolFinished` after its `UpdateToolStarted`: on success it carries the tool result message, and on failure it carries a non-nil `Err`. The `internal/progress.Renderer` displays the assistant message, renders each tool line (splitting success/process-level failure by `Err`, and letting content-level signals such as bash exit codes drive warning/failure styling), and does not print usage; `--quiet` silences the renderer entirely.
 
 Callbacks run on the Agent's current goroutine, so implementations should return quickly. `internal/progress.Renderer` is the Observer used by the CLI.
 
@@ -392,7 +392,7 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
 - Session history is append-only at the turn level; individual turns are committed once after completion.
-- Model `Usage` payloads are surfaced to observers but are not persisted to session history; persistence and any usage-driven behavior are left to a later phase.
+- Model `Usage` payloads are carried by `UpdateMessageReceived` but are not rendered or persisted to session history; persistence and any usage-driven behavior are left to a later phase.
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI is the composition root; as providers and tools grow, a factory/registry could be extracted, but at the current scale keeping an explicit switch is simpler.
 - There is currently no event bus, interactive REPL, or background daemon.

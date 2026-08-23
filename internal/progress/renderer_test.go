@@ -22,20 +22,17 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 		Input: json.RawMessage(`{"command":"pwd"}`),
 	}
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我先看看当前目录。",
-			ToolCalls: []dora.ToolCall{call},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我先看看当前目录。", ToolCalls: []dora.ToolCall{call}},
 	})
 	renderer.Observe(dora.Update{
 		Kind:     dora.UpdateToolStarted,
 		ToolCall: call,
 	})
 	renderer.Observe(dora.Update{
-		Kind:    dora.UpdateMessageAdded,
-		Message: dora.Message{Role: dora.RoleTool, ToolCallID: "call-1"},
+		Kind:     dora.UpdateToolFinished,
+		ToolCall: call,
+		Message:  dora.Message{Role: dora.RoleTool, ToolCallID: "call-1"},
 	})
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 
@@ -58,18 +55,15 @@ func TestRendererGroupsToolCallsFromOneAssistantMessage(t *testing.T) {
 		{ID: "call-2", Name: "bash", Input: json.RawMessage(`{"command":"df -h"}`)},
 	}
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我会检查负载和磁盘。",
-			ToolCalls: calls,
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我会检查负载和磁盘。", ToolCalls: calls},
 	})
 	for _, call := range calls {
 		renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
 		renderer.Observe(dora.Update{
-			Kind:    dora.UpdateMessageAdded,
-			Message: dora.Message{Role: dora.RoleTool, ToolCallID: call.ID},
+			Kind:     dora.UpdateToolFinished,
+			ToolCall: call,
+			Message:  dora.Message{Role: dora.RoleTool, ToolCallID: call.ID, Content: "0"},
 		})
 	}
 
@@ -113,26 +107,28 @@ func TestRendererShowsSessionState(t *testing.T) {
 	}
 }
 
-func TestRendererShowsUsageSummary(t *testing.T) {
-	var output bytes.Buffer
-	renderer := New(&output, false, false, false)
-	renderer.Observe(dora.Update{
-		Kind:  dora.UpdateUsage,
-		Usage: &dora.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
-	})
-	if rendered := output.String(); !strings.Contains(rendered, "in=10 out=5 tok (total 15)") {
-		t.Fatalf("output = %q, want a usage summary line", rendered)
-	}
-}
-
-func TestRendererIgnoresNilUsage(t *testing.T) {
-	// A nil Usage payload is a legal "no usage reported" state and must be
-	// skipped without panicking or printing a line.
-	var output bytes.Buffer
-	renderer := New(&output, false, false, false)
-	renderer.Observe(dora.Update{Kind: dora.UpdateUsage, Usage: nil})
-	if output.Len() != 0 {
-		t.Fatalf("output = %q, want nothing for nil usage", output.String())
+func TestRendererCarriesUsageWithoutRendering(t *testing.T) {
+	// Usage is carried by UpdateMessageReceived but must not be rendered: the
+	// renderer never prints a token summary line, whether usage is present or
+	// nil.
+	for _, usage := range []*dora.Usage{
+		{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		nil,
+	} {
+		var output bytes.Buffer
+		renderer := New(&output, false, false, false)
+		renderer.Observe(dora.Update{
+			Kind:    dora.UpdateMessageReceived,
+			Message: dora.Message{Role: dora.RoleAssistant, Content: "结论", ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}}},
+			Usage:   usage,
+		})
+		rendered := output.String()
+		if strings.Contains(rendered, "in=") || strings.Contains(rendered, "out=") || strings.Contains(rendered, "tok") {
+			t.Fatalf("output %q renders usage; want none", rendered)
+		}
+		if !strings.Contains(rendered, "结论") {
+			t.Fatalf("output %q does not render the assistant message", rendered)
+		}
 	}
 }
 
@@ -141,12 +137,8 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	renderer := New(&output, true, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我先检查系统状态。",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我先检查系统状态。", ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}}},
 	})
 	if !strings.Contains(output.String(), "\x1b[1A\r\x1b[2K") ||
 		!strings.Contains(output.String(), "● 我先检查系统状态。") {
@@ -161,12 +153,8 @@ func TestRendererStreamsReasoningInTerminal(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "让我想想 "})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "怎么查天气"})
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我来查一下。",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我来查一下。", ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}}},
 	})
 
 	rendered := output.String()
@@ -189,7 +177,7 @@ func TestRendererStreamsReasoningWithoutTerminal(t *testing.T) {
 	renderer := New(&output, false, false, true)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "考虑中"})
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{
 		Role:    dora.RoleAssistant,
 		Content: "答案",
 	}})
@@ -215,7 +203,7 @@ func TestRendererResetsReasoningMarkerEachRound(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false, true)
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "第一轮"})
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{
 		Role:      dora.RoleAssistant,
 		Content:   "调用工具",
 		ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
@@ -234,7 +222,7 @@ func TestRendererHidesReasoningByDefault(t *testing.T) {
 	renderer := New(&output, true, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "考虑中"})
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{
 		Role:    dora.RoleAssistant,
 		Content: "答案",
 	}})
@@ -267,12 +255,8 @@ func TestRendererStreamsReasoningLineByLine(t *testing.T) {
 
 	// The round's end flushes the partial line before the assistant output.
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我来查一下。",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我来查一下。", ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}}},
 	})
 	if rendered = output.String(); !strings.Contains(rendered, "第二行尚未结束\n● 我来查一下。") {
 		t.Fatalf("output = %q", rendered)
@@ -306,12 +290,8 @@ func TestRendererTrimsTrailingNewlinesFromAssistantContent(t *testing.T) {
 	renderer := New(&output, true, false, false)
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我先检查系统状态。\n\n",
-			ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我先检查系统状态。\n\n", ToolCalls: []dora.ToolCall{{ID: "1", Name: "bash"}}},
 	})
 	// Trailing newlines must not render as empty continuation lines.
 	if strings.Contains(output.String(), "│ \n") {
@@ -365,10 +345,10 @@ func TestRendererAlignsCommandResultColumns(t *testing.T) {
 		{ID: "short", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)},
 		{ID: "long", Name: "bash", Input: json.RawMessage(`{"command":"` + strings.Repeat("x", commandSummaryWidth+10) + `"}`)},
 	}
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: calls}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: calls}})
 	for _, call := range calls {
 		renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
-		renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{
+		renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: call, Message: dora.Message{
 			Role: dora.RoleTool, ToolCallID: call.ID, Content: `{"exit_code":0,"stdout":"ok"}`,
 		}})
 	}
@@ -622,14 +602,14 @@ func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false, false)
 	command := dora.ToolCall{ID: "command", Name: "bash", Input: json.RawMessage(`{"command":"false"}`)}
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: command})
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1,"stderr":"failed"}`}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: command, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1,"stderr":"failed"}`}})
 
 	read := dora.ToolCall{ID: "read", Name: "read", Input: json.RawMessage(`{"path":"missing.go"}`)}
-	renderer.Observe(dora.Update{Kind: dora.UpdateMessageAdded, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{read}}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{read}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: read})
-	renderer.Observe(dora.Update{Kind: dora.UpdateToolFailed, ToolCall: read, Err: fmt.Errorf(`execute tool "read": read: open missing.go: no such file`)})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: read, Err: fmt.Errorf(`execute tool "read": read: open missing.go: no such file`)})
 
 	for _, want := range []string{
 		"△ false",
@@ -645,6 +625,29 @@ func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	}
 }
 
+func TestRendererDistinguishesToolFinishedSuccessAndError(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, false)
+	// A tool that succeeds with empty result renders a success line.
+	ok := dora.ToolCall{ID: "ok", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: ok})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: ok, Message: dora.Message{Role: dora.RoleTool, ToolCallID: ok.ID, Content: `{"exit_code":0,"stdout":"ok"}`}})
+
+	// A tool that failed at the process level renders a red failure line via
+	// presentToolFailure, without inspecting the result content.
+	bad := dora.ToolCall{ID: "bad", Name: "read", Input: json.RawMessage(`{"path":"missing.go"}`)}
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: bad})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: bad, Err: fmt.Errorf("execute tool %q: boom", "read")})
+
+	rendered := output.String()
+	if !strings.Contains(rendered, "•") || !strings.Contains(rendered, "2B/0B") {
+		t.Fatalf("output %q does not render the success tool line with its result", rendered)
+	}
+	if !strings.Contains(rendered, "△ read missing.go · boom ·") {
+		t.Fatalf("output %q does not render a red failure tool line", rendered)
+	}
+}
+
 func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
 	// The UpdateToolStarted event carries the real start time. The renderer
 	// must use it to compute the duration instead of time.Now(), which would
@@ -653,12 +656,8 @@ func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
 	renderer := New(&output, false, false, false)
 	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"sleep 1"}`)}
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我会等待一秒。",
-			ToolCalls: []dora.ToolCall{call},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我会等待一秒。", ToolCalls: []dora.ToolCall{call}},
 	})
 
 	startedAt := time.Now().Add(-2 * time.Second)
@@ -668,8 +667,9 @@ func TestRendererUsesStartedAtForToolDuration(t *testing.T) {
 		StartedAt: startedAt,
 	})
 	renderer.Observe(dora.Update{
-		Kind:    dora.UpdateMessageAdded,
-		Message: dora.Message{Role: dora.RoleTool, ToolCallID: call.ID},
+		Kind:     dora.UpdateToolFinished,
+		ToolCall: call,
+		Message:  dora.Message{Role: dora.RoleTool, ToolCallID: call.ID, Content: "0"},
 	})
 
 	if !strings.Contains(output.String(), "2.0s") {
@@ -687,17 +687,14 @@ func TestRendererFallsBackToNowWhenStartedAtZero(t *testing.T) {
 	renderer := New(&output, false, false, false)
 	call := dora.ToolCall{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
 	renderer.Observe(dora.Update{
-		Kind: dora.UpdateMessageAdded,
-		Message: dora.Message{
-			Role:      dora.RoleAssistant,
-			Content:   "我会查看目录。",
-			ToolCalls: []dora.ToolCall{call},
-		},
+		Kind:    dora.UpdateMessageReceived,
+		Message: dora.Message{Role: dora.RoleAssistant, Content: "我会查看目录。", ToolCalls: []dora.ToolCall{call}},
 	})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
 	renderer.Observe(dora.Update{
-		Kind:    dora.UpdateMessageAdded,
-		Message: dora.Message{Role: dora.RoleTool, ToolCallID: call.ID},
+		Kind:     dora.UpdateToolFinished,
+		ToolCall: call,
+		Message:  dora.Message{Role: dora.RoleTool, ToolCallID: call.ID, Content: "0"},
 	})
 	if !strings.Contains(output.String(), "ms") {
 		t.Fatalf("output %q does not report a duration when StartedAt is zero", output.String())
