@@ -156,52 +156,29 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 		return history
 	}
 
-	// Find the index of the first assistant message. Everything before it
-	// (system and user messages) is always retained.
-	firstAssistant := -1
-	for i, message := range history {
-		if message.Role == RoleAssistant {
-			firstAssistant = i
-			break
-		}
-	}
-	if firstAssistant < 0 {
+	// Use splitRounds to locate the leading prefix (always retained) and the
+	// rounds. Each round is a contiguous slice of an assistant message plus the
+	// tool messages it triggered, so a round is never split in the middle.
+	prefix, rounds := splitRounds(history)
+
+	// No assistant history (whole history is the prefix) or fewer rounds than
+	// keepRounds: nothing is dropped.
+	if len(rounds) == 0 || len(rounds) < keepRounds {
 		return history
 	}
 
-	// Count rounds backwards from the end. Each assistant message starts a
-	// round; tool messages belong to the preceding assistant round.
-	roundStart := firstAssistant
-	rounds := 0
-	for i := len(history) - 1; i >= firstAssistant; i-- {
-		if history[i].Role == RoleAssistant {
-			rounds++
-			if rounds == keepRounds {
-				roundStart = i
-				break
-			}
-		}
-	}
+	// Retain the most recent keepRounds rounds. The very last round is the
+	// current one and is kept unchanged; every earlier retained round is a
+	// historical round compressed against the per-message budget below.
+	currentRound := rounds[len(rounds)-1]
+	historicalRounds := rounds[len(rounds)-keepRounds : len(rounds)-1]
 
-	// If there are fewer rounds than keepRounds, nothing is dropped.
-	if rounds < keepRounds {
-		return history
+	// Count historical messages (all retained rounds except the current one) to
+	// divide the remaining budget among them.
+	historicalCount := 0
+	for _, round := range historicalRounds {
+		historicalCount += len(round)
 	}
-
-	// The last round is the current one and is retained unchanged. Estimate its
-	// text size (images are ignored as they consume no text context) and
-	// subtract it from the budget.
-	currentStart := roundStart
-	for i := len(history) - 1; i >= roundStart; i-- {
-		if history[i].Role == RoleAssistant {
-			currentStart = i
-			break
-		}
-	}
-
-	// Count historical messages (before the current round) to divide the
-	// remaining budget among them.
-	historicalCount := currentStart - roundStart
 
 	// Compute the per-message budget for historical rounds. A non-positive
 	// contextWindow disables budget-based truncation; compactRound then still
@@ -209,41 +186,28 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 	// round intact (matching the pre-budget behavior).
 	perMessage := 0
 	if contextWindow > 0 {
-		currentBytes := 0
-		for _, message := range history[currentStart:] {
-			currentBytes += len(message.Content)
-			for _, call := range message.ToolCalls {
-				currentBytes += len(call.Input)
-			}
-		}
-		remaining := contextWindow - currentBytes
+		// The current round is retained unchanged. Estimate its text size
+		// (images are ignored as they consume no text context) and subtract it
+		// from the budget.
+		remaining := contextWindow - estimateBytes(currentRound)
 		if remaining <= 0 || historicalCount == 0 {
 			// The current round already consumes the budget; keep only it.
-			kept := make([]Message, 0, firstAssistant+len(history)-currentStart)
-			kept = append(kept, history[:firstAssistant]...)
-			kept = append(kept, history[currentStart:]...)
+			kept := make([]Message, 0, len(prefix)+len(currentRound))
+			kept = append(kept, prefix...)
+			kept = append(kept, currentRound...)
 			return kept
 		}
 		perMessage = remaining / historicalCount
 	}
 
-	// Keep the leading system/user prefix plus the retained rounds. The last
-	// round is the current one and is retained unchanged; earlier rounds are
-	// compressed against the per-message budget.
-	kept := make([]Message, 0, firstAssistant+len(history)-roundStart)
-	kept = append(kept, history[:firstAssistant]...)
-	for i := roundStart; i < len(history); {
-		roundEnd := i + 1
-		for roundEnd < len(history) && history[roundEnd].Role != RoleAssistant {
-			roundEnd++
-		}
-		if roundEnd == len(history) {
-			kept = append(kept, history[i:roundEnd]...)
-		} else {
-			kept = append(kept, compactRound(history[i:roundEnd], perMessage)...)
-		}
-		i = roundEnd
+	// Keep the leading system/user prefix, the compacted historical rounds, and
+	// the current round unchanged.
+	kept := make([]Message, 0, len(prefix)+len(currentRound)+historicalCount)
+	kept = append(kept, prefix...)
+	for _, round := range historicalRounds {
+		kept = append(kept, compactRound(round, perMessage)...)
 	}
+	kept = append(kept, currentRound...)
 	return kept
 }
 
