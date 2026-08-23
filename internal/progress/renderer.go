@@ -21,6 +21,11 @@ const (
 
 const commandSummaryWidth = 72
 
+// modelStatusInterval limits in-place terminal writes while model deltas are
+// arriving. Observer callbacks run synchronously with the model stream, so
+// repainting for every delta can slow generation on a busy or remote terminal.
+const modelStatusInterval = 250 * time.Millisecond
+
 // reasoningFlushBytes bounds how much reasoning may buffer without a newline
 // before it is flushed anyway, so a pathologically long single line still
 // streams.
@@ -36,6 +41,12 @@ type Renderer struct {
 	// run on slow terminals, so display is opt-in (--reasoning).
 	showReasoning bool
 	waiting       bool
+	// modelStarted, modelBytes, and modelStatusAt track the current model call
+	// so hidden streaming output can update the Thinking line with useful live
+	// progress without exposing reasoning content.
+	modelStarted  time.Time
+	modelBytes    int
+	modelStatusAt time.Time
 	// reasoning tracks whether reasoning has been streamed in the current
 	// round, so the assistant message that follows starts on a fresh line.
 	reasoning bool
@@ -74,9 +85,14 @@ func (r *Renderer) Observe(update dora.Update) {
 	switch update.Kind {
 	case dora.UpdateThinking:
 		r.renderThinking()
+	case dora.UpdateContentDelta:
+		r.receiveModelDelta(update.Delta, !r.reasoning)
 	case dora.UpdateReasoningDelta:
 		if r.showReasoning {
+			r.receiveModelDelta(update.Delta, false)
 			r.renderReasoning(update.Delta)
+		} else {
+			r.receiveModelDelta(update.Delta, true)
 		}
 	case dora.UpdateMessageReceived:
 		r.renderAssistantMessage(update.Message)
@@ -91,12 +107,36 @@ func (r *Renderer) renderThinking() {
 	// A round that aborted without an assistant message still ends its
 	// reasoning run here, so the next placeholder starts on a fresh line.
 	r.endReasoning()
+	r.modelStarted = time.Now()
+	r.modelBytes = 0
+	r.modelStatusAt = time.Time{}
 	if r.terminal {
 		fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
 	} else {
 		fmt.Fprintln(r.output, "Thinking...")
 	}
 	r.waiting = true
+}
+
+// receiveModelDelta counts exact UTF-8 bytes received from content and
+// reasoning streams. In terminal mode it periodically repaints the Thinking
+// placeholder with elapsed time and bytes received. Non-terminal output stays
+// stable, and visible reasoning suppresses the status repaint because the
+// streamed reasoning itself already shows progress.
+func (r *Renderer) receiveModelDelta(delta string, showStatus bool) {
+	r.modelBytes += len(delta)
+	if !showStatus || !r.terminal || !r.waiting || r.modelStarted.IsZero() {
+		return
+	}
+
+	now := time.Now()
+	if !r.modelStatusAt.IsZero() && now.Sub(r.modelStatusAt) < modelStatusInterval {
+		return
+	}
+	r.modelStatusAt = now
+	fmt.Fprint(r.output, "\x1b[1A\r\x1b[2K")
+	fmt.Fprintf(r.output, "%s Thinking... %s · %s\n",
+		r.paint(blue, "●"), formatDuration(now.Sub(r.modelStarted)), formatBytes(r.modelBytes))
 }
 
 // renderReasoning streams the model's chain-of-thought in dim style. The

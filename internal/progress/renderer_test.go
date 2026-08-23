@@ -146,6 +146,46 @@ func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	}
 }
 
+func TestRendererUpdatesThinkingWithReceivedBytesInTerminal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, true, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "你好"})
+
+	rendered := output.String()
+	if !strings.Contains(rendered, "\x1b[1A\r\x1b[2K") ||
+		!strings.Contains(rendered, "Thinking...") ||
+		!strings.Contains(rendered, " · 6 B") {
+		t.Fatalf("output = %q, want an in-place status with elapsed time and 6 received bytes", rendered)
+	}
+
+	// A delta inside the throttle interval is counted but does not repaint.
+	renderer.Observe(dora.Update{Kind: dora.UpdateContentDelta, Delta: "abcd"})
+	if got := strings.Count(output.String(), "\x1b[1A\r\x1b[2K"); got != 1 {
+		t.Fatalf("erase count = %d, want 1 while status updates are throttled", got)
+	}
+
+	// Once the interval passes, the next repaint includes all accumulated
+	// content and reasoning bytes.
+	renderer.modelStatusAt = time.Now().Add(-modelStatusInterval)
+	renderer.Observe(dora.Update{Kind: dora.UpdateContentDelta, Delta: "x"})
+	if !strings.Contains(output.String(), " · 11 B") {
+		t.Fatalf("output = %q, want accumulated content and reasoning bytes", output.String())
+	}
+}
+
+func TestRendererDoesNotRepeatThinkingStatusWithoutTerminal(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "hidden"})
+	renderer.Observe(dora.Update{Kind: dora.UpdateContentDelta, Delta: "answer"})
+
+	if got := output.String(); got != "Thinking...\n" {
+		t.Fatalf("output = %q, want one stable non-terminal status line", got)
+	}
+}
+
 func TestRendererStreamsReasoningInTerminal(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, true, false, true)
