@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"net/http"
@@ -145,16 +146,25 @@ func info(observer dora.Observer, format string, args ...any) {
 	observer.Observe(dora.Update{Kind: dora.UpdateInfo, Info: fmt.Sprintf(format, args...)})
 }
 
-// systemPrompt returns the content of <doraHome>/AGENTS.md when it exists, or
-// an empty string otherwise. An empty result means no system message is sent.
-func systemPrompt() string {
+//go:embed prompts/default_system.md
+var defaultSystemPrompt string
+
+// systemPrompt returns the system prompt for every turn: the configured
+// agent.system_prompt when set (fully replacing the built-in default) or the
+// built-in default otherwise, with the content of <doraHome>/AGENTS.md
+// appended when that file exists.
+func systemPrompt(agent config.Agent) string {
+	base := strings.TrimSpace(agent.SystemPrompt)
+	if base == "" {
+		base = defaultSystemPrompt
+	}
 	path, err := paths.AgentsFile()
 	if err != nil {
-		return ""
+		return base
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return base
 	}
-	return string(content)
+	return base + "\n\n" + string(content)
 }

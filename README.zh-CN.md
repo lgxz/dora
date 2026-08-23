@@ -257,6 +257,15 @@ agent:
 
 当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止，但不会持久化这个未完成的 turn。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `dora: maximum rounds exceeded`。
 
+每个 turn 都以一条系统提示词开始。二进制内置了一份默认提示词（涵盖诸如"宣布任务完成前先按请求的字面要求核对结果"之类的工作习惯）；配置非空的 `agent.system_prompt` 会整体替换内置默认。若存在 `~/.dora/AGENTS.md`（或 `$DORA_HOME/AGENTS.md`），其内容会追加在基础提示词之后，两种情况皆然：
+
+```yaml
+agent:
+  system_prompt: |
+    你是 Acme 部署团队的终端助手。
+    优先使用 /opt/acme 下的部署脚本。
+```
+
 运行一次性提示，或将指令与管道输入结合：
 
 ```sh

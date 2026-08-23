@@ -779,7 +779,8 @@ func TestRunContinuesAfterMaximumRounds(t *testing.T) {
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf continued\"}"}}]}}]}`), nil
 		case 2:
 			messages := body["messages"].([]any)
-			if len(messages) != 3 || messages[2].(map[string]any)["role"] != "tool" {
+			if len(messages) != 4 || messages[0].(map[string]any)["role"] != "system" ||
+				messages[3].(map[string]any)["role"] != "tool" {
 				t.Fatalf("resumed messages = %#v", messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"finished"}}]}`), nil
@@ -1657,10 +1658,10 @@ func TestRunStoresIndependentTurnsInSQLiteSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		messages := body["messages"].([]any)
-		if len(messages) != 1 {
+		if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" {
 			t.Fatalf("call %d loaded history into model messages: %#v", calls, messages)
 		}
-		if messages[0].(map[string]any)["content"] != []string{"first", "second"}[calls-1] {
+		if messages[1].(map[string]any)["content"] != []string{"first", "second"}[calls-1] {
 			t.Fatalf("call %d messages = %#v", calls, messages)
 		}
 		foundHistory := false

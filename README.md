@@ -385,6 +385,19 @@ completed tool output without replaying work. Declining stops normally without
 persisting the incomplete turn. With piped or redirected I/O, Dora does not
 prompt and returns `dora: maximum rounds exceeded` instead.
 
+Every turn starts with a system prompt. The binary ships a built-in default
+(working habits such as verifying results against the literal request before
+declaring a task complete); a non-empty `agent.system_prompt` fully replaces
+it. When `~/.dora/AGENTS.md` (or `$DORA_HOME/AGENTS.md`) exists, its content
+is appended after the base prompt either way:
+
+```yaml
+agent:
+  system_prompt: |
+    You are a terminal assistant for the Acme deploy team.
+    Always prefer the deploy scripts under /opt/acme.
+```
+
 Run a one-shot prompt or combine an instruction with piped input:
 
 ```sh

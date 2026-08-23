@@ -49,6 +49,10 @@ type PolicySettings struct {
 // Agent configures model-tool loop safeguards.
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
+	// SystemPrompt replaces the CLI's built-in default system prompt. Empty
+	// uses the built-in default. The content of <doraHome>/AGENTS.md is
+	// appended either way.
+	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
 // Provider describes one provider endpoint with multiple profiles.

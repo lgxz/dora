@@ -126,7 +126,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 
 	// Read the system prompt once; it is reused across every turn so the
 	// daemon loop does not re-read AGENTS.md on each event.
-	system := systemPrompt()
+	system := systemPrompt(cfg.Agent)
 
 	for {
 		if serverMode {

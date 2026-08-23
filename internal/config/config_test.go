@@ -433,6 +433,22 @@ agent:
 	}
 }
 
+func TestLoadAgentSystemPrompt(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    profiles: [{name: model}]
+agent:
+  system_prompt: "You are a pirate."
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.SystemPrompt != "You are a pirate." {
+		t.Fatalf("cfg.Agent.SystemPrompt = %q, want the configured prompt", cfg.Agent.SystemPrompt)
+	}
+}
+
 func TestLoadEventsConfig(t *testing.T) {
 	clearBuiltinAPIKeys(t)
 	cfg, err := Load(writeConfig(t, `
