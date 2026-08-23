@@ -426,7 +426,7 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 	if err != nil {
 		return dora.Response{}, err
 	}
-	result := dora.Response{Continuation: continuation}
+	result := dora.Response{Continuation: continuation, Usage: usageFromResponses(response.Usage)}
 	for _, rawItem := range response.Output {
 		var item responseItem
 		if err := json.Unmarshal(rawItem, &item); err != nil {
@@ -454,6 +454,26 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 		}
 	}
 	return result, nil
+}
+
+// usageFromResponses converts a Responses API token block into the neutral
+// dora.Usage shape. It is nil safe: an absent usage block yields nil.
+func usageFromResponses(u *responsesUsage) *dora.Usage {
+	if u == nil {
+		return nil
+	}
+	usage := &dora.Usage{
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  u.TotalTokens,
+	}
+	if u.InputTokensDetails.ReasoningTokens != nil || u.InputTokensDetails.CachedTokens != nil {
+		usage.InputDetails = &dora.TokenDetails{ReasoningTokens: u.InputTokensDetails.ReasoningTokens}
+	}
+	if u.OutputTokensDetails.ReasoningTokens != nil {
+		usage.OutputDetails = &dora.TokenDetails{ReasoningTokens: u.OutputTokensDetails.ReasoningTokens}
+	}
+	return usage
 }
 
 type responsesRequest struct {
@@ -519,6 +539,24 @@ type responsesResponse struct {
 	Error  struct {
 		Message string `json:"message"`
 	} `json:"error"`
+	Usage *responsesUsage `json:"usage"`
+}
+
+// responsesUsage mirrors the token accounting block of a Responses API
+// response.completed event. The whole block is optional, and the details
+// sub-structures and their fields may also be absent, so pointer fields keep a
+// missing value distinguishable from a zero value.
+type responsesUsage struct {
+	InputTokens        int64 `json:"input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	TotalTokens        int64 `json:"total_tokens"`
+	InputTokensDetails struct {
+		ReasoningTokens *int64 `json:"reasoning_tokens"`
+		CachedTokens    *int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokensDetails struct {
+		ReasoningTokens *int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 }
 
 type responseItem struct {

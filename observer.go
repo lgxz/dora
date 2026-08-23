@@ -14,6 +14,7 @@ const (
 	UpdateToolFailed     UpdateKind = "tool_failed"
 	UpdateInfo           UpdateKind = "info"
 	UpdateTurnStarted    UpdateKind = "turn_started"
+	UpdateUsage          UpdateKind = "usage"
 )
 
 // Update describes transient run progress. Message is populated for
@@ -30,6 +31,7 @@ type Update struct {
 	StartedAt time.Time
 	Err       error
 	Info      string
+	Usage     *Usage // populated for UpdateUsage
 }
 
 // Observer receives synchronous progress updates from an Agent run.

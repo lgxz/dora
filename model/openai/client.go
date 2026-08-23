@@ -151,6 +151,7 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
+	body.StreamOptions = &chatStreamOptions{IncludeUsage: boolPtr(true)}
 	for _, message := range request.Messages {
 		content, err := encodeContent(message)
 		if err != nil {
@@ -312,6 +313,11 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 				call.arguments.WriteString(delta.Function.Arguments)
 			}
 		}
+		// The final chunk with include_usage carries empty choices and a usage
+		// block; capture it. Chunks with empty choices and no usage are skipped.
+		if event.Usage != nil {
+			result.Usage = usageFromChat(event.Usage)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return dora.Response{}, provider.Retryable(fmt.Errorf("read stream: %w", err))
@@ -346,14 +352,21 @@ type streamedToolCall struct {
 }
 
 type chatRequest struct {
-	Model           string           `json:"model"`
-	Messages        []chatMessage    `json:"messages"`
-	Tools           []chatTool       `json:"tools,omitempty"`
-	Stream          bool             `json:"stream"`
-	MaxTokens       *int             `json:"max_tokens,omitempty"`
-	Temperature     *float64         `json:"temperature,omitempty"`
-	ReasoningEffort *string          `json:"reasoning_effort,omitempty"`
-	Thinking        *thinkingControl `json:"thinking,omitempty"`
+	Model           string             `json:"model"`
+	Messages        []chatMessage      `json:"messages"`
+	Tools           []chatTool         `json:"tools,omitempty"`
+	Stream          bool               `json:"stream"`
+	MaxTokens       *int               `json:"max_tokens,omitempty"`
+	Temperature     *float64           `json:"temperature,omitempty"`
+	ReasoningEffort *string            `json:"reasoning_effort,omitempty"`
+	Thinking        *thinkingControl   `json:"thinking,omitempty"`
+	StreamOptions   *chatStreamOptions `json:"stream_options,omitempty"`
+}
+
+// chatStreamOptions requests per-stream token usage from Chat Completions. When
+// IncludeUsage is set the stream's final chunk (empty choices) carries usage.
+type chatStreamOptions struct {
+	IncludeUsage *bool `json:"include_usage"`
 }
 
 // thinkingControl controls "thinking mode" reasoning for providers that
@@ -406,6 +419,23 @@ type chatStreamEvent struct {
 		Index int             `json:"index"`
 		Delta chatStreamDelta `json:"delta"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage"`
+}
+
+// chatUsage mirrors the token accounting block of a Chat Completions stream
+// chunk. When stream_options.include_usage is enabled the provider emits a
+// final chunk with empty choices that carries this block.
+type chatUsage struct {
+	PromptTokens      int64             `json:"prompt_tokens"`
+	CompletionTokens  int64             `json:"completion_tokens"`
+	TotalTokens       int64             `json:"total_tokens"`
+	PromptDetails     *chatUsageDetails `json:"prompt_tokens_details,omitempty"`
+	CompletionDetails *chatUsageDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type chatUsageDetails struct {
+	ReasoningTokens *int64 `json:"reasoning_tokens"`
+	CachedTokens    *int64 `json:"cached_tokens,omitempty"`
 }
 
 // chatStreamDelta is one streamed message delta. Reasoning models expose their
@@ -440,6 +470,32 @@ func reasoningDelta(delta chatStreamDelta) string {
 		return delta.Reasoning
 	}
 	return delta.Reason
+}
+
+// boolPtr returns a pointer to the given boolean value.
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+// usageFromChat converts a Chat Completions token block into the neutral
+// dora.Usage shape, mapping prompt/completion tokens onto input/output tokens.
+// It is nil safe: an absent usage block yields nil.
+func usageFromChat(u *chatUsage) *dora.Usage {
+	if u == nil {
+		return nil
+	}
+	usage := &dora.Usage{
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
+	}
+	if u.PromptDetails != nil && u.PromptDetails.ReasoningTokens != nil {
+		usage.InputDetails = &dora.TokenDetails{ReasoningTokens: u.PromptDetails.ReasoningTokens}
+	}
+	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens != nil {
+		usage.OutputDetails = &dora.TokenDetails{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
+	}
+	return usage
 }
 
 var _ dora.StreamingModel = (*Client)(nil)

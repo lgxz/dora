@@ -54,14 +54,39 @@ type Request struct {
 	Continuation string
 }
 
+// TokenDetails holds the optional per-category token breakdown that some
+// providers report. Each field is a pointer so that a missing category is
+// distinguishable from a zero value.
+type TokenDetails struct {
+	ReasoningTokens          *int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens              *int64 `json:"audio_tokens,omitempty"`
+	AcceptedPredictionTokens *int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens *int64 `json:"rejected_prediction_tokens,omitempty"`
+}
+
+// Usage records the number of tokens a single model call consumed. It is an
+// optional payload: providers that do not report usage leave Top-level nil. The
+// same neutral shape covers both OpenAI Chat Completions and Responses token
+// accounting.
+type Usage struct {
+	InputTokens   int64         `json:"input_tokens"`
+	OutputTokens  int64         `json:"output_tokens"`
+	TotalTokens   int64         `json:"total_tokens"`
+	InputDetails  *TokenDetails `json:"input_details,omitempty"`
+	OutputDetails *TokenDetails `json:"output_details,omitempty"`
+}
+
 // Response is either a final assistant response, one or more tool calls, or
 // both. Tool calls are executed before the model is invoked again. Reasoning
 // holds the chain-of-thought that reasoning models emit alongside Content; it
 // is for display and persistence only and is resent to a provider solely
-// according to the adapter's provider-specific policy.
+// according to the adapter's provider-specific policy. Usage is an optional
+// record of the tokens the model call consumed; it is nil when the provider
+// reports none.
 type Response struct {
 	Content      string
 	Reasoning    string
 	ToolCalls    []ToolCall
 	Continuation string
+	Usage        *Usage // optional; nil when the provider reports none
 }

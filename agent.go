@@ -145,6 +145,8 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 			return fmt.Errorf("dora: generate response: %w", err)
 		}
 
+		notify(observer, Update{Kind: UpdateUsage, Usage: response.Usage})
+
 		assistant := Message{
 			Role:      RoleAssistant,
 			Content:   response.Content,

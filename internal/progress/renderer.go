@@ -89,7 +89,22 @@ func (r *Renderer) Observe(update dora.Update) {
 		r.startTool(update)
 	case dora.UpdateToolFailed:
 		r.renderToolFailure(update)
+	case dora.UpdateUsage:
+		r.renderUsage(update.Usage)
 	}
+}
+
+// renderUsage prints a concise token summary line for a completed model call.
+// A nil usage payload is a legal "no usage reported" state and renders nothing.
+func (r *Renderer) renderUsage(usage *dora.Usage) {
+	if usage == nil {
+		return
+	}
+	if r.waiting {
+		fmt.Fprint(r.output, "\x1b[1A\r\x1b[2K")
+		r.waiting = false
+	}
+	fmt.Fprintf(r.output, "%s in=%d out=%d tok (total %d)\n", r.paint(dim, "▸"), usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 }
 
 func (r *Renderer) renderThinking() {
