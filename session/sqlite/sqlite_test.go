@@ -64,7 +64,7 @@ func TestStoreRejectsIncompleteTurnAndUnknownSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CommitTurn(ctx, dora.NewTurn("system", "user")); err == nil {
+	if _, err := store.CommitTurn(ctx, dora.NewTurn("user")); err == nil {
 		t.Fatal("expected incomplete turn error")
 	}
 	if _, err := store.db.Exec(`PRAGMA user_version = 99`); err != nil {
@@ -106,7 +106,7 @@ func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
 		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
 
-	turn := dora.NewTurn("system", "weather?")
+	turn := dora.NewTurn("weather?")
 	round := dora.Round{
 		Assistant: dora.Message{
 			Role:      dora.RoleAssistant,
@@ -119,9 +119,7 @@ func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
 	if err := turn.AppendRound(round, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := turn.Complete("sunny", ""); err != nil {
-		t.Fatal(err)
-	}
+	completeTurnWithSystem(t, turn, "sunny")
 	id, err := store.CommitTurn(ctx, turn)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +165,7 @@ func TestOpenRejectsLegacyJSONSession(t *testing.T) {
 
 func completedTurn(t *testing.T, user, result string, roundCount int) *dora.Turn {
 	t.Helper()
-	turn := dora.NewTurn("system", user)
+	turn := dora.NewTurn(user)
 	for index := 1; index <= roundCount; index++ {
 		id := "call-" + strconv.Itoa(index)
 		round := dora.Round{
@@ -178,8 +176,23 @@ func completedTurn(t *testing.T, user, result string, roundCount int) *dora.Turn
 			t.Fatal(err)
 		}
 	}
-	if err := turn.Complete(result, ""); err != nil {
+	completeTurnWithSystem(t, turn, result)
+	return turn
+}
+
+type finalModel string
+
+func (m finalModel) Generate(context.Context, dora.Request) (dora.Response, error) {
+	return dora.Response{Content: string(m)}, nil
+}
+
+func completeTurnWithSystem(t *testing.T, turn *dora.Turn, result string) {
+	t.Helper()
+	agent, err := dora.NewWithConfig(finalModel(result), dora.AgentConfig{SystemPrompt: "system"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return turn
+	if err := agent.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
 }

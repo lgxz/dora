@@ -34,6 +34,9 @@ type Agent struct {
 	tools     map[string]Tool
 	specs     []ToolSpec
 	maxRounds int
+	// systemPrompt is immutable Agent identity/configuration. Each Turn binds
+	// a snapshot of it when the run starts.
+	systemPrompt string
 	// contextWindow is the model's approximate context capacity in content
 	// bytes, probed once at construction and cached for compaction to consume
 	// without re-asserting each round. It falls back to
@@ -41,10 +44,19 @@ type Agent struct {
 	contextWindow int
 }
 
-// AgentConfig controls safeguards for the model-tool loop. A zero
-// MaxRounds uses the default limit.
+// AgentConfig controls immutable Agent behavior and safeguards. A zero
+// MaxRounds uses the default limit; an empty SystemPrompt omits the system
+// message for library callers.
 type AgentConfig struct {
-	MaxRounds int
+	MaxRounds    int
+	SystemPrompt string
+}
+
+// RunOptions controls one Agent run without mutating the Agent. ExcludeTools
+// removes matching tools both from the definitions sent to the model and from
+// the set of tools that may be executed during this run.
+type RunOptions struct {
+	ExcludeTools []string
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -52,7 +64,7 @@ func New(model Model, tools ...Tool) (*Agent, error) {
 	return NewWithConfig(model, AgentConfig{}, tools...)
 }
 
-// NewWithConfig creates an Agent with explicit loop safeguards.
+// NewWithConfig creates an Agent with explicit immutable configuration.
 func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) {
 	if model == nil {
 		return nil, errors.New("dora: model is nil")
@@ -75,6 +87,7 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 		tools:         make(map[string]Tool, len(tools)),
 		specs:         make([]ToolSpec, 0, len(tools)),
 		maxRounds:     maxRounds,
+		systemPrompt:  cfg.SystemPrompt,
 		contextWindow: contextWindow,
 	}
 
@@ -106,6 +119,13 @@ func (a *Agent) Run(ctx context.Context, turn *Turn) error {
 
 // RunObserved is Run with synchronous progress notifications.
 func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) error {
+	return a.RunObservedWithOptions(ctx, turn, observer, RunOptions{})
+}
+
+// RunObservedWithOptions is RunObserved with per-run tool selection. The
+// Agent remains immutable, so the same Agent may run independent Turns with
+// different options concurrently.
+func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer Observer, opts RunOptions) error {
 	if a == nil || a.model == nil {
 		return errors.New("dora: agent is not initialized")
 	}
@@ -115,6 +135,10 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 	if turn.Completed() {
 		return errors.New("dora: turn is already complete")
 	}
+	if err := turn.bindSystem(a.systemPrompt); err != nil {
+		return err
+	}
+	tools, specs := a.toolsForRun(opts)
 
 	// lastUsage is the real token usage of the most recently completed model call
 	// in this run. It stays local to the loop (never stored on the immutable
@@ -129,7 +153,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 
 		request := Request{
 			Messages:     a.requestMessages(turn.Messages(), lastUsage),
-			Tools:        a.specs,
+			Tools:        specs,
 			Continuation: turn.Continuation(),
 		}
 		var response Response
@@ -193,7 +217,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 			wg.Add(1)
 			go func(i int, call ToolCall) {
 				defer wg.Done()
-				tool, ok := a.tools[call.Name]
+				tool, ok := tools[call.Name]
 				if !ok {
 					results[i].err = fmt.Errorf("tool %q not found", call.Name)
 					return
@@ -249,6 +273,29 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 	}
 
 	return fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
+}
+
+func (a *Agent) toolsForRun(opts RunOptions) (map[string]Tool, []ToolSpec) {
+	if len(opts.ExcludeTools) == 0 {
+		return a.tools, a.specs
+	}
+	excluded := make(map[string]struct{}, len(opts.ExcludeTools))
+	for _, name := range opts.ExcludeTools {
+		excluded[name] = struct{}{}
+	}
+	tools := make(map[string]Tool, len(a.tools))
+	for name, tool := range a.tools {
+		if _, skip := excluded[name]; !skip {
+			tools[name] = tool
+		}
+	}
+	specs := make([]ToolSpec, 0, len(a.specs))
+	for _, spec := range a.specs {
+		if _, skip := excluded[spec.Name]; !skip {
+			specs = append(specs, spec)
+		}
+	}
+	return tools, specs
 }
 
 // generateWithRetry invokes the model, retrying retryable failures with

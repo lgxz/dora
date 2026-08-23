@@ -149,22 +149,13 @@ func info(observer dora.Observer, format string, args ...any) {
 //go:embed prompts/default_system.md
 var defaultSystemPrompt string
 
-// systemPrompt returns the system prompt for every turn: the configured
+// systemPrompt returns the immutable Agent system prompt: the configured
 // agent.system_prompt when set (fully replacing the built-in default) or the
-// built-in default otherwise, with the content of <doraHome>/AGENTS.md
-// appended when that file exists.
+// built-in default otherwise.
 func systemPrompt(agent config.Agent) string {
 	base := strings.TrimSpace(agent.SystemPrompt)
 	if base == "" {
 		base = defaultSystemPrompt
 	}
-	path, err := paths.AgentsFile()
-	if err != nil {
-		return base
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return base
-	}
-	return base + "\n\n" + string(content)
+	return base
 }

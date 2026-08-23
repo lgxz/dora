@@ -7,6 +7,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/internal/events"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/model/router"
 	"github.com/lgxz/dora/session"
@@ -16,19 +17,44 @@ import (
 	historytool "github.com/lgxz/dora/tool/history"
 	jobtool "github.com/lgxz/dora/tool/job"
 	powershelltool "github.com/lgxz/dora/tool/powershell"
+	tasktool "github.com/lgxz/dora/tool/task"
 	viewimagetool "github.com/lgxz/dora/tool/viewimage"
 )
 
-func buildTools(cfg config.Config, model *router.Router, manager *job.Manager, history session.Reader, historyAvailable, noSkills bool) ([]dora.Tool, error) {
+type toolDependencies struct {
+	model      *router.Router
+	jobs       *job.Manager
+	history    session.Reader
+	noSkills   bool
+	taskRunner tasktool.Runner
+	extraTools []dora.Tool
+}
+
+func buildEventTools(source *events.Events) ([]dora.Tool, error) {
+	if source == nil || !source.Enabled() {
+		return nil, nil
+	}
+	sendTool, err := events.NewSendTool(source)
+	if err != nil {
+		return nil, err
+	}
+	nodesTool, err := events.NewNodesTool(source)
+	if err != nil {
+		return nil, err
+	}
+	return []dora.Tool{sendTool, nodesTool}, nil
+}
+
+func buildTools(cfg config.Config, deps toolDependencies) ([]dora.Tool, error) {
 	var tools []dora.Tool
-	if historyAvailable {
-		historyTool, err := historytool.New(history)
+	if deps.history != nil {
+		historyTool, err := historytool.New(deps.history)
 		if err != nil {
 			return nil, err
 		}
 		tools = append(tools, historyTool)
 	}
-	if !noSkills {
+	if !deps.noSkills {
 		skillDirectories, err := configuredSkillDirectories(cfg.Skills.Directories)
 		if err != nil {
 			return nil, err
@@ -47,18 +73,22 @@ func buildTools(cfg config.Config, model *router.Router, manager *job.Manager, h
 			}
 		}
 	}
-	commandTools, err := buildCommandTools(cfg.Tools, manager)
+	commandTools, err := buildCommandTools(cfg.Tools, deps.jobs)
 	if err != nil {
 		return nil, err
 	}
 	tools = append(tools, commandTools...)
-	tools = append(tools, jobtool.New(manager))
+	tools = append(tools, jobtool.New(deps.jobs))
 	viewImage := viewimagetool.New()
 	viewImage.SetViewer(func(image dora.Image, prompt string) (string, error) {
-		return model.View(context.Background(), image, prompt)
+		return deps.model.View(context.Background(), image, prompt)
 	})
 	tools = append(tools, viewImage)
 	tools = append(tools, buildFileTools()...)
+	tools = append(tools, deps.extraTools...)
+	if cfg.Tools.Task.Enabled == nil || *cfg.Tools.Task.Enabled {
+		tools = append(tools, tasktool.New(deps.taskRunner))
+	}
 	return tools, nil
 }
 

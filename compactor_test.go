@@ -160,7 +160,7 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 	// while still allowing maxRetainedRounds rounds to be greedily retained.
 	agent.contextWindow = maxRetainedRounds*roundBytes + 1000
 	// Seed enough history so the second call exceeds the dynamic round budget.
-	turn := NewTurn("", "u0")
+	turn := NewTurn("u0")
 	for i := 0; i < seedRounds; i++ {
 		turn.rounds = append(turn.rounds, Round{
 			Assistant: Message{Role: RoleAssistant, Content: "a"},
@@ -293,7 +293,10 @@ func TestCompactMessagesDoesNotPollutePersistedTurn(t *testing.T) {
 	// Turn.Messages returns a defensive copy; compactMessages mutates it. The
 	// persisted round history must remain untouched.
 	long := string(make([]byte, 100))
-	turn := NewTurn("sys", "u0")
+	turn := NewTurn("u0")
+	if err := turn.bindSystem("sys"); err != nil {
+		t.Fatal(err)
+	}
 	turn.rounds = append(turn.rounds, Round{
 		Assistant: Message{Role: RoleAssistant, Content: "a1"},
 		Tools:     []Message{{Role: RoleTool, ToolCallID: "c1", Content: long}},

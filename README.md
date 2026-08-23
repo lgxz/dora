@@ -106,7 +106,7 @@ dora -update --force
 Usage:
 
 ```sh
-cat AGENTS.md | dora Summarize the following content | mdcat 
+cat notes.md | dora Summarize the following content | mdcat
 ```
 
 ### Build from source
@@ -385,11 +385,10 @@ completed tool output without replaying work. Declining stops normally without
 persisting the incomplete turn. With piped or redirected I/O, Dora does not
 prompt and returns `dora: maximum rounds exceeded` instead.
 
-Every turn starts with a system prompt. The binary ships a built-in default
+Every Agent has an immutable system prompt. The binary ships a built-in default
 (working habits such as verifying results against the literal request before
 declaring a task complete); a non-empty `agent.system_prompt` fully replaces
-it. When `~/.dora/AGENTS.md` (or `$DORA_HOME/AGENTS.md`) exists, its content
-is appended after the base prompt either way:
+it:
 
 ```yaml
 agent:
@@ -547,6 +546,8 @@ tools:
     enabled: false
   powershell:
     enabled: true
+  task:
+    enabled: false
 ```
 
 Automatic tools whose executable is absent are skipped. A tool explicitly
@@ -581,6 +582,31 @@ moves the command to the background immediately:
   "command": "go build ./...",
   "wait_seconds": 300
 }
+```
+
+## Independent tasks
+
+The `task` tool is enabled by default. It accepts one self-contained
+`instruction`, runs it through the same Agent and model in a fresh `Turn`, and
+returns that turn's final text to the parent conversation. The fresh turn does
+not inherit the parent's messages or provider continuation. It uses the same
+immutable Agent system prompt and can use every other
+tool available to the parent, but `task` itself is removed from both the tool
+definitions and executable tool set to prevent recursive delegation.
+
+Multiple task calls in one model response run concurrently, following Dora's
+normal tool execution semantics. There is no separate task concurrency limit.
+Child progress is not sent to the terminal Observer; only the parent message
+and the completed task summary and duration are rendered.
+
+Task context isolation is not a security sandbox. Parent and child runs share
+the process, current working directory, filesystem, permissions, model client,
+and concrete tool instances. Disable the tool when delegation is not wanted:
+
+```yaml
+tools:
+  task:
+    enabled: false
 ```
 
 ## Image understanding

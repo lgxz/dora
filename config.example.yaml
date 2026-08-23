@@ -60,6 +60,8 @@ policy:
 
 agent:
   max_rounds: 256
+  # Empty uses the built-in default. A non-empty value fully replaces it.
+  # system_prompt: You are a terminal-based AI agent.
 
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)
 # followed by ~/.agents/skills/, independent of this file's location. Absent
@@ -78,4 +80,8 @@ tools:
   powershell:
     # Automatic default: enabled on Windows, disabled elsewhere.
     # Set true or false to override the platform default.
+    # enabled: true
+  task:
+    # Enabled by default. Set false to prevent delegation into independent
+    # conversation contexts.
     # enabled: true

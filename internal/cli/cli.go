@@ -19,6 +19,7 @@ import (
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/model/registry"
+	"github.com/lgxz/dora/session"
 )
 
 const maxStdinBytes = 16 << 20
@@ -97,27 +98,22 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 	jobManager := job.New()
-	tools, err := buildTools(cfg, model, jobManager, sessionStore, historyAvailable, opts.noSkills)
+	extraTools, err := buildEventTools(source)
 	if err != nil {
 		return err
 	}
-	if serverMode {
-		sendTool, err := events.NewSendTool(source)
-		if err != nil {
-			return err
-		}
-		tools = append(tools, sendTool)
-
-		nodesTool, err := events.NewNodesTool(source)
-		if err != nil {
-			return err
-		}
-		tools = append(tools, nodesTool)
+	var history session.Reader
+	if historyAvailable {
+		history = sessionStore
 	}
-
-	agent, err := dora.NewWithConfig(model, dora.AgentConfig{
-		MaxRounds: cfg.Agent.MaxRounds,
-	}, tools...)
+	agent, err := buildAgent(cfg, agentDependencies{
+		model:        model,
+		jobs:         jobManager,
+		history:      history,
+		noSkills:     opts.noSkills,
+		extraTools:   extraTools,
+		systemPrompt: systemPrompt(cfg.Agent),
+	})
 	if err != nil {
 		return err
 	}
@@ -129,10 +125,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			info(observer, "background jobs are still running; they keep running after dora exits")
 		}
 	}()
-
-	// Read the system prompt once; it is reused across every turn so the
-	// daemon loop does not re-read AGENTS.md on each event.
-	system := systemPrompt(cfg.Agent)
 
 	for {
 		if serverMode {
@@ -154,7 +146,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		if observer != nil {
 			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
 		}
-		turn := dora.NewTurn(system, prompt)
+		turn := dora.NewTurn(prompt)
 		completed, err := runTurn(ctx, agent, turn, observer, streams)
 		if err != nil {
 			if serverMode {

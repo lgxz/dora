@@ -51,16 +51,14 @@ func runAgent(agent *Agent, ctx context.Context, input []Message) (testRunResult
 }
 
 func runAgentObserved(agent *Agent, ctx context.Context, input []Message, observer Observer) (testRunResult, error) {
-	var system, user string
+	var user string
 	for _, message := range input {
 		switch message.Role {
-		case RoleSystem:
-			system = message.Content
 		case RoleUser:
 			user = message.Content
 		}
 	}
-	turn := NewTurn(system, user)
+	turn := NewTurn(user)
 	err := agent.RunObserved(ctx, turn, observer)
 	content, _ := turn.Result()
 	return testRunResult{Content: content, Messages: turn.Messages(), Continuation: turn.Continuation()}, err
@@ -68,12 +66,12 @@ func runAgentObserved(agent *Agent, ctx context.Context, input []Message, observ
 
 func TestRunReturnsFinalResponse(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
-		if len(request.Messages) != 1 || request.Messages[0].Content != "hello" {
+		if len(request.Messages) != 2 || request.Messages[0].Role != RoleSystem || request.Messages[0].Content != "system" || request.Messages[1].Content != "hello" {
 			t.Fatalf("unexpected messages: %#v", request.Messages)
 		}
 		return Response{Content: "hi"}, nil
 	})
-	agent, err := New(model)
+	agent, err := NewWithConfig(model, AgentConfig{SystemPrompt: "system"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +86,7 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 		t.Fatalf("content = %q, want %q", result.Content, "hi")
 	}
 	want := []Message{
+		{Role: RoleSystem, Content: "system"},
 		{Role: RoleUser, Content: "hello"},
 		{Role: RoleAssistant, Content: "hi"},
 	}
@@ -247,6 +246,51 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 	}
 }
 
+func TestRunObservedWithOptionsExcludesToolFromModelAndExecution(t *testing.T) {
+	var modelCalls int
+	var taskCalls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			if len(request.Tools) != 1 || request.Tools[0].Name != "read" {
+				t.Fatalf("tools = %#v, want only read", request.Tools)
+			}
+			// Even if a provider returns a call for an excluded tool, execution
+			// must use the same filtered tool set as the model request.
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "task", Input: json.RawMessage(`{}`)}}}, nil
+		case 2:
+			result := request.Messages[len(request.Messages)-1]
+			if !strings.Contains(result.Content, `tool "task" not found`) {
+				t.Fatalf("tool result = %#v", result)
+			}
+			return Response{Content: "recovered"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	readTool := stubTool{spec: ToolSpec{Name: "read"}, execute: func(context.Context, json.RawMessage) (string, error) {
+		return "read", nil
+	}}
+	taskTool := stubTool{spec: ToolSpec{Name: "task"}, execute: func(context.Context, json.RawMessage) (string, error) {
+		taskCalls++
+		return "nested", nil
+	}}
+	agent, err := New(model, readTool, taskTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := NewTurn("delegate")
+	if err := agent.RunObservedWithOptions(context.Background(), turn, nil, RunOptions{ExcludeTools: []string{"task"}}); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := turn.Result()
+	if result != "recovered" || taskCalls != 0 {
+		t.Fatalf("result = %q, task calls = %d", result, taskCalls)
+	}
+}
+
 func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 	var calls int
 	streamReturned := false
@@ -370,7 +414,7 @@ func TestRunTurnCarriesContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := NewTurn("", "continue")
+	turn := NewTurn("continue")
 	turn.continuation = "saved-state"
 	err = agent.Run(context.Background(), turn)
 	if err != nil {

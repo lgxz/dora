@@ -449,6 +449,23 @@ agent:
 	}
 }
 
+func TestLoadTaskEnabledOverride(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    profiles: [{name: model}]
+tools:
+  task:
+    enabled: false
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Task.Enabled == nil || *cfg.Tools.Task.Enabled {
+		t.Fatalf("tools.task.enabled = %#v, want false", cfg.Tools.Task.Enabled)
+	}
+}
+
 func TestLoadEventsConfig(t *testing.T) {
 	clearBuiltinAPIKeys(t)
 	cfg, err := Load(writeConfig(t, `

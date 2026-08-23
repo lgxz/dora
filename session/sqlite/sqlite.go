@@ -210,7 +210,7 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 	if len(page.Rounds) != expectedCount {
 		return session.RoundPage{}, fmt.Errorf("decode turn %d: loaded %d rounds, want %d", id, len(page.Rounds), expectedCount)
 	}
-	validator := dora.NewTurn("", "")
+	validator := dora.NewTurn("")
 	for index, round := range page.Rounds {
 		if err := validator.AppendRound(round, ""); err != nil {
 			return session.RoundPage{}, fmt.Errorf("decode turn %d round %d: %w", id, options.Offset+index, err)

@@ -9,7 +9,7 @@ Dora is a small, composable LLM agent. The core design principles are:
 - The core loop depends only on a small set of interfaces, not on any concrete model, tool, CLI, or storage implementation.
 - Each package has a single primary responsibility; cross-package access happens through explicit interfaces or data structures.
 - The CLI is the composition root, responsible for selecting and assembling implementations; the core packages do not read configuration or environment variables.
-- One mutable `Turn` is explicitly passed to the Agent; `Agent` itself holds no mutable state across tasks.
+- One mutable `Turn` is explicitly passed to the Agent; `Agent` holds immutable model, tool, safeguard, and system-prompt configuration and no mutable state across tasks.
 - All external operations accept `context.Context`, supporting cancellation and timeouts.
 
 ## Overall Structure
@@ -29,6 +29,7 @@ flowchart TD
     CLI --> Skill["skill<br/>Skill tool"]
     CLI --> Bash["tool/bash<br/>Bash tool"]
     CLI --> PowerShell["tool/powershell<br/>PowerShell tool"]
+    CLI --> Task["tool/task<br/>independent Agent turn"]
     CLI --> History["tool/history<br/>explicit history queries"]
 
     Registry --> OpenAI["model/openai<br/>Chat Completions"]
@@ -45,6 +46,8 @@ flowchart TD
     Skill -->|"Tool"| Core
     Bash -->|"Tool"| Core
     PowerShell -->|"Tool"| Core
+    Task -->|"Tool"| Core
+    Task -->|"fresh Turn via RunOptions"| Core
     CommandExec -->|"Tool"| Core
     Progress -->|"Observer"| Core
     Session --> History
@@ -82,6 +85,7 @@ Key constraints on dependency direction:
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/viewimage` | Loads a local image file or remote URL and returns a text description via a transient visual model | `New`, `Tool.SetViewer`, `Tool.Spec`, `Tool.Execute` |
+| `tool/task` | Runs an instruction through the same Agent in a fresh Turn, excluding itself from the nested run | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, process execution, background transition via wait_seconds, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
 
 ## Core Interfaces
@@ -128,6 +132,12 @@ type ToolResult struct {
 
 Within the same Agent, tool names must be non-empty and unique. Tool definitions are copied when the Agent is constructed, preventing the caller from later modifying their JSON Schemas.
 
+`RunObservedWithOptions` accepts per-run `RunOptions`. Its `ExcludeTools`
+names are removed from both the definitions sent to the model and the lookup
+map used for execution. `Run` and `RunObserved` retain their original APIs and
+delegate with empty options. Filtering is local to a run and never mutates the
+Agent, so independent Turns may use different tool sets concurrently.
+
 ### Observer
 
 ```go
@@ -150,15 +160,18 @@ type Round struct {
     Tools     []Message
 }
 
-turn := dora.NewTurn(systemPrompt, userInput)
+agent, err := dora.NewWithConfig(model, dora.AgentConfig{
+    SystemPrompt: systemPrompt,
+}, tools...)
+turn := dora.NewTurn(userInput)
 err := agent.Run(ctx, turn)
 result, complete := turn.Result()
 ```
 
-`Turn` is the Agent's mutable run state. It begins with one optional system
-message followed by one user message (the system message is omitted when no
-system prompt is configured), appends only complete rounds, and ends with a
-final assistant result without tool calls. A round contains one assistant message with one or
+`Turn` is the Agent's mutable run state. It is constructed from one user input.
+On its first run, the Agent binds a snapshot of its immutable system prompt to
+the Turn; an empty prompt omits the system message. The Turn then appends only
+complete rounds and ends with a final assistant result without tool calls. A round contains one assistant message with one or
 more tool calls and all corresponding tool messages in call order. Provider
 continuation is opaque and exists only in the live Turn; it is not persisted.
 All exported accessors return defensive copies.
@@ -197,14 +210,15 @@ sequenceDiagram
 
 Current execution semantics:
 
-- The Agent is immutable; mutable messages and continuation belong to the supplied Turn.
+- The Agent is immutable and owns the system prompt; mutable messages, the bound system-prompt snapshot, and continuation belong to the supplied Turn.
+- A run may exclude tools without mutating the Agent; excluded tools are neither advertised nor executable for that run.
 - Input messages, tool calls, and output state are all defensively copied.
 - Tool packages translate tool-specific output conventions into `ToolResult`; the Agent only forwards its content and images into the provider-neutral message history.
 - When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Declining does not persist the incomplete Turn. Non-interactive runs report the error directly.
-- The CLI creates every Turn with a system prompt assembled from two sources: the base is the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the built-in default embedded at `internal/cli/prompts/default_system.md`; the content of `~/.dora/AGENTS.md` (or `$DORA_HOME/AGENTS.md`), when that file exists, is appended after the base. A system message is therefore always sent. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
+- The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 - Before building a request for the model, the Agent compacts long histories (a round is an assistant message together with the tool messages it triggered, and is never split in half). Whether to compact, and how many of the most recent rounds to retain, is decided dynamically from the current context occupancy: it retains the newest rounds until the prefix plus the retained rounds approaches a `budgetSafetyRatio` (0.9) fraction of the model-reported `contextWindow` bytes, bounded by `minRetainedRounds` (8) and `maxRetainedRounds` (`defaultCompactionRounds` = 32). The occupancy estimate anchors on the previous model call's real `total_tokens` (from `Response.Usage`) plus a byte estimate of the newest round, so a full budget keeps more history and a tight one keeps less; when usage is not reported it falls back to a pure byte estimate of the whole history. When the history already fits within the budget it is returned unchanged. Retained historical rounds are further compressed against the byte budget by dropping images and truncating oversized content and JSON tool input; the current (last) round is retained unchanged. A non-positive budget disables truncation (images are still dropped). Truncation applies to a copy of the request messages, never rewriting the persisted Turn history.
 
 ## CLI Run Flow
@@ -218,7 +232,7 @@ Current execution semantics:
 5. If `--session` specifies a SQLite file, open it. When it already contains completed turns, register a history tool backed by its Reader interface; never load old turns into the model request.
 6. Create the concrete model adapter based on the selected profile's effective API and model.
 7. Discover skills and create the other available tools according to configuration.
-8. Construct a stateless `dora.Agent` and a fresh `dora.Turn`.
+8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
 9. Run the Agent, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
 10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. Failed or declined Turns are not written.
 
@@ -351,6 +365,22 @@ PowerShell is a separate `powershell` tool from Bash, and its input Schema likew
 PowerShell executes commands in Dora's current directory using `-NoLogo -NoProfile -NonInteractive -Command`, and the model uses `Set-Location` within the command to change directories. It shares the same `wait_seconds` background behavior and structured results as Bash, and is likewise not a security sandbox.
 
 Bash and PowerShell remain separate public tools with separate shell-launch policies, and both delegate to `tool/internal/commandexec` for input validation, process execution, and result encoding. This internal package cannot be imported from outside the module.
+
+## Task Tool
+
+Task is enabled by default and can be disabled with
+`tools.task.enabled: false`. Its single `instruction` is executed using the same immutable Agent
+and model but a fresh Turn, so parent messages and provider continuation are
+not inherited. The nested run binds the same Agent system prompt and uses
+`RunObservedWithOptions` to exclude `task` from both
+model-visible definitions and executable tools. All other tools and their
+underlying process, filesystem, working-directory, and permission state remain
+shared; this is conversation-context isolation, not a security sandbox.
+
+Multiple Task calls returned in one response follow the Agent's normal
+unbounded concurrent tool execution. Nested runs use no Observer, preventing
+parallel child progress from interleaving in the terminal; the outer Task
+completion still reports its final result and duration.
 
 ## Configuration and Paths
 

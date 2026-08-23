@@ -127,7 +127,14 @@ func TestBuildToolsAlwaysRegistersViewImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := buildTools(config.Config{}, r, job.New(), nil, false, true)
+	tools, err := buildTools(config.Config{}, toolDependencies{
+		model:    r,
+		jobs:     job.New(),
+		noSkills: true,
+		taskRunner: func(context.Context, string) (string, error) {
+			return "done", nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,10 @@ import (
 )
 
 func TestTurnBuildsMessagesAndDefensivelyCopiesRounds(t *testing.T) {
-	turn := NewTurn("system", "user")
+	turn := NewTurn("user")
+	if err := turn.bindSystem("system"); err != nil {
+		t.Fatal(err)
+	}
 	round := Round{
 		Assistant: Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{"text":"hi"}`)}}},
 		Tools:     []Message{{Role: RoleTool, ToolCallID: "call-1", Content: "hi"}},
@@ -34,7 +37,10 @@ func TestTurnBuildsMessagesAndDefensivelyCopiesRounds(t *testing.T) {
 }
 
 func TestTurnOmitsEmptySystemMessage(t *testing.T) {
-	turn := NewTurn("", "user")
+	turn := NewTurn("user")
+	if err := turn.bindSystem(""); err != nil {
+		t.Fatal(err)
+	}
 	messages := turn.Messages()
 	if len(messages) != 1 || messages[0].Role != RoleUser || messages[0].Content != "user" {
 		t.Fatalf("messages = %#v", messages)
@@ -42,7 +48,10 @@ func TestTurnOmitsEmptySystemMessage(t *testing.T) {
 }
 
 func TestTurnRejectsIncompleteRoundAndMutationAfterCompletion(t *testing.T) {
-	turn := NewTurn("system", "user")
+	turn := NewTurn("user")
+	if err := turn.bindSystem("system"); err != nil {
+		t.Fatal(err)
+	}
 	err := turn.AppendRound(Round{Assistant: Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1"}}}}, "")
 	if err == nil {
 		t.Fatal("expected missing tool result error")
@@ -55,5 +64,18 @@ func TestTurnRejectsIncompleteRoundAndMutationAfterCompletion(t *testing.T) {
 	}
 	if err := turn.Complete("again", ""); err == nil {
 		t.Fatal("expected duplicate completion error")
+	}
+}
+
+func TestTurnRejectsDifferentSystemPromptBinding(t *testing.T) {
+	turn := NewTurn("user")
+	if err := turn.bindSystem("first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.bindSystem("first"); err != nil {
+		t.Fatalf("rebinding the same system prompt: %v", err)
+	}
+	if err := turn.bindSystem("second"); err == nil {
+		t.Fatal("expected a different system prompt to be rejected")
 	}
 }

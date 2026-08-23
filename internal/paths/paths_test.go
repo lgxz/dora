@@ -72,32 +72,3 @@ func TestSkillsDirFallsBackToHomeDotDora(t *testing.T) {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
-
-func TestAgentsFileUsesDoraHome(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("DORA_HOME", root)
-
-	path, err := AgentsFile()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(root, "AGENTS.md")
-	if path != want {
-		t.Fatalf("path = %q, want %q", path, want)
-	}
-}
-
-func TestAgentsFileFallsBackToHomeDotDora(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("DORA_HOME", "")
-
-	path, err := AgentsFile()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(home, ".dora", "AGENTS.md")
-	if path != want {
-		t.Fatalf("path = %q, want %q", path, want)
-	}
-}

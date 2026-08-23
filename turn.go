@@ -12,12 +12,13 @@ type Round struct {
 	Tools     []Message `json:"tools"`
 }
 
-// Turn is one independent Agent run. It starts with an optional system message
-// (omitted when empty) and a user message, accumulates complete tool rounds,
-// and ends with one final assistant result. A Turn is mutable while it is
-// running and cannot be changed after Complete.
+// Turn is one independent Agent run. It is created with a user message, binds
+// the Agent's optional system prompt when first run, accumulates complete tool
+// rounds, and ends with one final assistant result. A Turn is mutable while it
+// is running and cannot be changed after Complete.
 type Turn struct {
 	system       string
+	systemBound  bool
 	user         string
 	rounds       []Round
 	result       string
@@ -25,9 +26,25 @@ type Turn struct {
 	completed    bool
 }
 
-// NewTurn creates a fresh, independent turn.
-func NewTurn(system, user string) *Turn {
-	return &Turn{system: system, user: user}
+// NewTurn creates a fresh, independent turn for one user input. The Agent
+// binds its immutable system prompt when the turn first runs.
+func NewTurn(user string) *Turn {
+	return &Turn{user: user}
+}
+
+func (t *Turn) bindSystem(system string) error {
+	if t == nil {
+		return errors.New("dora: turn is nil")
+	}
+	if t.systemBound {
+		if t.system != system {
+			return errors.New("dora: turn is bound to a different system prompt")
+		}
+		return nil
+	}
+	t.system = system
+	t.systemBound = true
+	return nil
 }
 
 // Messages returns a defensive copy of the complete current turn in model

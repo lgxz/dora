@@ -49,6 +49,7 @@ var toolFormatters = map[string]toolFormatter{
 	"skill":      {call: formatSkillCall, result: staticResult("loaded")},
 	"history":    {call: formatHistoryCall, result: formatHistoryResult},
 	"job":        {call: formatJobCall, result: formatJobResult},
+	"task":       {call: formatTaskCall, result: staticResult("done")},
 }
 
 func presentTool(call dora.ToolCall, message dora.Message) toolPresentation {
@@ -97,6 +98,16 @@ func formatCommandCall(raw json.RawMessage) string {
 	}
 	if json.Unmarshal(raw, &input) == nil && input.Command != "" {
 		return collapse(input.Command)
+	}
+	return genericArguments(raw)
+}
+
+func formatTaskCall(raw json.RawMessage) string {
+	var input struct {
+		Instruction string `json:"instruction"`
+	}
+	if json.Unmarshal(raw, &input) == nil && input.Instruction != "" {
+		return collapse(input.Instruction)
 	}
 	return genericArguments(raw)
 }

@@ -50,8 +50,7 @@ type PolicySettings struct {
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
 	// SystemPrompt replaces the CLI's built-in default system prompt. Empty
-	// uses the built-in default. The content of <doraHome>/AGENTS.md is
-	// appended either way.
+	// uses the built-in default.
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
@@ -94,6 +93,7 @@ type ProfileSpec struct {
 type Tools struct {
 	Bash       Bash       `yaml:"bash,omitempty"`
 	PowerShell PowerShell `yaml:"powershell,omitempty"`
+	Task       Task       `yaml:"task,omitempty"`
 }
 
 // Bash configures the Bash command tool. Nil Enabled uses the platform default.
@@ -104,6 +104,12 @@ type Bash struct {
 // PowerShell configures the PowerShell command tool. Nil Enabled uses the
 // platform default.
 type PowerShell struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// Task configures delegation to a fresh Agent turn. Nil Enabled defaults to
+// enabled.
+type Task struct {
 	Enabled *bool `yaml:"enabled,omitempty"`
 }
 

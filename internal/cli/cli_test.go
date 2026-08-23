@@ -766,6 +766,112 @@ tools:
 	}
 }
 
+func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
+	t.Setenv("DORA_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		tools := body["tools"].([]any)
+		hasTask := false
+		for _, raw := range tools {
+			function := raw.(map[string]any)["function"].(map[string]any)
+			if function["name"] == "task" {
+				hasTask = true
+			}
+		}
+		switch calls {
+		case 1:
+			if !hasTask || len(messages) != 2 || messages[1].(map[string]any)["content"] != "parent request" {
+				t.Fatalf("parent request tools/messages = %#v / %#v", tools, messages)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-task","type":"function","function":{"name":"task","arguments":"{\"instruction\":\"inspect independently\"}"}}]}}]}`), nil
+		case 2:
+			if hasTask || len(messages) != 2 || messages[1].(map[string]any)["content"] != "inspect independently" {
+				t.Fatalf("subagent request tools/messages = %#v / %#v", tools, messages)
+			}
+			system := messages[0].(map[string]any)["content"].(string)
+			if system != defaultSystemPrompt {
+				t.Fatalf("subagent system prompt = %q, want Agent system prompt", system)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"child result"}}]}`), nil
+		case 3:
+			if !hasTask || len(messages) != 4 {
+				t.Fatalf("resumed parent tools/messages = %#v / %#v", tools, messages)
+			}
+			toolMessage := messages[3].(map[string]any)
+			if toolMessage["role"] != "tool" || toolMessage["content"] != "child result" {
+				t.Fatalf("task result message = %#v", toolMessage)
+			}
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"parent result"}}]}`), nil
+		default:
+			t.Fatalf("model called %d times", calls)
+			return nil, nil
+		}
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	if err := Run(context.Background(), []string{"-q", "--no-skills", "--config", configPath, "parent request"}, IO{
+		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
+		StdinIsTerminal: true, HTTPClient: httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "parent result\n" || calls != 3 {
+		t.Fatalf("stdout = %q, calls = %d", stdout.String(), calls)
+	}
+}
+
+func TestRunCanDisableTask(t *testing.T) {
+	t.Setenv("DORA_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range body["tools"].([]any) {
+			function := raw.(map[string]any)["function"].(map[string]any)
+			if function["name"] == "task" {
+				t.Fatalf("task tool present while disabled: %#v", function)
+			}
+		}
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+tools:
+  task:
+    enabled: false
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), []string{"-q", "--no-skills", "--config", configPath, "hello"}, IO{
+		Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+		StdinIsTerminal: true, HTTPClient: httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunContinuesAfterMaximumRounds(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -960,7 +1066,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 9 {
+		if len(tools) != 10 {
 			t.Fatalf("tools = %#v", tools)
 		}
 		var names []string
@@ -968,7 +1074,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell,job,view_image,read,write,edit,grep,glob" {
+		if strings.Join(names, ",") != "bash,powershell,job,view_image,read,write,edit,grep,glob,task" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil

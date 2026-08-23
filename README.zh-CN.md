@@ -80,7 +80,7 @@ dora -update --force
 用法：
 
 ```sh
-cat AGENTS.md | dora Summarize the following content | mdcat
+cat notes.md | dora Summarize the following content | mdcat
 ```
 
 ### 从源码构建
@@ -257,7 +257,7 @@ agent:
 
 当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止，但不会持久化这个未完成的 turn。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `dora: maximum rounds exceeded`。
 
-每个 turn 都以一条系统提示词开始。二进制内置了一份默认提示词（涵盖诸如"宣布任务完成前先按请求的字面要求核对结果"之类的工作习惯）；配置非空的 `agent.system_prompt` 会整体替换内置默认。若存在 `~/.dora/AGENTS.md`（或 `$DORA_HOME/AGENTS.md`），其内容会追加在基础提示词之后，两种情况皆然：
+每个 Agent 都持有一条不可变的系统提示词。二进制内置了一份默认提示词（涵盖诸如"宣布任务完成前先按请求的字面要求核对结果"之类的工作习惯）；配置非空的 `agent.system_prompt` 会整体替换内置默认：
 
 ```yaml
 agent:
@@ -364,6 +364,8 @@ tools:
   powershell:
     enabled: true
     timeout_seconds: 120
+  task:
+    enabled: false
 ```
 
 可执行文件不存在的自动工具会被跳过。用 `enabled: true` 显式启用的工具必须存在于 `PATH` 上，否则 Dora 会报告错误。目前发现机制仅检查可执行文件是否存在；它不会启动 shell 去探测其运行时环境。
@@ -384,6 +386,27 @@ PowerShell 也在 Dora 的当前目录中启动，需要时可在命令内部使
 ```
 
 省略时，`timeout_seconds` 来自对应的 YAML 工具设置；当该设置为零或缺失时，默认 120 秒。
+
+## 独立任务
+
+`task` 工具默认启用。它接收一条完整、自包含的 `instruction`，使用同一个
+Agent 和模型在全新的 Turn 中执行，并将最终文本返回父上下文。新 Turn
+不会继承父 Turn 的消息或 provider continuation；它会绑定同一个 Agent
+system prompt，并可使用父 Agent 的其他工具，但 `task` 会同时从子运行的
+工具声明和执行集合中移除，以防递归委派。
+
+同一模型响应中的多个 Task 调用遵循 Dora 的普通工具语义并发执行，没有
+额外的 Task 并发限制。子运行不向终端 Observer 发送过程事件，只显示父
+Agent 的消息以及 Task 完成摘要和耗时。
+
+Task 的上下文隔离不是安全沙箱。父子运行共享进程、当前工作目录、文件
+系统、权限、模型客户端和具体工具实例。不需要委派时可以关闭：
+
+```yaml
+tools:
+  task:
+    enabled: false
+```
 
 ## 图像理解
 

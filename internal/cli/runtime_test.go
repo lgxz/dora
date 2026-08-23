@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,47 +43,16 @@ func TestParseModelSpec(t *testing.T) {
 	}
 }
 
-func TestSystemPromptAppendsAgentsFile(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("DORA_HOME", root)
-	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Be concise."), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	want := defaultSystemPrompt + "\n\n" + "Be concise."
-	if got := systemPrompt(config.Agent{}); got != want {
-		t.Fatalf("systemPrompt(Agent{}) = %q, want default prompt followed by AGENTS.md content", got)
-	}
-}
-
-func TestSystemPromptDefaultsWhenAgentsFileMissing(t *testing.T) {
-	t.Setenv("DORA_HOME", t.TempDir())
-
+func TestSystemPromptUsesDefault(t *testing.T) {
 	if got := systemPrompt(config.Agent{}); got != defaultSystemPrompt {
 		t.Fatalf("systemPrompt(Agent{}) = %q, want the built-in default prompt", got)
 	}
 }
 
 func TestSystemPromptConfigOverridesDefault(t *testing.T) {
-	t.Setenv("DORA_HOME", t.TempDir())
-
-	agent := config.Agent{SystemPrompt: "You are a pirate."}
+	agent := config.Agent{SystemPrompt: "  You are a pirate.  "}
 	if got := systemPrompt(agent); got != "You are a pirate." {
 		t.Fatalf("systemPrompt(%+v) = %q, want the configured prompt verbatim", agent, got)
-	}
-}
-
-func TestSystemPromptConfigOverridesDefaultButAppendsAgentsFile(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("DORA_HOME", root)
-	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Be concise."), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	agent := config.Agent{SystemPrompt: "  You are a pirate.  "}
-	want := "You are a pirate.\n\nBe concise."
-	if got := systemPrompt(agent); got != want {
-		t.Fatalf("systemPrompt(%+v) = %q, want %q", agent, got, want)
 	}
 }
 
