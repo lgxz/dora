@@ -96,6 +96,48 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 	}
 }
 
+func TestRunObservedEmitsUsagePerRound(t *testing.T) {
+	// Two rounds: a tool round then a final round. Each must emit an
+	// UpdateUsage observer event carrying the Response.Usage, including the
+	// nil (no usage) case without panicking.
+	inputUsage := &Usage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		if len(request.Messages) == 1 {
+			return Response{Content: "use tool", ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}, Usage: inputUsage}, nil
+		}
+		return Response{Content: "done", Usage: nil}, nil
+	})
+	tool := stubTool{
+		spec:    ToolSpec{Name: "bash"},
+		execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil },
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var usageUpdates []*Usage
+	observer := ObserverFunc(func(update Update) {
+		if update.Kind == UpdateUsage {
+			usageUpdates = append(usageUpdates, update.Usage)
+		}
+	})
+
+	input := []Message{{Role: RoleUser, Content: "hello"}}
+	if _, err := runAgentObserved(agent, context.Background(), input, observer); err != nil {
+		t.Fatal(err)
+	}
+	if len(usageUpdates) != 2 {
+		t.Fatalf("usageUpdates = %#v, want 2 updates", usageUpdates)
+	}
+	if usageUpdates[0] != inputUsage {
+		t.Fatalf("round 1 usage = %#v, want %#v", usageUpdates[0], inputUsage)
+	}
+	if usageUpdates[1] != nil {
+		t.Fatalf("round 2 usage = %#v, want nil", usageUpdates[1])
+	}
+}
+
 func TestRunExecutesToolAndContinues(t *testing.T) {
 	var calls int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {

@@ -327,6 +327,85 @@ func TestRequestBodyDefaultMaxTokensOnWire(t *testing.T) {
 	}
 }
 
+func TestRequestBodySendsIncludeUsageStreamOption(t *testing.T) {
+	// stream_options.include_usage must be true on the wire so the final chunk
+	// of the stream carries token usage.
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := decoded["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options missing from %#v", decoded)
+	}
+	if options["include_usage"] != true {
+		t.Fatalf("include_usage = %#v, want true", options["include_usage"])
+	}
+}
+
+func TestReadStreamCapturesLastChunkUsage(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return streamResponse(
+			`{"choices":[{"index":0,"delta":{"content":"hello"}}]}`,
+			// Final chunk with include_usage: empty choices plus usage.
+			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+		), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "hello" {
+		t.Fatalf("content = %q", response.Content)
+	}
+	if response.Usage == nil {
+		t.Fatal("Usage is nil, want populated usage")
+	}
+	if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 5 || response.Usage.TotalTokens != 15 {
+		t.Fatalf("Usage = %#v", response.Usage)
+	}
+}
+
+func TestReadStreamSkipsEmptyChoicesWithoutUsage(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return streamResponse(
+			`{"choices":[{"index":0,"delta":{"content":"hello"}}]}`,
+			// A chunk with empty choices and no usage must be skipped safely.
+			`{"choices":[]}`,
+		), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "hello" {
+		t.Fatalf("content = %q", response.Content)
+	}
+	if response.Usage != nil {
+		t.Fatalf("Usage = %#v, want nil", response.Usage)
+	}
+}
+
 func TestRequestBodyEmitsMaxTokensAndTemperature(t *testing.T) {
 	maxTokens := 4096
 	temperature := 0.5

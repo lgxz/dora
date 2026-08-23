@@ -418,6 +418,10 @@ terminals; pass `--reasoning` to show it live in a dim style in place of the
 line, and `--quiet` suppresses the reasoning display along with all other
 progress.
 
+When a provider reports token usage, Dora prints a concise token summary per
+completed model round on stderr (input/output/total), and `--quiet` suppresses
+it. Token usage is observational only and is not persisted to sessions.
+
 ### Sessions
 
 Pass a SQLite file to retain completed turns across CLI invocations:

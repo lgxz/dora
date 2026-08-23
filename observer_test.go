@@ -45,17 +45,29 @@ func TestRunObservedReportsConversationProgress(t *testing.T) {
 	}
 	want := []UpdateKind{
 		UpdateThinking,
+		UpdateUsage,
 		UpdateMessageAdded,
 		UpdateToolStarted,
 		UpdateMessageAdded,
 		UpdateThinking,
+		UpdateUsage,
 		UpdateMessageAdded,
 	}
 	if !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("update kinds = %#v, want %#v", kinds, want)
 	}
-	if updates[2].ToolCall.Name != "echo" || updates[3].Message.Content != "hello" {
+	if updates[3].ToolCall.Name != "echo" || updates[4].Message.Content != "hello" {
 		t.Fatalf("updates = %#v", updates)
+	}
+	// Each usage event follows its round's thinking event and carries a nil
+	// usage payload (the stub model reports none), without panicking.
+	for _, index := range []int{1, 6} {
+		if updates[index].Kind != UpdateUsage {
+			t.Fatalf("update %d = %#v, want UpdateUsage", index, updates[index])
+		}
+		if updates[index].Usage != nil {
+			t.Fatalf("update %d usage = %#v, want nil", index, updates[index].Usage)
+		}
 	}
 }
 

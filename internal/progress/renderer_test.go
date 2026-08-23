@@ -113,6 +113,29 @@ func TestRendererShowsSessionState(t *testing.T) {
 	}
 }
 
+func TestRendererShowsUsageSummary(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, false)
+	renderer.Observe(dora.Update{
+		Kind:  dora.UpdateUsage,
+		Usage: &dora.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	})
+	if rendered := output.String(); !strings.Contains(rendered, "in=10 out=5 tok (total 15)") {
+		t.Fatalf("output = %q, want a usage summary line", rendered)
+	}
+}
+
+func TestRendererIgnoresNilUsage(t *testing.T) {
+	// A nil Usage payload is a legal "no usage reported" state and must be
+	// skipped without panicking or printing a line.
+	var output bytes.Buffer
+	renderer := New(&output, false, false, false)
+	renderer.Observe(dora.Update{Kind: dora.UpdateUsage, Usage: nil})
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want nothing for nil usage", output.String())
+	}
+}
+
 func TestRendererReplacesThinkingWithAssistantContentInTerminal(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, true, false, false)

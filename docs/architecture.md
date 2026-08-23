@@ -107,6 +107,8 @@ type ContextSize interface {
 
 `Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls.
 
+`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional per-category `TokenDetails`). It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Neither the compactor nor session persistence reads `Usage`; it is surfaced to observers (see below) on every complete round and otherwise left untouched.
+
 ### Tool
 
 ```go
@@ -133,6 +135,8 @@ type Observer interface {
 ```
 
 The Observer synchronously receives semantic events such as `thinking`, reasoning deltas, content deltas, message additions, tool starts, and tool failures. It only consumes run data, does not participate in Agent decisions, and cannot modify the session history.
+
+After the Agent obtains a complete response for a round (tool or final) it emits an `UpdateUsage` event carrying that round's `Response.Usage` (`nil` when the provider reports none). The `internal/progress.Renderer` prints a concise token summary for non-nil usage and silently ignores nil usage; `--quiet` silences the renderer entirely.
 
 Callbacks run on the Agent's current goroutine, so implementations should return quickly. `internal/progress.Renderer` is the Observer used by the CLI.
 
@@ -230,11 +234,15 @@ The CLI's standard output carries only the final result; run progress and errors
 
 Reasoning models expose their chain-of-thought in a non-standard delta field, and providers disagree on the name. The adapter decodes the known candidates (`reasoning_content`, `reasoning`, `reason`, first non-empty wins per event), aggregates them into `Response.Reasoning`, and streams them as reasoning deltas before the content deltas. Whether captured reasoning is resent on tool-calling assistant history messages is controlled by the profile-level `preserve_thinking` switch (default off): DeepSeek requires `reasoning_content` to be present in tool-calling turns and rejects the request otherwise, so its built-in configuration enables the switch; other providers either ignore it or expect it stripped, and keep it off. The final (tool-free) assistant message is never resent within a turn.
 
+To capture token usage, Chat Completions requests always set `stream_options.include_usage: true`; compliant providers then emit a final chunk with empty `choices` that carries the `usage` block. The adapter decodes that block into `Response.Usage` (mapping `prompt_tokens`/`completion_tokens` onto input/output tokens) and ignores any empty-`choices` chunk without usage. Providers that ignore `stream_options` or omit usage simply leave `Response.Usage` nil — the default, nil-safe degradation. Because most OpenAI-compatible endpoints ignore unknown request fields, this does not break existing streams.
+
 ### Responses API
 
 `model/openairesponses` calls `/responses` and parses SSE. It implements `StreamingModel`, passes text deltas to the Agent, and encodes the typed items from the Responses protocol into an opaque continuation.
 
 Reasoning summaries surface when the provider sends them: `response.reasoning_summary_text.delta` events stream as reasoning deltas, and reasoning output items contribute their summary text to `Response.Reasoning`. Summaries are not requested proactively, so providers that only return them on demand keep an empty `Reasoning`.
+
+The Responses `response.completed` event may carry a `usage` block; the adapter decodes it into `Response.Usage` when present and leaves it nil otherwise. Responses streams report usage without any request option.
 
 This continuation is used to preserve data across different CLI processes, such as reasoning, function calls, and function call output, which cannot be fully expressed by generic messages alone. It belongs only to the provider and backend that created it and should not be parsed or modified by other modules.
 
@@ -384,6 +392,7 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
 - Session history is append-only at the turn level; individual turns are committed once after completion.
+- Model `Usage` payloads are surfaced to observers but are not persisted to session history; persistence and any usage-driven behavior are left to a later phase.
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI is the composition root; as providers and tools grow, a factory/registry could be extracted, but at the current scale keeping an explicit switch is simpler.
 - There is currently no event bus, interactive REPL, or background daemon.

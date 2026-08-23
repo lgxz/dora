@@ -106,6 +106,59 @@ func TestGenerateStreamReportsCompletedToolCall(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamMapsUsageFromCompletedEvent(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return eventStream(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"reasoning_tokens":2,"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":1}}}}`,
+			"",
+		}, "\n")), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage == nil {
+		t.Fatal("Usage is nil, want populated usage")
+	}
+	if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 5 || response.Usage.TotalTokens != 15 {
+		t.Fatalf("Usage = %#v", response.Usage)
+	}
+	if response.Usage.InputDetails == nil || response.Usage.InputDetails.ReasoningTokens == nil || *response.Usage.InputDetails.ReasoningTokens != 2 {
+		t.Fatalf("InputDetails = %#v, want reasoning_tokens 2", response.Usage.InputDetails)
+	}
+	if response.Usage.OutputDetails == nil || response.Usage.OutputDetails.ReasoningTokens == nil || *response.Usage.OutputDetails.ReasoningTokens != 1 {
+		t.Fatalf("OutputDetails = %#v, want reasoning_tokens 1", response.Usage.OutputDetails)
+	}
+}
+
+func TestGenerateStreamMapsNilUsageFromCompletedEvent(t *testing.T) {
+	// A completed event without a usage block must yield Response.Usage == nil.
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return eventStream(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}`,
+			"",
+		}, "\n")), nil
+	})}
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Generate(context.Background(), dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "ok" {
+		t.Fatalf("content = %q", response.Content)
+	}
+	if response.Usage != nil {
+		t.Fatalf("Usage = %#v, want nil", response.Usage)
+	}
+}
+
 func TestGenerateStreamEmitsReasoningSummary(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return eventStream(strings.Join([]string{
