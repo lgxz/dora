@@ -720,10 +720,11 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 		t.Fatalf("elapsed = %v, want < %v (calls appear serial)", elapsed, 2*slowDelay)
 	}
 
-	// Observer events must be emitted in the model's call order.
+	// Started events retain model call order, while finished events arrive in
+	// completion order so the fast tool is visible without waiting for slow.
 	wantEvents := []string{
-		"start:slow", "added:call-slow",
-		"start:fast", "added:call-fast",
+		"start:slow", "start:fast",
+		"added:call-fast", "added:call-slow",
 	}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("observer events = %#v, want %#v", events, wantEvents)
@@ -731,9 +732,8 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 }
 
 func TestRunToolStartedCarriesRealStartTime(t *testing.T) {
-	// The UpdateToolStarted event is emitted after all goroutines finish, so
-	// its StartedAt must reflect the real time the tool began executing rather
-	// than the event delivery time. Otherwise the renderer would report ~1ms.
+	// The UpdateToolStarted event is emitted immediately before its goroutine is
+	// launched, so StartedAt should closely match event delivery time.
 	const slowDelay = 300 * time.Millisecond
 
 	slow := stubTool{
@@ -767,25 +767,23 @@ func TestRunToolStartedCarriesRealStartTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var startedAt time.Time
+	var startedAt, deliveredAt time.Time
 	_, err = runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
 		if update.Kind == UpdateToolStarted {
 			startedAt = update.StartedAt
+			deliveredAt = time.Now()
 		}
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The event is delivered after the tool finishes, so StartedAt must be
-	// earlier than the delivery time by roughly the tool's sleep duration.
-	delivered := time.Now()
 	if startedAt.IsZero() {
 		t.Fatal("UpdateToolStarted did not carry a StartedAt")
 	}
-	elapsed := delivered.Sub(startedAt)
-	if elapsed < slowDelay/2 {
-		t.Fatalf("StartedAt-based elapsed = %v, want >= ~%v (event delivered after tool finished)", elapsed, slowDelay)
+	elapsed := deliveredAt.Sub(startedAt)
+	if elapsed < 0 || elapsed >= slowDelay/2 {
+		t.Fatalf("UpdateToolStarted delivered after %v, want immediate delivery", elapsed)
 	}
 }
 

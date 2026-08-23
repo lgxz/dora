@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sync"
 	"time"
 )
 
@@ -193,56 +192,56 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 			return nil
 		}
 
-		// Execute all tool calls in parallel, but preserve the model's call
-		// order for results and Observer events. Each goroutine performs the
-		// unknown-tool check, JSON validation, and Execute; the results are
-		// collected by index. Observer events are emitted serially by the main
-		// goroutine after all goroutines finish, so the progress renderer's
-		// non-concurrent map is never written concurrently.
+		// Execute all tool calls in parallel. Started events are emitted in the
+		// model's call order before any finished event; finished events are then
+		// emitted as results arrive, so a fast tool is displayed without waiting
+		// for slower tools. Observer calls remain serialized on this goroutine,
+		// while tool messages are stored by index to preserve model call order.
 		type toolExecution struct {
 			result ToolResult
 			err    error
-			// startedAt records the real time the tool began executing, so the
-			// progress renderer can report an accurate duration even though the
-			// UpdateToolStarted event is emitted after all goroutines finish.
-			startedAt time.Time
 			// invalidJSON marks a call whose arguments were not valid JSON, so
 			// the main goroutine can emit the dedicated recovery message.
 			invalidJSON bool
 		}
-		results := make([]toolExecution, len(response.ToolCalls))
-		var wg sync.WaitGroup
-		toolMessages := make([]Message, 0, len(response.ToolCalls))
+		type completedTool struct {
+			index     int
+			execution toolExecution
+		}
+		completed := make(chan completedTool, len(response.ToolCalls))
+		toolMessages := make([]Message, len(response.ToolCalls))
 		for i, call := range response.ToolCalls {
-			wg.Add(1)
+			startedAt := time.Now()
+			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: startedAt})
 			go func(i int, call ToolCall) {
-				defer wg.Done()
+				var execution toolExecution
 				tool, ok := tools[call.Name]
 				if !ok {
-					results[i].err = fmt.Errorf("tool %q not found", call.Name)
+					execution.err = fmt.Errorf("tool %q not found", call.Name)
+					completed <- completedTool{index: i, execution: execution}
 					return
 				}
 				if !json.Valid(call.Input) {
-					results[i].err = fmt.Errorf("arguments are not valid JSON: %s", call.Input)
-					results[i].invalidJSON = true
+					execution.err = fmt.Errorf("arguments are not valid JSON: %s", call.Input)
+					execution.invalidJSON = true
+					completed <- completedTool{index: i, execution: execution}
 					return
 				}
-				results[i].startedAt = time.Now()
 				result, err := tool.Execute(ctx, cloneBytes(call.Input))
 				if err != nil {
-					results[i].err = fmt.Errorf("execute tool %q: %w", call.Name, err)
-					return
+					execution.err = fmt.Errorf("execute tool %q: %w", call.Name, err)
+				} else {
+					execution.result = result
 				}
-				results[i].result = result
+				completed <- completedTool{index: i, execution: execution}
 			}(i, call)
 		}
-		wg.Wait()
 
-		var toolMessage Message
-		for i, call := range response.ToolCalls {
-			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: results[i].startedAt})
-
-			result := results[i]
+		for range response.ToolCalls {
+			done := <-completed
+			call := response.ToolCalls[done.index]
+			result := done.execution
+			var toolMessage Message
 			if result.err != nil {
 				// A failed tool still reports its error message on the finish
 				// event: that message is the one appended to toolMessages and
@@ -264,7 +263,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 					ToolCallID: call.ID,
 				}
 			}
-			toolMessages = append(toolMessages, toolMessage)
+			toolMessages[done.index] = toolMessage
 			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 		}
 		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages}, response.Continuation); err != nil {
