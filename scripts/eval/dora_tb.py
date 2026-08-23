@@ -18,16 +18,17 @@ Confirmed design decisions (agreed with the user)
    then makes it executable. No network download / no npm / no online install.
 2. **API keys are injected through environment variables.**
    dora reads its keys from environment variables (e.g. ``TRUST_API_KEY``,
-   ``DEEPSEEK_API_KEY``). These are supplied at ``harbor run`` time through
-   ``extra_env`` / ``--ae KEY=VALUE`` / ``AgentConfig.env``. The adapter only
-   *declares* them via ``ENV_VARS`` and transparently forwards the matching
-   host variables to the sandboxed dora process — it never hard-codes a key.
+   ``DEEPSEEK_API_KEY``, or ``OPENROUTER_API_KEY``). These are supplied at
+   ``harbor run`` time through ``extra_env`` / ``--ae KEY=VALUE`` /
+   ``AgentConfig.env``. The adapter only *declares* them via ``ENV_VARS`` and
+   transparently forwards the matching host variables to the sandboxed dora
+   process — it never hard-codes a key.
 3. **No session / DORA_POLICY_* needed to test.**
    Inside the container dora runs with its own defaults
    (``dora -q -m <model_spec>``). The adapter sets no ``DORA_POLICY_*``, does
    not manage the session database, and does not ship skills. The model is
    selected through dora's ``-m PROVIDER/PROFILE`` flag (e.g.
-   ``-m trust/deepseek-v4-flash``).
+   ``-m openrouter/auto``).
 
 How to run
 ----------
@@ -41,8 +42,8 @@ The local Linux dora binary path is given via ``--ae DORA_BINARY=/path/to/dora-l
 ``extra_env`` (``--ae``)::
 
     --ae DORA_BINARY=/path/to/dora-linux \\
-    --ae model=trust/deepseek-v4-flash \\
-    --ae TRUST_API_KEY=$TRUST_API_KEY
+    --ae model=openrouter/auto \\
+    --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 
 Everything below intentionally only imports the API reference types inside
 ``try/except`` so that this file still passes ``python3 -m py_compile`` on a
@@ -94,7 +95,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     SUPPORTS_CONFIG: bool = False
 
     # CLI flags forwarded to the dora binary. kwarg ``model`` maps to ``--model``
-    # (PROVIDER/PROFILE, e.g. "trust/deepseek-v4-flash"); kwarg ``quiet`` maps
+    # (PROVIDER/PROFILE, e.g. "openrouter/auto"); kwarg ``quiet`` maps
     # to ``--quiet`` (hide run progress, default True).
     CLI_FLAGS: list[CliFlag] = [
         CliFlag(
@@ -118,6 +119,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     ENV_VARS: list[EnvVar] = [
         EnvVar(kwarg="TRUST_API_KEY", env="TRUST_API_KEY", type="str", default=None),
         EnvVar(kwarg="DEEPSEEK_API_KEY", env="DEEPSEEK_API_KEY", type="str", default=None),
+        EnvVar(kwarg="OPENROUTER_API_KEY", env="OPENROUTER_API_KEY", type="str", default=None),
     ]
 
     SYSTEM_DEPENDENCIES: tuple[str, ...] = (
@@ -258,7 +260,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 f"{_HARBOR_IMPORT_ERROR}."
             ) from _HARBOR_IMPORT_ERROR
 
-        # Build CLI flags (e.g. "-q -m trust/deepseek-v4-flash").
+        # Build CLI flags (e.g. "-q -m openrouter/auto").
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 

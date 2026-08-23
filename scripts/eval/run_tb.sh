@@ -13,7 +13,7 @@
 # 可通过环境变量覆盖的默认值：
 #   DORA_BINARY  本地 Linux dora 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
 #   DORA_DATASET Harbor 数据集，默认 terminal-bench@2.1
-#   DORA_MODEL   dora 模型 spec（-> CLI_FLAGS 的 -m），默认 trust/deepseek-v4-flash
+#   DORA_MODEL   dora 模型 spec（-> CLI_FLAGS 的 -m），默认 deepseek/deepseek-v4-flash
 #   DORA_JOBS_DIR 结果输出目录，默认 $PWD/jobs
 #
 # 其余位置参数 `"$@"` 原样透传给 `harbor run`。
@@ -47,9 +47,10 @@ fi
 
 # 按所选 model 的 provider 决定检查哪个 API key。
 case "$DORA_MODEL" in
-  trust/*)            API_KEY_VAR="TRUST_API_KEY" ;;   # trust provider
-  deepseek/*)         API_KEY_VAR="DEEPSEEK_API_KEY" ;; # deepseek provider
-  *)                  API_KEY_VAR="TRUST_API_KEY" ;;   # 其它默认走 trust
+  trust/*)      API_KEY_VAR="TRUST_API_KEY" ;;      # trust provider
+  deepseek/*)   API_KEY_VAR="DEEPSEEK_API_KEY" ;;   # deepseek provider
+  openrouter/*) API_KEY_VAR="OPENROUTER_API_KEY" ;; # openrouter provider
+  *)            API_KEY_VAR="TRUST_API_KEY" ;;      # 保持兼容：其它默认走 trust
 esac
 
 if [ -z "${!API_KEY_VAR:-}" ]; then
@@ -62,11 +63,12 @@ fi
 agent_env_args=(
   "--ae" "${API_KEY_VAR}=${!API_KEY_VAR}"
 )
-# 若 host 上同时设置了另一个 provider 的 key，也一并注入（不影响已解析的关键 key）。
-case "$API_KEY_VAR" in
-  TRUST_API_KEY)    [ -n "${DEEPSEEK_API_KEY:-}" ] && agent_env_args+=("--ae" "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}") ;;
-  DEEPSEEK_API_KEY) [ -n "${TRUST_API_KEY:-}" ] && agent_env_args+=("--ae" "TRUST_API_KEY=${TRUST_API_KEY}") ;;
-esac
+# 若 host 上同时设置了其它内建 provider 的 key，也一并注入（不影响已解析的关键 key）。
+for optional_key_var in TRUST_API_KEY DEEPSEEK_API_KEY OPENROUTER_API_KEY; do
+  if [ "$optional_key_var" != "$API_KEY_VAR" ] && [ -n "${!optional_key_var:-}" ]; then
+    agent_env_args+=("--ae" "${optional_key_var}=${!optional_key_var}")
+  fi
+done
 
 # 打印即将执行的完整 harbor run 命令，便于核对。
 echo ">>> 即将执行（PYTHONPATH=${PYTHONPATH}）："
