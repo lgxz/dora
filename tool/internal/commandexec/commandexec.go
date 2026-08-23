@@ -110,6 +110,7 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 	// timeout does not kill it when transitioning to background.
 	procCtx, procCancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(procCtx, t.binary, t.commandArgs(input.Command)...)
+	configureProcessTree(cmd)
 	out := &job.OutputBuffer{}
 	cmd.Stdout = out.StdoutWriter()
 	cmd.Stderr = out.StderrWriter()

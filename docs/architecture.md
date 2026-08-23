@@ -389,7 +389,12 @@ parent tool call. The existing job tool lists, polls, and kills both command and
 Task jobs. Its public protocol has no `kind` field: IDs are generated from the
 source tool (`bash_N`, `powershell_N`, or `task_N`) with a separate counter per
 source. Polling drains unread command output, but completed Task text or errors
-remain available on repeated polls.
+remain available on repeated polls. Kill returns the job's real current state:
+`cancelling` while termination is still in progress, the existing terminal
+state when the job already finished, and `killed` only after termination is
+confirmed. Command cancellation terminates the Unix process group or Windows
+process tree. Task cancellation is cooperative and remains `cancelling` until
+the nested run observes its context and returns.
 
 Background Tasks have no concurrency limit. They are goroutines in the Dora
 process, so they do not survive process exit and any uncollected result is

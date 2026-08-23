@@ -584,8 +584,10 @@ background; once in the background it continues running (it is not terminated)
 and Dora returns a `job_id` that the job tool can use to inspect it. Background
 processes are also not terminated when Dora itself exits — they keep running
 after the session ends, so stop them explicitly with the job tool's kill action
-when needed. By default (omitted) Dora waits 10 seconds, and a value of `0`
-moves the command to the background immediately:
+when needed. On Unix, kill terminates the command's process group; on Windows,
+it terminates the process tree. This covers ordinary descendants such as
+`timeout 240 python3 ...`. By default (omitted) Dora waits 10 seconds, and a
+value of `0` moves the command to the background immediately:
 
 ```json
 {
@@ -629,7 +631,10 @@ waits, while Task itself has no duration estimate. A completed Task result is
 retained for repeated polls. Unlike background shell processes, background
 Tasks run inside Dora and stop—with their uncollected result lost—when the Dora
 process exits. Their nested progress remains hidden, including while they run
-in the background.
+in the background. Killing a Task cancels its context cooperatively. The job
+reports `cancelling` until the nested run actually returns and only then reports
+`killed`; a component that ignores context cancellation can therefore delay
+termination.
 
 Task context isolation is not a security sandbox. Parent and child runs share
 the process, current working directory, filesystem, permissions, model client,

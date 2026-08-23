@@ -63,12 +63,50 @@ func TestListUsesIDsWithoutKind(t *testing.T) {
 			return "done", nil
 		}
 	})
-	defer manager.Kill(background.ID)
+	defer func() { _, _ = manager.Kill(background.ID) }()
 	result, err := New(manager).Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(result.Content, `"job_id":"task_0"`) || strings.Contains(result.Content, `"kind"`) {
 		t.Fatalf("result = %q", result.Content)
+	}
+}
+
+func TestKillReturnsCurrentState(t *testing.T) {
+	manager := job.New()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	background := manager.StartTask("task", "ignore cancellation", func(context.Context) (string, error) {
+		close(started)
+		<-release
+		return "late", nil
+	})
+	<-started
+
+	result, err := New(manager).Execute(context.Background(), json.RawMessage(`{"action":"kill","job_id":"`+background.ID+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, `"status": "cancelling"`) {
+		t.Fatalf("kill result = %q", result.Content)
+	}
+	close(release)
+	_, _ = manager.Poll(background.ID, time.Second)
+}
+
+func TestKillCompletedJobReturnsTerminalState(t *testing.T) {
+	manager := job.New()
+	background := manager.StartTask("task", "done", func(context.Context) (string, error) {
+		return "done", nil
+	})
+	_, _ = manager.Poll(background.ID, time.Second)
+
+	result, err := New(manager).Execute(context.Background(), json.RawMessage(`{"action":"kill","job_id":"`+background.ID+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, `"status": "done"`) {
+		t.Fatalf("kill result = %q", result.Content)
 	}
 }

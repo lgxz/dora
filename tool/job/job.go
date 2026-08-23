@@ -30,7 +30,7 @@ func New(manager *job.Manager) *Tool {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "job",
-		Description: "Manage background jobs started by bash, powershell, or task (kill, list, poll). Poll with wait_seconds:0 returns a non-blocking status snapshot.",
+		Description: "Manage background jobs started by bash, powershell, or task (kill, list, poll). Kill returns cancelling until termination is confirmed. Poll with wait_seconds:0 returns a non-blocking status snapshot.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -66,10 +66,11 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 
 	switch input.Action {
 	case "kill":
-		if err := t.manager.Kill(input.JobID); err != nil {
+		snapshot, err := t.manager.Kill(input.JobID)
+		if err != nil {
 			return t.result(fmt.Sprintf(`{"error": %q}`, err.Error())), nil
 		}
-		return t.result(fmt.Sprintf(`{"job_id": %q, "status": "killed"}`, input.JobID)), nil
+		return t.result(fmt.Sprintf(`{"job_id": %q, "status": %q}`, snapshot.ID, snapshot.Status)), nil
 
 	case "list":
 		jobs := t.manager.List()

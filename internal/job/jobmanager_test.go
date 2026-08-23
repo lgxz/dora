@@ -66,7 +66,7 @@ func TestAdoptRunning(t *testing.T) {
 	}
 
 	// Kill it
-	if err := m.Kill(j.ID); err != nil {
+	if _, err := m.Kill(j.ID); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
 	done, _ := m.Poll(j.ID, 5*time.Second)
@@ -96,7 +96,7 @@ func TestWaitTimeout(t *testing.T) {
 	if done.Status != StatusRunning {
 		t.Fatalf("expected running after short wait, got %s", done.Status)
 	}
-	if err := m.Kill(j.ID); err != nil {
+	if _, err := m.Kill(j.ID); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
 }
@@ -203,12 +203,60 @@ func TestKillTaskCancelsItsContext(t *testing.T) {
 	if commands != 0 || tasks != 1 {
 		t.Fatalf("active counts = commands %d, tasks %d", commands, tasks)
 	}
-	if err := m.Kill(task.ID); err != nil {
+	if _, err := m.Kill(task.ID); err != nil {
 		t.Fatal(err)
 	}
 	done, ok := m.Poll(task.ID, time.Second)
 	if !ok || done.Status != StatusKilled {
 		t.Fatalf("killed task = %#v, ok = %v", done, ok)
+	}
+}
+
+func TestKillTaskReportsCancellingUntilTaskReturns(t *testing.T) {
+	m := New()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	task := m.StartTask("task", "ignore cancellation", func(context.Context) (string, error) {
+		close(started)
+		<-release
+		return "late result", nil
+	})
+	<-started
+
+	snapshot, err := m.Kill(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != StatusCancelling {
+		t.Fatalf("kill status = %s, want cancelling", snapshot.Status)
+	}
+	if !m.HasActiveJobs() {
+		t.Fatal("cancelling task must remain active")
+	}
+
+	close(release)
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusKilled {
+		t.Fatalf("completed cancellation = %#v, ok = %v", done, ok)
+	}
+}
+
+func TestKillCompletedJobReturnsItsTerminalState(t *testing.T) {
+	m := New()
+	task := m.StartTask("task", "complete", func(context.Context) (string, error) {
+		return "result", nil
+	})
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusDone {
+		t.Fatalf("completed task = %#v, ok = %v", done, ok)
+	}
+
+	snapshot, err := m.Kill(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != StatusDone || snapshot.Result != "result" {
+		t.Fatalf("kill completed task = %#v", snapshot)
 	}
 }
 

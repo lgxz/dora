@@ -17,11 +17,12 @@ import (
 type Status string
 
 const (
-	StatusRunning  Status = "running"
-	StatusDone     Status = "done"
-	StatusFailed   Status = "failed"
-	StatusTimedOut Status = "timed_out"
-	StatusKilled   Status = "killed"
+	StatusRunning    Status = "running"
+	StatusCancelling Status = "cancelling"
+	StatusDone       Status = "done"
+	StatusFailed     Status = "failed"
+	StatusTimedOut   Status = "timed_out"
+	StatusKilled     Status = "killed"
 )
 
 // Kind identifies the internal result shape of a job. It is used by the CLI
@@ -146,14 +147,14 @@ func (m *Manager) AdoptCommand(
 		defer job.mu.Unlock()
 		job.finishedAt = time.Now()
 		switch {
+		case job.killed:
+			job.status = StatusKilled
+			job.exitCode = -1
 		case err == nil, errors.Is(err, exec.ErrWaitDelay):
 			// ErrWaitDelay means the process exited successfully but an
 			// orphaned child still holds the output pipes.
 			job.status = StatusDone
 			job.exitCode = 0
-		case job.killed:
-			job.status = StatusKilled
-			job.exitCode = -1
 		case errors.Is(cmd.Err, context.Canceled):
 			job.status = StatusKilled
 			job.exitCode = -1
@@ -215,24 +216,28 @@ func (m *Manager) register(source string, kind Kind, description string, cancel 
 	return job
 }
 
-// Kill terminates a running job.
-func (m *Manager) Kill(id string) error {
+// Kill requests cancellation of a running job and returns its current state.
+// A command is killed as a process tree. A Task must cooperate with context
+// cancellation, so it may remain in StatusCancelling until its function exits.
+func (m *Manager) Kill(id string) (Snapshot, error) {
 	m.mu.Lock()
 	job, ok := m.jobs[id]
 	m.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("job %q not found", id)
+		return Snapshot{}, fmt.Errorf("job %q not found", id)
 	}
 	job.mu.Lock()
-	defer job.mu.Unlock()
-	if job.status != StatusRunning {
-		return nil
+	var cancel context.CancelFunc
+	if job.status == StatusRunning {
+		job.killed = true
+		job.status = StatusCancelling
+		cancel = job.cancel
 	}
-	job.killed = true
-	if job.cancel != nil {
-		job.cancel()
+	job.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	return nil
+	return job.snapshot(false), nil
 }
 
 // List returns concurrency-safe snapshots of all tracked jobs, ordered by ID.
@@ -299,7 +304,7 @@ func (m *Manager) HasActiveJobs() bool {
 	defer m.mu.Unlock()
 	for _, job := range m.jobs {
 		job.mu.Lock()
-		running := job.status == StatusRunning
+		running := job.status == StatusRunning || job.status == StatusCancelling
 		job.mu.Unlock()
 		if running {
 			return true
@@ -318,7 +323,7 @@ func (m *Manager) ActiveCounts() (commands, tasks int) {
 	m.mu.Unlock()
 	for _, job := range jobs {
 		snapshot := job.snapshot(false)
-		if snapshot.Status != StatusRunning {
+		if snapshot.Status != StatusRunning && snapshot.Status != StatusCancelling {
 			continue
 		}
 		if snapshot.Kind == KindTask {

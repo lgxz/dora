@@ -546,6 +546,15 @@ func TestToolPresentations(t *testing.T) {
 			wantOutcome: outcomeWarning,
 		},
 		{
+			name:        "job cancelling",
+			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"kill","job_id":"bash_0"}`)},
+			message:     dora.Message{Content: `{"job_id":"bash_0","status":"cancelling"}`},
+			wantName:    "job",
+			wantSummary: "kill bash_0",
+			wantResult:  "cancelling",
+			wantOutcome: outcomeWarning,
+		},
+		{
 			name:        "task job done",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"task_0"}`)},
 			message:     dora.Message{Content: `{"job_id":"task_0","status":"done","result":"independent result"}`},

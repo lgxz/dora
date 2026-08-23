@@ -375,7 +375,7 @@ func formatJobResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
 		text = joinResult(text, fmt.Sprintf("exit %d", *result.ExitCode))
 	}
 	switch result.Status {
-	case "running":
+	case "running", "cancelling":
 		return text, outcomeWarning
 	case "failed", "timed_out":
 		return text, outcomeFailure

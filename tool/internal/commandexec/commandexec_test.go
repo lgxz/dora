@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +227,55 @@ func TestExecuteDetachedChildReturnsSuccess(t *testing.T) {
 	}
 }
 
+func TestKillTerminatesCommandDescendants(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix process-group behavior")
+	}
+	root := t.TempDir()
+	startedPath := filepath.Join(root, "child-started")
+	markerPath := filepath.Join(root, "child-survived")
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(
+		`{"command":%q,"wait_seconds":0}`, "spawn-child:"+startedPath+":"+markerPath,
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var background struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal([]byte(toolResult.Content), &background); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(startedPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("descendant did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := jm.Kill(background.JobID); err != nil {
+		t.Fatal(err)
+	}
+	done, ok := jm.Poll(background.JobID, 2*time.Second)
+	if !ok || done.Status != job.StatusKilled {
+		t.Fatalf("killed command = %#v, ok = %v", done, ok)
+	}
+	time.Sleep(750 * time.Millisecond)
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatal("descendant survived command kill")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestExecuteRejectsInvalidInput(t *testing.T) {
 	tool := newTestTool(t, Config{})
 	for _, raw := range []string{
@@ -293,6 +344,28 @@ func TestCommandHelper(t *testing.T) {
 	}
 
 	command := os.Args[separator+1]
+	if strings.HasPrefix(command, "spawn-child:") {
+		paths := strings.SplitN(strings.TrimPrefix(command, "spawn-child:"), ":", 2)
+		if len(paths) != 2 {
+			os.Exit(2)
+		}
+		child := exec.Command(os.Args[0], "-test.run=TestCommandHelper", "--", "write-after:"+paths[1])
+		if err := child.Start(); err != nil {
+			os.Exit(3)
+		}
+		if err := os.WriteFile(paths[0], []byte("started"), 0o600); err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	}
+	if strings.HasPrefix(command, "write-after:") {
+		time.Sleep(500 * time.Millisecond)
+		if err := os.WriteFile(strings.TrimPrefix(command, "write-after:"), []byte("survived"), 0o600); err != nil {
+			os.Exit(5)
+		}
+		os.Exit(0)
+	}
 	switch command {
 	case "hello":
 		fmt.Print("hello")
