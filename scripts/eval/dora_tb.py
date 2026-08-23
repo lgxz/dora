@@ -120,34 +120,17 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         EnvVar(kwarg="DEEPSEEK_API_KEY", env="DEEPSEEK_API_KEY", type="str", default=None),
     ]
 
-    # Minimal set of system commands dora needs inside the container.
-    # curl / ca_certificates - HTTP + TLS trust store for model API calls and
-    #                         task downloads.
-    # python3     - dora's most-used scripting runtime (agents fall back to it
-    #               for JSON handling, parsing, and one-off automation).
-    # procps      - ``ps``/``kill`` for process inspection; absent in slim
-    #               images and used in ~1/5 of Terminal-Bench trials.
-    # expect      - interactive automation (serial consoles, installers);
-    #               required by the qemu/interactive task family.
-    # telnet      - serial-console client for the qemu task family.
-    # netcat, socat - port probing / forwarding / PTY bridging.
-    # file        - identifying image and binary formats.
-    # python3-pip, python3-venv - let agents ``pip install`` missing runtimes
-    #               (e.g. torch). venv is required alongside pip: on PEP 668
-    #               externally-managed systems (Ubuntu noble+) a system-wide
-    #               install is refused, so the standard path is
-    #               ``python3 -m venv`` + the venv's pip.
-    # Chosen from the jobs/082265 transcripts: what agents used vs. had to
-    # install mid-trial (jq/ripgrep/tmux showed no usage — python3 and grep
-    # already cover them — and are deliberately omitted).
     SYSTEM_DEPENDENCIES: tuple[str, ...] = (
         "curl",
         "python3",
         "ca_certificates",
         "procps",
+    )
+
+    APT_PACKAGES: tuple[str, ...] = (
         "expect",
         "telnet",
-        "netcat",
+        "netcat-openbsd",
         "socat",
         "file",
         "python3-pip",
@@ -219,6 +202,22 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
         # Ensure dora's runtime dependencies exist inside the container.
         await self.ensure_system_dependencies(environment, self.SYSTEM_DEPENDENCIES)
+
+        # Install the extra tooling via apt. These are optional conveniences,
+        # so a failure (e.g. a non-Debian base image) degrades to a warning
+        # instead of failing the whole trial.
+        packages = " ".join(self.APT_PACKAGES)
+        try:
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "apt-get update -qq && "
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                    "--no-install-recommends " + packages
+                ),
+            )
+        except Exception as exc:
+            self.logger.warning("apt install of extra tooling failed: %s", exc)
 
         local_binary = self._resolve_local_binary()
         self.logger.info("Uploading dora binary from %s", local_binary)
