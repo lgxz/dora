@@ -34,7 +34,6 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags := flag.NewFlagSet("dora", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&opts.configPath, "config", "", "path to YAML configuration")
-	flags.StringVar(&opts.model, "m", "", "override the configured model as PROVIDER/PROFILE (profile may be empty)")
 	flags.StringVar(&opts.model, "model", "", "override the configured model as PROVIDER/PROFILE (profile may be empty)")
 	flags.StringVar(&opts.thinking, "thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
 	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
@@ -50,15 +49,16 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.update, "update", false, "update a standalone installation")
 	flags.BoolVar(&opts.forceUpdate, "force", false, "force update, bypassing the standalone-install marker and version checks")
 	flags.BoolVar(&opts.noSkills, "no-skills", false, "disable all skills")
-	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress")
-	flags.BoolVar(&opts.quiet, "q", false, "hide run progress (shorthand)")
+	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress, only print the final result to stdout.")
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query completed turns")
-	flags.StringVar(&opts.sessionPath, "s", "", "SQLite session file (shorthand)")
 	flags.Usage = func() {
+		fmt.Fprintf(stderr, "Dora - A tiny, extensible, and efficient LLM agent.\n\n")
 		fmt.Fprintf(stderr, "Usage: dora [options] <prompt>\n")
-		fmt.Fprintf(stderr, "       command | dora [options] [instruction]\n\nOptions:\n")
+		fmt.Fprintf(stderr, "Examples:\n")
+		fmt.Fprintf(stderr, "  $ dora -quiet What's your name?\n\n")
+		fmt.Fprintf(stderr, "Options:\n")
 		flags.PrintDefaults()
 	}
 	opts.usage = flags.Usage

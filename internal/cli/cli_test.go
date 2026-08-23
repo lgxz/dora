@@ -190,7 +190,7 @@ func TestRunCallsDeepSeekPreset(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -228,7 +228,7 @@ func TestRunCallsTrustPreset(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -257,7 +257,7 @@ func TestRunUsesDefaultsWhenDefaultConfigIsMissing(t *testing.T) {
 	})}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -295,7 +295,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinDeepSeek(t *testing.T) {
 	})}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -330,7 +330,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinTrust(t *testing.T) {
 	})}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -360,7 +360,7 @@ func TestRunEmptyPolicySelectsFirstProvider(t *testing.T) {
 		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"first provider"}}]}`), nil
 	})}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -376,7 +376,7 @@ func TestRunEmptyPolicySelectsFirstProvider(t *testing.T) {
 
 func TestRunRejectsMissingExplicitConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.yaml")
-	err := Run(context.Background(), []string{"-q", "--config", path, "hello"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", path, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -421,7 +421,7 @@ model:
 	}
 
 	var stdout bytes.Buffer
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -463,7 +463,7 @@ model:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -497,7 +497,7 @@ func TestRunMapsDeepSeekChatThinkingOffToDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -537,7 +537,7 @@ model:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -570,7 +570,7 @@ func TestRunIgnoresDeepSeekChatThinkingMinimal(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -607,7 +607,7 @@ model:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--thinking", "low", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--thinking", "low", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -641,7 +641,7 @@ func TestRunThinkingFlagOverridesDeepSeekDefaultOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--thinking", "medium", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--thinking", "medium", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -827,7 +827,7 @@ model:
 		t.Fatal(err)
 	}
 	var stdout strings.Builder
-	if err := Run(context.Background(), []string{"-q", "--no-skills", "--config", configPath, "parent request"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--config", configPath, "parent request"}, IO{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
 		StdinIsTerminal: true, HTTPClient: httpClient,
 	}); err != nil {
@@ -905,7 +905,7 @@ model:
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var stdout strings.Builder
-	if err := Run(ctx, []string{"-q", "--no-skills", "--config", configPath, "parent background request"}, IO{
+	if err := Run(ctx, []string{"--quiet", "--no-skills", "--config", configPath, "parent background request"}, IO{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
 		StdinIsTerminal: true, HTTPClient: httpClient,
 	}); err != nil {
@@ -944,7 +944,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--no-skills", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--config", configPath, "hello"}, IO{
 		Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
 		StdinIsTerminal: true, HTTPClient: httpClient,
 	}); err != nil {
@@ -992,7 +992,7 @@ tools:
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"-q", "--max-rounds", "1", "--config", configPath, "run it"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--max-rounds", "1", "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader("yes\n"),
 		Stdout:           &stdout,
 		Stderr:           &stderr,
@@ -1029,7 +1029,7 @@ tools:
 	}
 
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "run it"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           io.Discard,
 		Stderr:           &stderr,
@@ -1091,7 +1091,7 @@ model:
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -1174,7 +1174,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1242,7 +1242,7 @@ model:
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "inspect"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "inspect"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -1295,7 +1295,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1320,7 +1320,7 @@ skills:
 `, filepath.Join(root, "missing"))); err != nil {
 		t.Fatal(err)
 	}
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1381,7 +1381,7 @@ tools:
 	}
 
 	if err := Run(context.Background(), []string{
-		"-q", "--config", configPath, "hello",
+		"--quiet", "--config", configPath, "hello",
 	}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
@@ -1433,7 +1433,7 @@ tools:
 	}
 
 	if err := Run(context.Background(), []string{
-		"-q", "--config", configPath, "--no-skills", "hello",
+		"--quiet", "--config", configPath, "--no-skills", "hello",
 	}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
@@ -1478,7 +1478,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1522,7 +1522,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1572,7 +1572,7 @@ tools:
 `, configured)); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1625,7 +1625,7 @@ tools:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1651,7 +1651,7 @@ skills:
 `); err != nil {
 		t.Fatal(err)
 	}
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
 		Stderr:          io.Discard,
@@ -1777,7 +1777,7 @@ model:
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"-q", "--config", configPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          &stderr,
@@ -1814,7 +1814,7 @@ model:
 			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"# Result\n\nA **useful** answer."}}]}`), nil
 			})}
-			args := []string{"-q", "--config", configPath, "hello"}
+			args := []string{"--quiet", "--config", configPath, "hello"}
 			var stdout bytes.Buffer
 			if err := Run(context.Background(), args, IO{
 				Stdin:            strings.NewReader(""),
@@ -1875,7 +1875,7 @@ model:
 	}
 	sessionPath := filepath.Join(root, "turns.sqlite")
 	for _, prompt := range []string{"first", "second"} {
-		if err := Run(context.Background(), []string{"-q", "--no-skills", "--session", sessionPath, "--config", configPath, prompt}, IO{
+		if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--session", sessionPath, "--config", configPath, prompt}, IO{
 			Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
 			StdinIsTerminal: true, HTTPClient: httpClient,
 		}); err != nil {
@@ -1940,7 +1940,7 @@ policy:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "-m", "trust/deepseek-v4-pro", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--model", "trust/deepseek-v4-pro", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -1993,7 +1993,7 @@ policy:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-q", "-m", "trust", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--model", "trust", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -2017,7 +2017,7 @@ func TestRunRejectsInvalidModelFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, spec := range []string{"/deepseek-v4-flash", "a/b/c", "a//b"} {
-		err := Run(context.Background(), []string{"-q", "-m", spec, "--config", configPath, "hello"}, IO{
+		err := Run(context.Background(), []string{"--quiet", "--model", spec, "--config", configPath, "hello"}, IO{
 			Stdin:           strings.NewReader(""),
 			Stdout:          io.Discard,
 			Stderr:          io.Discard,

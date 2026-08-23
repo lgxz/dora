@@ -93,19 +93,19 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     # Whether config files are supported — keep the library default (False).
     SUPPORTS_CONFIG: bool = False
 
-    # CLI flags forwarded to the dora binary. kwarg ``model`` maps to ``-m``
+    # CLI flags forwarded to the dora binary. kwarg ``model`` maps to ``--model``
     # (PROVIDER/PROFILE, e.g. "trust/deepseek-v4-flash"); kwarg ``quiet`` maps
-    # to ``-q`` (hide run progress, default True).
+    # to ``--quiet`` (hide run progress, default True).
     CLI_FLAGS: list[CliFlag] = [
         CliFlag(
             kwarg="model",
-            cli="-m",
+            cli="--model",
             type="str",
             default=None,
         ),
         CliFlag(
             kwarg="quiet",
-            cli="-q",
+            cli="--quiet",
             type="bool",
             default=False,
         ),
