@@ -36,7 +36,7 @@ export DORA_BINARY
 # 确认本地 Linux 构建产物存在且可执行。
 if [ ! -x "$DORA_BINARY" ]; then
   echo "错误：DORA_BINARY 不是可执行文件或不存在：$DORA_BINARY" >&2
-  echo "请先用 make release 构建 GOOS=linux 产物，或设置 DORA_BINARY 覆盖路径。" >&2
+  echo "请先用 make release-linux GOARCH=<任务镜像架构> CGO_ENABLED=0 构建静态 Linux 产物，或设置 DORA_BINARY 覆盖路径。" >&2
   exit 1
 fi
 

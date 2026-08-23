@@ -30,7 +30,8 @@ build: | $(BUILD_DIR)/
 	$(GO) build -o $(BINARY) ./cmd/dora
 
 release: | $(RELEASE_DIR)/
-	$(GO) build -trimpath -ldflags="$(RELEASE_LDFLAGS)" -o $(RELEASE_BINARY) ./cmd/dora
+	CGO_ENABLED=$(CGO_ENABLED) \
+		$(GO) build -trimpath -ldflags="$(RELEASE_LDFLAGS)" -o $(RELEASE_BINARY) ./cmd/dora
 
 install: release
 	mkdir -p $(PREFIX)/bin
