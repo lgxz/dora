@@ -2,26 +2,146 @@ package dora
 
 import "encoding/json"
 
-// defaultCompactionRounds is the fixed number of most recent rounds kept when
-// building the request messages for a model call. A round is an assistant
-// message together with the tool messages it triggered. The threshold is a
-// hard-coded internal constant (not configurable) so context compaction is
-// always enabled and behaves predictably.
-const defaultCompactionRounds = 32
+// Compaction tuning constants. These are internal and not configurable so
+// context compaction is always enabled and behaves deterministically (given the
+// same history and usage the same number of rounds is retained).
+const (
+	// defaultCompactionRounds is the absolute upper bound on the number of most
+	// recent rounds retained. It doubles as the historical fixed retention
+	// value, so retention never exceeds the old fixed budget and only ever
+	// becomes more generous when context is plentier.
+	defaultCompactionRounds = 32
+	// minRetainedRounds is the absolute floor on retained rounds so a single
+	// oversized round cannot collapse the visible history to nothing.
+	minRetainedRounds = 8
+	// maxRetainedRounds is the absolute ceiling on retained rounds; it equals
+	// defaultCompactionRounds, keeping the old fixed value as a safety valve.
+	maxRetainedRounds = defaultCompactionRounds
+	// budgetSafetyRatio is the maximum fraction of the context window occupied
+	// before the compactor starts dropping history. It stays below 1 to absorb
+	// the token-vs-byte estimation error (plus images and header fields that the
+	// byte estimate ignores) so a session does not brush against the provider's
+	// hard limit.
+	budgetSafetyRatio = 0.9
+)
 
 // requestMessages returns the messages to send to the model for the current
-// iteration. It keeps the leading system and user messages plus the most recent
-// defaultCompactionRounds rounds, so a long tool loop does not grow the context
-// without bound. When history is already within the budget it is returned
-// unchanged. The retained historical rounds are compressed against the agent's
-// cached contextWindow byte budget so long tool output does not overflow the
-// model's context. When history is already within the round budget it is
-// returned unchanged. The returned slice may share backing storage with history.
-func (a *Agent) requestMessages(history []Message) []Message {
-	if len(history) <= defaultCompactionRounds {
+// iteration. It always keeps the leading system and user messages, and retains
+// the most recent rounds that fit within the agent's cached contextWindow
+// budget (see dynamicRetainedRounds). lastUsage is the real token usage of the
+// *previously completed* model call in the same run, used as the occupancy
+// baseline when estimating the current input size; when it is nil the estimate
+// falls back to a pure byte count of the whole history. When the whole history
+// already fits within the budget it is returned unchanged. The returned slice
+// may share backing storage with history.
+func (a *Agent) requestMessages(history []Message, lastUsage *Usage) []Message {
+	keepRounds, keepAll := a.dynamicRetainedRounds(history, lastUsage)
+	if keepAll {
 		return history
 	}
-	return compactMessages(history, defaultCompactionRounds, a.contextWindow)
+	return compactMessages(history, keepRounds, a.contextWindow)
+}
+
+// dynamicRetainedRounds decides how many of the most recent rounds to retain
+// based on the current context occupancy. It returns the number of rounds to
+// keep, bounded by minRetainedRounds and maxRetainedRounds, and keepAll, true
+// when the whole history fits within the budget (in which case requestMessages
+// returns it unchanged).
+//
+// The current occupancy is the previous round's real total_tokens (the model's
+// own accounting of the context that produced the last response, covering
+// everything up to and including that round's input) plus a byte estimate of
+// the newest round added since then. This mixes token and byte units and is an
+// upper-bound approximation, documented as such. When lastUsage is nil (no
+// usage reported) it falls back to a pure byte estimate of the entire history,
+// matching the pre-usage behavior.
+func (a *Agent) dynamicRetainedRounds(history []Message, lastUsage *Usage) (keepRounds int, keepAll bool) {
+	prefix, rounds := splitRounds(history)
+	if len(rounds) == 0 {
+		// No assistant history yet; nothing to compact.
+		return 0, true
+	}
+	budget := int(float64(a.contextWindow) * budgetSafetyRatio)
+
+	var occupancy int
+	if lastUsage != nil {
+		// Baseline: the previous round's real total footprint, plus the newest
+		// round's bytes added since that call.
+		occupancy = TotalTokens(lastUsage) + estimateBytes(rounds[len(rounds)-1])
+	} else {
+		occupancy = estimateBytes(prefix) + estimateBytesRounds(rounds)
+	}
+	if occupancy <= budget {
+		// Budget holds the entire history; retain everything unchanged.
+		return len(rounds), true
+	}
+
+	// Greedily retain the newest rounds (each kept whole) until the prefix plus
+	// the retained rounds reaches the budget. Always retain at least
+	// minRetainedRounds and never more than maxRetainedRounds.
+	acc := estimateBytes(prefix)
+	kept := 0
+	for i := len(rounds) - 1; i >= 0 && kept < maxRetainedRounds; i-- {
+		if acc > budget {
+			break
+		}
+		acc += estimateBytes(rounds[i])
+		kept++
+	}
+	if kept < minRetainedRounds {
+		kept = minRetainedRounds
+	}
+	return kept, false
+}
+
+// splitRounds splits history into the leading prefix (the system and user
+// messages before the first assistant message, always retained) and the rounds.
+// Each round is a contiguous slice starting with an assistant message and
+// including the tool messages it triggered. If there is no assistant message the
+// whole history is the prefix and no rounds are returned.
+func splitRounds(history []Message) (prefix []Message, rounds [][]Message) {
+	firstAssistant := -1
+	for i, message := range history {
+		if message.Role == RoleAssistant {
+			firstAssistant = i
+			break
+		}
+	}
+	if firstAssistant < 0 {
+		return history, nil
+	}
+	for i := firstAssistant; i < len(history); {
+		j := i + 1
+		for j < len(history) && history[j].Role != RoleAssistant {
+			j++
+		}
+		rounds = append(rounds, history[i:j])
+		i = j
+	}
+	return history[:firstAssistant], rounds
+}
+
+// estimateBytes sums the text bytes of a message set: each Content plus each
+// tool call's Input. Images and header fields are ignored, matching the existing
+// contextWindow byte accounting (a known limitation of the token-vs-byte
+// approximation documented on the compactor).
+func estimateBytes(messages []Message) int {
+	total := 0
+	for _, message := range messages {
+		total += len(message.Content)
+		for _, call := range message.ToolCalls {
+			total += len(call.Input)
+		}
+	}
+	return total
+}
+
+func estimateBytesRounds(rounds [][]Message) int {
+	total := 0
+	for _, round := range rounds {
+		total += estimateBytes(round)
+	}
+	return total
 }
 
 // compactMessages keeps the leading system and user messages plus the most

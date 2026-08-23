@@ -116,6 +116,11 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		return errors.New("dora: turn is already complete")
 	}
 
+	// lastUsage is the real token usage of the most recently completed model call
+	// in this run. It stays local to the loop (never stored on the immutable
+	// Agent) so the compactor can anchor its occupancy estimate on the previous
+	// round's true total_tokens without carrying conversation state across runs.
+	var lastUsage *Usage
 	for range a.maxRounds {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -123,7 +128,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		notify(observer, Update{Kind: UpdateThinking})
 
 		request := Request{
-			Messages:     a.requestMessages(turn.Messages()),
+			Messages:     a.requestMessages(turn.Messages(), lastUsage),
 			Tools:        a.specs,
 			Continuation: turn.Continuation(),
 		}
@@ -144,6 +149,10 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		if err != nil {
 			return fmt.Errorf("dora: generate response: %w", err)
 		}
+		// Anchor the next occupancy estimate on this call's real token usage.
+		// Setting it after the response keeps a nil usage (providers that report
+		// none) treated as a fall back to pure byte estimation.
+		lastUsage = response.Usage
 
 		assistant := Message{
 			Role:      RoleAssistant,
