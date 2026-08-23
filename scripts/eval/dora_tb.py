@@ -24,8 +24,8 @@ Confirmed design decisions (agreed with the user)
    transparently forwards the matching host variables to the sandboxed dora
    process — it never hard-codes a key.
 3. **No session / DORA_POLICY_* needed to test.**
-   Inside the container dora runs with its own defaults
-   (``dora -q -m <model_spec>``). The adapter sets no ``DORA_POLICY_*``, does
+   Inside the container dora runs with progress enabled
+   (``dora -m <model_spec>``). The adapter sets no ``DORA_POLICY_*``, does
    not manage the session database, and does not ship skills. The model is
    selected through dora's ``-m PROVIDER/PROFILE`` flag (e.g.
    ``-m openrouter/auto``).
@@ -96,7 +96,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
     # CLI flags forwarded to the dora binary. kwarg ``model`` maps to ``--model``
     # (PROVIDER/PROFILE, e.g. "openrouter/auto"); kwarg ``quiet`` maps
-    # to ``--quiet`` (hide run progress, default True).
+    # to ``--quiet`` (hide run progress, default False).
     CLI_FLAGS: list[CliFlag] = [
         CliFlag(
             kwarg="model",
@@ -249,7 +249,8 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
         The instruction is written into a random shell environment variable and
         piped to dora's stdin (following the ``claude_code`` pattern), the
-        merged output is teed to ``/logs/agent/dora.txt``. Passing the
+        merged output is redirected to ``/logs/agent/dora.txt`` without being
+        forwarded to Harbor's console. Passing the
         instruction via stdin (rather than as a command-line positional
         argument) avoids Go's ``flag`` parser treating an instruction that
         starts with ``-`` (e.g. a Markdown list item) as a flag.
@@ -260,7 +261,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 f"{_HARBOR_IMPORT_ERROR}."
             ) from _HARBOR_IMPORT_ERROR
 
-        # Build CLI flags (e.g. "-q -m openrouter/auto").
+        # Build CLI flags (e.g. "-m openrouter/auto").
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 
@@ -288,7 +289,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {extra_flags} 2>&1 | stdbuf -oL tee /logs/agent/dora.txt"
+            f"{BINARY_PATH} {extra_flags} > /logs/agent/dora.txt 2>&1"
         )
 
         try:

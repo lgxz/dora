@@ -7,8 +7,9 @@
 #      dist/dora-linux-arm64，由 dora_tb.py 的 install() 上传进容器。
 #   2. API key 经环境变量注入 —— 由本脚本按所选 model 的 provider 检查对应 key，
 #      再通过 `--ae KEY=VALUE` 注入容器内 dora 进程，绝不硬编码 key。
-#   3. 无需 session / DORA_POLICY_* —— dora 在容器内以其默认配置运行
-#      （dora -q -m <model_spec>），不管理 session 数据库、不注入策略变量。
+#   3. 无需 session / DORA_POLICY_* —— dora 在容器内保留进度输出运行
+#      （dora -m <model_spec>），输出只写入任务日志，不管理 session 数据库、
+#      不注入策略变量。
 #
 # 可通过环境变量覆盖的默认值：
 #   DORA_BINARY  本地 Linux dora 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
