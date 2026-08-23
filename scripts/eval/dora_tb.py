@@ -132,6 +132,11 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     # telnet      - serial-console client for the qemu task family.
     # netcat, socat - port probing / forwarding / PTY bridging.
     # file        - identifying image and binary formats.
+    # python3-pip, python3-venv - let agents ``pip install`` missing runtimes
+    #               (e.g. torch). venv is required alongside pip: on PEP 668
+    #               externally-managed systems (Ubuntu noble+) a system-wide
+    #               install is refused, so the standard path is
+    #               ``python3 -m venv`` + the venv's pip.
     # Chosen from the jobs/082265 transcripts: what agents used vs. had to
     # install mid-trial (jq/ripgrep/tmux showed no usage — python3 and grep
     # already cover them — and are deliberately omitted).
@@ -145,6 +150,8 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         "netcat",
         "socat",
         "file",
+        "python3-pip",
+        "python3-venv",
     )
 
     @staticmethod
