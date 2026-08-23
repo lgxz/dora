@@ -27,6 +27,7 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("OPENAI_API_KEY", "test-key")
 	_ = os.Setenv("DEEPSEEK_API_KEY", "")
 	_ = os.Setenv("TRUST_API_KEY", "")
+	_ = os.Setenv("OPENROUTER_API_KEY", "")
 	_ = os.Setenv("DORA_MODEL", "")
 	_ = os.Setenv("DORA_POLICY_TEXT_PROVIDER", "")
 	_ = os.Setenv("DORA_POLICY_TEXT_PROFILE", "")
@@ -340,6 +341,44 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinTrust(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stdout.String() != "trust answer\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunConfigEnvironmentAutoSelectsBuiltinOpenRouter(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("env:\n  OPENROUTER_API_KEY: openrouter-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://openrouter.ai/api/v1/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer openrouter-secret" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "openrouter/auto" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"openrouter answer"}}]}`), nil
+	})}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "openrouter answer\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

@@ -142,9 +142,31 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 	}
 	defer reader.Close()
 
-	response, err := readStream(reader, emit, onActivity)
+	response, reasoningDetails, err := readStream(reader, emit, onActivity)
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai: %w", err)
+	}
+	if c.preserveThinking {
+		state, err := decodeChatContinuation(request.Continuation)
+		if err != nil {
+			return dora.Response{}, err
+		}
+		_, state, err = chatReasoningByMessage(request.Messages, state)
+		if err != nil {
+			return dora.Response{}, err
+		}
+		if len(reasoningDetails) > 0 && len(response.ToolCalls) > 0 {
+			if toolCallIDs, ok := chatToolCallIDs(response.ToolCalls); ok {
+				state.Messages = append(state.Messages, chatReasoningDetails{
+					ToolCallIDs: toolCallIDs,
+					Details:     reasoningDetails,
+				})
+			}
+		}
+		response.Continuation, err = encodeChatContinuation(state)
+		if err != nil {
+			return dora.Response{}, err
+		}
 	}
 	return response, nil
 }
@@ -152,7 +174,18 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
 	body.StreamOptions = &chatStreamOptions{IncludeUsage: boolPtr(true)}
-	for _, message := range request.Messages {
+	reasoningByMessage := make(map[int][]json.RawMessage)
+	if c.preserveThinking {
+		state, err := decodeChatContinuation(request.Continuation)
+		if err != nil {
+			return chatRequest{}, err
+		}
+		reasoningByMessage, _, err = chatReasoningByMessage(request.Messages, state)
+		if err != nil {
+			return chatRequest{}, err
+		}
+	}
+	for messageIndex, message := range request.Messages {
 		content, err := encodeContent(message)
 		if err != nil {
 			return chatRequest{}, err
@@ -179,7 +212,9 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 			// assistant messages carry their reasoning back; the final
 			// (tool-free) assistant message is never resent, and providers that
 			// expect reasoning to be stripped keep it off entirely.
-			if c.preserveThinking && message.Reasoning != "" && len(message.ToolCalls) > 0 {
+			if details := reasoningByMessage[messageIndex]; len(details) > 0 {
+				converted.ReasoningDetails = details
+			} else if c.preserveThinking && message.Reasoning != "" && len(message.ToolCalls) > 0 {
 				converted.ReasoningContent = message.Reasoning
 			}
 		case dora.RoleTool:
@@ -256,10 +291,11 @@ type chatImageURL struct {
 	URL string `json:"url"`
 }
 
-func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func()) (dora.Response, error) {
+func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func()) (dora.Response, []json.RawMessage, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), provider.MaxBodyBytes)
 	var result dora.Response
+	var reasoningDetails []json.RawMessage
 	calls := make(map[int]*streamedToolCall)
 	done := false
 	for scanner.Scan() {
@@ -280,12 +316,13 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 		}
 		var event chatStreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return dora.Response{}, fmt.Errorf("decode stream event: %w", err)
+			return dora.Response{}, nil, fmt.Errorf("decode stream event: %w", err)
 		}
 		for _, choice := range event.Choices {
 			if choice.Index != 0 {
 				continue
 			}
+			reasoningDetails = append(reasoningDetails, choice.Delta.ReasoningDetails...)
 			if reasoning := reasoningDelta(choice.Delta); reasoning != "" {
 				result.Reasoning += reasoning
 				if emit != nil {
@@ -320,10 +357,10 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return dora.Response{}, provider.Retryable(fmt.Errorf("read stream: %w", err))
+		return dora.Response{}, nil, provider.Retryable(fmt.Errorf("read stream: %w", err))
 	}
 	if !done {
-		return dora.Response{}, errors.New("stream ended before [DONE]")
+		return dora.Response{}, nil, errors.New("stream ended before [DONE]")
 	}
 	indices := make([]int, 0, len(calls))
 	for index := range calls {
@@ -342,7 +379,7 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 			emit(dora.ModelEvent{Kind: dora.ModelEventToolCallReady, ToolCall: toolCall})
 		}
 	}
-	return result, nil
+	return result, reasoningDetails, nil
 }
 
 type streamedToolCall struct {
@@ -385,11 +422,12 @@ func NewThinkingControl(ctrlType string) *thinkingControl {
 }
 
 type chatMessage struct {
-	Role             string          `json:"role"`
-	Content          json.RawMessage `json:"content,omitempty"`
-	ReasoningContent string          `json:"reasoning_content,omitempty"`
-	ToolCalls        []chatToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	Role             string            `json:"role"`
+	Content          json.RawMessage   `json:"content,omitempty"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ReasoningDetails []json.RawMessage `json:"reasoning_details,omitempty"`
+	ToolCalls        []chatToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
 }
 
 type chatTool struct {
@@ -447,6 +485,7 @@ type chatStreamDelta struct {
 	ReasoningContent string               `json:"reasoning_content"`
 	Reasoning        string               `json:"reasoning"`
 	Reason           string               `json:"reason"`
+	ReasoningDetails []json.RawMessage    `json:"reasoning_details"`
 	ToolCalls        []chatStreamToolCall `json:"tool_calls"`
 }
 
@@ -469,7 +508,119 @@ func reasoningDelta(delta chatStreamDelta) string {
 	if delta.Reasoning != "" {
 		return delta.Reasoning
 	}
-	return delta.Reason
+	if delta.Reason != "" {
+		return delta.Reason
+	}
+	var result strings.Builder
+	for _, raw := range delta.ReasoningDetails {
+		var detail struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Summary string `json:"summary"`
+		}
+		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		switch detail.Type {
+		case "reasoning.text":
+			result.WriteString(detail.Text)
+		case "reasoning.summary":
+			result.WriteString(detail.Summary)
+		}
+	}
+	return result.String()
+}
+
+type chatContinuationState struct {
+	Messages []chatReasoningDetails `json:"messages,omitempty"`
+}
+
+type chatReasoningDetails struct {
+	ToolCallIDs []string          `json:"tool_call_ids"`
+	Details     []json.RawMessage `json:"details"`
+}
+
+func chatReasoningByMessage(messages []dora.Message, state chatContinuationState) (map[int][]json.RawMessage, chatContinuationState, error) {
+	byMessage := make(map[int][]json.RawMessage)
+	var retained chatContinuationState
+	for _, record := range state.Messages {
+		if len(record.ToolCallIDs) == 0 || len(record.Details) == 0 {
+			return nil, chatContinuationState{}, errors.New("openai: continuation contains empty reasoning details metadata")
+		}
+		for _, id := range record.ToolCallIDs {
+			if id == "" {
+				return nil, chatContinuationState{}, errors.New("openai: continuation contains an empty tool call ID")
+			}
+		}
+		for _, detail := range record.Details {
+			if !json.Valid(detail) {
+				return nil, chatContinuationState{}, errors.New("openai: continuation contains invalid reasoning details")
+			}
+		}
+		messageIndex := -1
+		for i, message := range messages {
+			if message.Role == dora.RoleAssistant && equalToolCallIDs(message.ToolCalls, record.ToolCallIDs) {
+				messageIndex = i
+				break
+			}
+		}
+		if messageIndex < 0 {
+			// Context compaction may have removed the round this record belongs
+			// to. Drop its provider-only state along with that round.
+			continue
+		}
+		if _, exists := byMessage[messageIndex]; exists {
+			return nil, chatContinuationState{}, errors.New("openai: continuation repeats reasoning details for a tool-calling message")
+		}
+		byMessage[messageIndex] = record.Details
+		retained.Messages = append(retained.Messages, record)
+	}
+	return byMessage, retained, nil
+}
+
+func chatToolCallIDs(calls []dora.ToolCall) ([]string, bool) {
+	ids := make([]string, len(calls))
+	for i, call := range calls {
+		if call.ID == "" {
+			return nil, false
+		}
+		ids[i] = call.ID
+	}
+	return ids, len(ids) > 0
+}
+
+func equalToolCallIDs(calls []dora.ToolCall, ids []string) bool {
+	if len(calls) != len(ids) {
+		return false
+	}
+	for i := range calls {
+		if calls[i].ID != ids[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func encodeChatContinuation(state chatContinuationState) (string, error) {
+	if len(state.Messages) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return "", fmt.Errorf("openai: encode continuation: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func decodeChatContinuation(value string) (chatContinuationState, error) {
+	if value == "" {
+		return chatContinuationState{}, nil
+	}
+	var state chatContinuationState
+	if err := json.Unmarshal([]byte(value), &state); err != nil {
+		return chatContinuationState{}, fmt.Errorf("openai: decode continuation: %w", err)
+	}
+	return state, nil
 }
 
 // boolPtr returns a pointer to the given boolean value.

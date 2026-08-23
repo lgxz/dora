@@ -1,7 +1,7 @@
-# Providers are a catalog. The embedded catalog gives deepseek and trust
-# built-in base_url defaults, so that field may be omitted for them. Custom
-# providers must set base_url. API keys are read from the provider-derived
-# environment variable (for example DEEPSEEK_API_KEY or TRUST_API_KEY), with
+# Providers are a catalog. The embedded catalog gives deepseek, trust, and
+# openrouter built-in base_url defaults, so that field may be omitted for them.
+# Custom providers must set base_url. API keys are read from the provider-derived
+# environment variable (for example DEEPSEEK_API_KEY or OPENROUTER_API_KEY), with
 # config-local fallbacks available under env. Model selection is driven by
 # per-capability policy (see policy below). Values in env are not exported to
 # child processes.
@@ -40,12 +40,22 @@ providers:
       - name: deepseek-v4-pro
         context_window: 1048576
         capabilities: [text]
+  - name: openrouter
+    # base_url: https://openrouter.ai/api/v1
+    profiles:
+      - name: auto
+        model: openrouter/auto
+        context_window: 2000000
+        capabilities: [image_input, text]
+        # Preserves OpenRouter reasoning_details across tool rounds.
+        preserve_thinking: true
 
 # Optional config-local API keys. A real process environment variable with the
 # same name takes precedence.
 # env:
 #   DEEPSEEK_API_KEY: sk-...
 #   TRUST_API_KEY: sk-...
+#   OPENROUTER_API_KEY: sk-or-v1-...
 
 # Per-capability model policy. Each key is an optional {provider, profile};
 # absence means auto (the router picks the first catalog entry satisfying the

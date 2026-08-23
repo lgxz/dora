@@ -174,11 +174,13 @@ policy:
     profile: deepseek-v4-flash
 ```
 
-嵌入式 provider catalog 为 `deepseek` 和 `trust` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `policy.*.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。每个 profile 通过 `capabilities` 声明其能力，例如 `capabilities: [text]` 或 `capabilities: [text, image_input]`。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
+嵌入式 provider catalog 为 `deepseek`、`trust` 和 `openrouter` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `policy.*.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。每个 profile 通过 `capabilities` 声明其能力，例如 `capabilities: [text]` 或 `capabilities: [text, image_input]`。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
+
+设置 `OPENROUTER_API_KEY` 后，内建的 `openrouter/auto` profile 会自动参与文本和图片选模。catalog 顺序仍为 DeepSeek、Trust、OpenRouter，因此前面的可用 provider 仍优先。也可以通过 `-m openrouter/auto` 或 policy 显式选择。
 
 ### 第三方 OpenAI 兼容提供商
 
-要使用任何支持 OpenAI Chat Completions 协议的第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together、OpenRouter 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 profiles。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
+要使用任何支持 OpenAI Chat Completions 协议的其他第三方提供商（例如 Ollama、LM Studio、vLLM、Groq、Together 或自托管端点），请将它添加到 `providers`，设置 `base_url` 和 profiles。Chat Completions 端点为 `base_url + "/chat/completions"`，因此 `base_url` 应为提供商的 `/v1`（或等效）根路径。
 
 对于无需认证的自托管 Ollama 端点，也需设置任意非空占位 API key（例如 `export OLLAMA_API_KEY=local`，或在配置 `env` 段下使用相同名称），否则该 provider 会被视为不可用并在选择时被跳过：
 
@@ -192,16 +194,17 @@ env:
   OLLAMA_API_KEY: local
 ```
 
-对于需要密钥的托管式 OpenAI 兼容服务（如 OpenRouter 或 Groq），分别将密钥导出为 `OPENROUTER_API_KEY` 或 `GROQ_API_KEY`，也可以在配置文件 `env` 下使用相同名称：
+若要用显式 catalog 替换 OpenRouter 内建的 `auto` profile，可在配置中重新列出该 provider；用户 profile 列表会整体替换内建列表：
 
 ```yaml
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
     profiles:
-      - name: openrouter/auto
+      - name: balanced
+        model: openrouter/auto
 env:
-  OPENROUTER_API_KEY: sk-...
+  OPENROUTER_API_KEY: sk-or-v1-...
 ```
 
 对于无需认证的本地端点，同时省略真实环境变量和配置 fallback。如果两个 provider 名称归一化后得到相同的环境变量，配置校验会报错。包含 key 的配置文件属于敏感信息，应妥善保护。
@@ -233,6 +236,7 @@ policy:
 - **openai**：在 Responses API 上会发送 `off`→`none`、`minimal`、`low`、`medium` 和 `high` 全部值；在 Chat Completions 上 `minimal`–`high` 会以 `reasoning_effort` 发送，但 `off` 不受支持（gpt-5 的下限是 `minimal`），并会被忽略。
 - **deepseek**：在两个 API 上都会发送 `low`/`medium`/`high`，`minimal` 不受支持并被忽略，而 `off` 在 Chat Completions 上以 `thinking.type: disabled` 发送，在 Responses 上以 `reasoning.effort: none` 发送。
 - **trust**：在两个 API 上都按尽力而为的方式处理，类似 OpenAI。
+- **openrouter**：在 Chat Completions 上将 `minimal`–`high` 作为 `reasoning_effort` 发送，并将 `off` 作为 `reasoning_effort: none` 发送。
 
 由于一个设置可能被直接丢弃，请将 `thinking` 视为提示而非保证。对于一次性调用，`--thinking` 会用 `off`、`minimal`、`low`、`medium` 或 `high` 之一覆盖所选模型的设置：
 
@@ -240,7 +244,7 @@ policy:
 ./dora --thinking high "Solve a hard problem"
 ```
 
-`preserve_thinking` 是 profile 级开关（默认关闭），面向 Chat Completions 上的推理模型。开启后，此前工具调用轮次捕获的推理会以 `reasoning_content` 回传到对应的 assistant 历史消息上。DeepSeek 在工具调用轮次中要求此行为，缺失时会拒绝请求，因此其内置 profile 已开启；忽略或拒绝回传推理的提供商（以及像 Qwen/DashScope 这样要求剔除的）保持关闭。
+`preserve_thinking` 是 profile 级开关（默认关闭），面向 Chat Completions 上的推理模型。开启后，此前工具调用轮次捕获的推理会回传到对应的 assistant 历史消息上：普通推理使用 `reasoning_content`；结构化 `reasoning_details` 会保持顺序和语义保存在 provider continuation 中，并在存在时优先回放。DeepSeek 和 OpenRouter 的内建 profile 已开启；忽略或拒绝回传推理的提供商（以及像 Qwen/DashScope 这样要求剔除的）保持关闭。
 
 Dora 默认每个片段最多运行 256 轮模型-工具循环。请保留这一安全机制，但在工具工作流异常冗长时进行调整：
 

@@ -17,6 +17,8 @@ func mapChatThinking(provider string, thinking *string) (*string, *openai.Thinki
 		switch provider {
 		case "deepseek":
 			return nil, openai.NewThinkingControl("disabled")
+		case "openrouter":
+			return stringPtr("none"), nil
 		default:
 			// openai/trust do not support off on Chat Completions; ignore.
 			return nil, nil
@@ -28,6 +30,8 @@ func mapChatThinking(provider string, thinking *string) (*string, *openai.Thinki
 	}
 	return &value, nil
 }
+
+func stringPtr(value string) *string { return &value }
 
 // mapResponsesThinking maps the neutral thinking value onto the Responses API
 // reasoning control according to the provider policy. Values a provider does

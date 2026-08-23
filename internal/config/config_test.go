@@ -16,7 +16,7 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Providers) != 2 {
+	if len(cfg.Providers) != 3 {
 		t.Fatalf("providers = %#v", cfg.Providers)
 	}
 	p := providerByName(t, cfg, "deepseek")
@@ -33,6 +33,27 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	}
 	if providerByName(t, cfg, "trust").APIKey != "" {
 		t.Fatal("DeepSeek key leaked into Trust provider")
+	}
+	openrouter := providerByName(t, cfg, "openrouter")
+	if openrouter.BaseURL != "https://openrouter.ai/api/v1" || openrouter.APIKey != "" {
+		t.Fatalf("openrouter = %#v", openrouter)
+	}
+	auto := modelByName(t, openrouter, "auto")
+	if auto.Model != "openrouter/auto" || auto.ContextWindow == nil || *auto.ContextWindow != 2000000 ||
+		auto.PreserveThinking == nil || !*auto.PreserveThinking {
+		t.Fatalf("openrouter auto profile = %#v", auto)
+	}
+}
+
+func TestDefaultResolvesOpenRouterAPIKey(t *testing.T) {
+	clearBuiltinAPIKeys(t)
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-secret")
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := providerByName(t, cfg, "openrouter").APIKey; got != "openrouter-secret" {
+		t.Fatalf("openrouter API key = %q", got)
 	}
 }
 
@@ -532,6 +553,7 @@ func clearBuiltinAPIKeys(t *testing.T) {
 	t.Helper()
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("TRUST_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("DORA_MODEL", "")
 	t.Setenv("DORA_POLICY_TEXT_PROVIDER", "")
 	t.Setenv("DORA_POLICY_TEXT_PROFILE", "")

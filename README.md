@@ -235,7 +235,7 @@ policy:
     profile: deepseek-v4-flash
 ```
 
-The embedded provider catalog supplies built-in `deepseek` and `trust`
+The embedded provider catalog supplies built-in `deepseek`, `trust`, and `openrouter`
 definitions with `base_url`, so catalog entries with those names may omit that
 field. Models are always listed explicitly in `providers[].profiles`. Each
 entry's `name` is a unique profile name used by `policy.*.profile`; `model` is
@@ -248,10 +248,15 @@ APIs always use SSE streaming.
 Responses tool loops replay typed output items locally and do not depend on
 server-side response storage.
 
+Setting `OPENROUTER_API_KEY` makes the built-in `openrouter/auto` profile
+available for automatic text and image selection. Catalog order remains
+DeepSeek, Trust, then OpenRouter, so an available earlier provider still wins.
+Select it explicitly with `-m openrouter/auto` or policy when desired.
+
 ### Third-party OpenAI-compatible providers
 
 To use any third-party provider that speaks the OpenAI Chat Completions
-protocol (for example Ollama, LM Studio, vLLM, Groq, Together, OpenRouter, or
+protocol (for example Ollama, LM Studio, vLLM, Groq, Together, or
 a self-hosted endpoint), add it to `providers` with `base_url` and profiles. The Chat Completions endpoint is
 `base_url + "/chat/completions"`, so `base_url` should be the provider's `/v1`
 (or equivalent) root.
@@ -267,18 +272,18 @@ providers:
       - name: llama3.1
 ```
 
-For a hosted OpenAI-compatible service that requires a key, such as OpenRouter
-or Groq, export `OPENROUTER_API_KEY` or `GROQ_API_KEY` respectively, or put the
-same name under config `env`:
+To replace OpenRouter's built-in `auto` profile with an explicit catalog, list
+the provider in the config; user profile lists replace the built-in profiles:
 
 ```yaml
 providers:
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
     profiles:
-      - name: openrouter/auto
+      - name: balanced
+        model: openrouter/auto
 env:
-  OPENROUTER_API_KEY: sk-...
+  OPENROUTER_API_KEY: sk-or-v1-...
 ```
 
 Even a local endpoint that does not require authentication needs a non-empty
@@ -334,6 +339,8 @@ than causing an error:
   supported and is ignored, and `off` is sent as `thinking.type: disabled` on
   Chat Completions or `reasoning.effort: none` on Responses.
 - **trust**: treated best-effort like OpenAI on both APIs.
+- **openrouter**: `minimal`–`high` are sent as `reasoning_effort` on Chat
+  Completions, and `off` is sent as `reasoning_effort: none`.
 
 Because a setting may simply be dropped, treat `thinking` as a hint rather
 than a guarantee. For one invocation, `--thinking` overrides the selected
@@ -344,11 +351,13 @@ model's setting with one of `off`, `minimal`, `low`, `medium`, or `high`:
 ```
 
 `preserve_thinking` is a per-profile switch (default off) for reasoning models
-on Chat Completions. When true, the reasoning captured from earlier tool-calling
-rounds is resent as `reasoning_content` on those assistant history messages.
-DeepSeek requires this in tool-calling turns and rejects the request otherwise,
-so its built-in profiles enable it; providers that ignore or reject resent
-reasoning (or expect it stripped, like Qwen/DashScope) keep it off.
+on Chat Completions. When true, reasoning captured from earlier tool-calling
+rounds is resent on those assistant history messages. Plain reasoning uses
+`reasoning_content`; structured `reasoning_details` are kept in order without
+semantic modification in the provider continuation and take precedence when
+present. DeepSeek and OpenRouter's built-in profiles enable it. Providers that
+ignore or reject resent reasoning (or expect it stripped, like Qwen/DashScope)
+keep it off.
 
 For one invocation, `-m`/`--model` overrides the configured conversation model
 as `PROVIDER/PROFILE`, selecting a provider and an optional profile by name. A

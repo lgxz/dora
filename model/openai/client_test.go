@@ -674,6 +674,100 @@ func TestRequestBodyResendsReasoningPerPolicy(t *testing.T) {
 	})
 }
 
+func TestGeneratePreservesOpenRouterReasoningDetailsAcrossToolRound(t *testing.T) {
+	var callCount int
+	var secondRequest map[string]any
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		callCount++
+		if callCount == 1 {
+			return streamResponse(
+				`{"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"plan ","id":"r-1","format":"anthropic-claude-v1","index":0}]}}]}`,
+				`{"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque","id":"r-2","format":"anthropic-claude-v1","index":1}],"tool_calls":[{"index":0,"id":"call-1","function":{"name":"weather","arguments":"{}"}}]}}]}`,
+			), nil
+		}
+		if err := json.NewDecoder(request.Body).Decode(&secondRequest); err != nil {
+			t.Fatal(err)
+		}
+		return streamResponse(`{"choices":[{"index":0,"delta":{"content":"sunny"}}]}`), nil
+	})}
+	trueVal := true
+	client, err := New(Config{
+		BaseURL:          "https://example.test/v1",
+		Model:            "openrouter/auto",
+		HTTPClient:       httpClient,
+		PreserveThinking: &trueVal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := client.Generate(context.Background(), dora.Request{
+		Messages: []dora.Message{{Role: dora.RoleUser, Content: "weather?"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Reasoning != "plan " || len(first.ToolCalls) != 1 || first.Continuation == "" {
+		t.Fatalf("first response = %#v", first)
+	}
+
+	_, err = client.Generate(context.Background(), dora.Request{
+		Messages: []dora.Message{
+			{Role: dora.RoleUser, Content: "weather?"},
+			{Role: dora.RoleAssistant, Reasoning: first.Reasoning, ToolCalls: first.ToolCalls},
+			{Role: dora.RoleTool, ToolCallID: "call-1", Content: "sunny"},
+		},
+		Continuation: first.Continuation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := secondRequest["messages"].([]any)
+	assistant := messages[1].(map[string]any)
+	details := assistant["reasoning_details"].([]any)
+	if len(details) != 2 || details[0].(map[string]any)["text"] != "plan " ||
+		details[1].(map[string]any)["data"] != "opaque" {
+		t.Fatalf("reasoning_details = %#v", details)
+	}
+	if _, exists := assistant["reasoning_content"]; exists {
+		t.Fatalf("assistant unexpectedly includes reasoning_content: %#v", assistant)
+	}
+}
+
+func TestRequestBodyRejectsInvalidReasoningContinuation(t *testing.T) {
+	trueVal := true
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", PreserveThinking: &trueVal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.requestBody(dora.Request{
+		Messages:     []dora.Message{{Role: dora.RoleUser, Content: "hi"}},
+		Continuation: `{"messages":[{"tool_call_ids":[],"details":[{}]}]}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty reasoning details metadata") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestChatReasoningContinuationDropsCompactedRounds(t *testing.T) {
+	messages := []dora.Message{
+		{Role: dora.RoleUser, Content: "hi"},
+		{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "kept", Name: "tool", Input: json.RawMessage(`{}`)}}},
+		{Role: dora.RoleTool, ToolCallID: "kept", Content: "ok"},
+	}
+	state := chatContinuationState{Messages: []chatReasoningDetails{
+		{ToolCallIDs: []string{"dropped"}, Details: []json.RawMessage{json.RawMessage(`{"type":"reasoning.encrypted","data":"old"}`)}},
+		{ToolCallIDs: []string{"kept"}, Details: []json.RawMessage{json.RawMessage(`{"type":"reasoning.encrypted","data":"new"}`)}},
+	}}
+	byMessage, retained, err := chatReasoningByMessage(messages, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byMessage) != 1 || len(byMessage[1]) != 1 || len(retained.Messages) != 1 || retained.Messages[0].ToolCallIDs[0] != "kept" {
+		t.Fatalf("byMessage = %#v, retained = %#v", byMessage, retained)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

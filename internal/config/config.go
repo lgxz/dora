@@ -74,9 +74,9 @@ type ProfileSpec struct {
 	Model    string  `yaml:"model,omitempty"`
 	API      string  `yaml:"api,omitempty"`
 	Thinking *string `yaml:"thinking,omitempty"`
-	// PreserveThinking controls whether captured reasoning is resent as
-	// reasoning_content on tool-calling assistant history messages. Nil
-	// (default) leaves it disabled.
+	// PreserveThinking controls whether captured plain or structured reasoning
+	// is resent on tool-calling assistant history messages. Nil (default)
+	// leaves it disabled.
 	PreserveThinking *bool `yaml:"preserve_thinking,omitempty"`
 	MaxTokens        *int  `yaml:"max_tokens,omitempty"`
 	// ContextWindow is an approximate model context capacity measured in
