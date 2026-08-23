@@ -20,10 +20,12 @@ const (
 // UpdateMessageReceived (the complete assistant message). ToolCall is
 // populated for UpdateToolStarted and UpdateToolFinished. StartedAt is
 // populated for UpdateToolStarted and carries the real time the tool began
-// executing, which may differ from when the event is delivered. Err is
-// populated for the failure path of UpdateToolFinished. Info carries the text
-// for UpdateInfo and UpdateTurnStarted (the latter reports the prompt that
-// starts a new turn).
+// executing, which may differ from when the event is delivered.
+// UpdateToolFinished carries both the tool's result/error Message and an
+// optional Err that is non-nil only on the failure path, so consumers can
+// render the failure and still read the message that was persisted. Info
+// carries the text for UpdateInfo and UpdateTurnStarted (the latter reports
+// the prompt that starts a new turn).
 type Update struct {
 	Kind      UpdateKind
 	Delta     string

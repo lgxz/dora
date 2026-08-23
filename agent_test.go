@@ -750,7 +750,7 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
 		if calls == 1 {
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "fail"}}}, nil
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "fail", Input: json.RawMessage(`{"args":true}`)}}}, nil
 		}
 		return Response{Content: "done"}, nil
 	})
@@ -774,8 +774,21 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(finished) != 1 || finished[0].ToolCall.Name != "fail" || finished[0].Err == nil {
-		t.Fatalf("finished updates = %#v", finished)
+	if len(finished) != 1 {
+		t.Fatalf("finished updates = %#v, want 1", finished)
+	}
+	got := finished[0]
+	if got.ToolCall.Name != "fail" {
+		t.Fatalf("finished tool call = %#v, want fail", got.ToolCall)
+	}
+	// A failed tool must still carry its error message together with the non-nil
+	// error: both are reported on the same event. With valid input the message
+	// is the execute-failure text persisted to the conversation.
+	if got.Err == nil {
+		t.Fatalf("finished err = %#v, want non-nil", got.Err)
+	}
+	if got.Message.Role != RoleTool || !strings.Contains(got.Message.Content, `tool "fail" failed`) {
+		t.Fatalf("finished message = %#v, want the tool error message", got.Message)
 	}
 }
 

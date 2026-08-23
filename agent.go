@@ -210,16 +210,22 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 
 			result := results[i]
 			if result.err != nil {
-				notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Err: result.err})
+				// A failed tool still reports its error message on the finish
+				// event: that message is the one appended to toolMessages and
+				// later persisted to the conversation, so the Observer sees the
+				// exact same text the model will.
+				var toolMessage Message
 				if result.invalidJSON {
-					toolMessages = append(toolMessages, Message{
+					toolMessage = Message{
 						Role:       RoleTool,
 						ToolCallID: call.ID,
 						Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
-					})
-					continue
+					}
+				} else {
+					toolMessage = toolErrorMessage(call, result.err)
 				}
-				toolMessages = append(toolMessages, toolErrorMessage(call, result.err))
+				toolMessages = append(toolMessages, toolMessage)
+				notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 				continue
 			}
 
