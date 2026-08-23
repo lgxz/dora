@@ -49,6 +49,11 @@ providers:
         capabilities: [image_input, text]
         # Preserves OpenRouter reasoning_details across tool rounds.
         preserve_thinking: true
+      - name: ox-alpha
+        model: stealth/ox-alpha
+        context_window: 1048576
+        capabilities: [image_input, text]
+        preserve_thinking: true
 
 # Optional config-local API keys. A real process environment variable with the
 # same name takes precedence.

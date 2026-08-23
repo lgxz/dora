@@ -43,6 +43,11 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 		auto.PreserveThinking == nil || !*auto.PreserveThinking {
 		t.Fatalf("openrouter auto profile = %#v", auto)
 	}
+	oxAlpha := modelByName(t, openrouter, "ox-alpha")
+	if oxAlpha.Model != "stealth/ox-alpha" || oxAlpha.ContextWindow == nil || *oxAlpha.ContextWindow != 1048576 ||
+		oxAlpha.PreserveThinking == nil || !*oxAlpha.PreserveThinking {
+		t.Fatalf("openrouter ox-alpha profile = %#v", oxAlpha)
+	}
 }
 
 func TestDefaultResolvesOpenRouterAPIKey(t *testing.T) {

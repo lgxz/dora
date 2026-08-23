@@ -383,6 +383,41 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinOpenRouter(t *testing.T) {
 	}
 }
 
+func TestRunSelectsBuiltinOpenRouterOxAlpha(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-secret")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("env: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://openrouter.ai/api/v1/chat/completions" {
+			t.Fatalf("url = %q", request.URL.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "stealth/ox-alpha" {
+			t.Fatalf("model = %#v", body["model"])
+		}
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ox answer"}}]}`), nil
+	})}
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "--model", "openrouter/ox-alpha", "hello"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          &stdout,
+		Stderr:          io.Discard,
+		StdinIsTerminal: true,
+		HTTPClient:      httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "ox answer\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestRunEmptyPolicySelectsFirstProvider(t *testing.T) {
 	// Order = priority: with no explicit policy, the first text model in the
 	// catalog (deepseek) is selected even when multiple providers have keys.

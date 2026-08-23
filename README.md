@@ -251,7 +251,8 @@ server-side response storage.
 Setting `OPENROUTER_API_KEY` makes the built-in `openrouter/auto` profile
 available for automatic text and image selection. Catalog order remains
 DeepSeek, Trust, then OpenRouter, so an available earlier provider still wins.
-Select it explicitly with `-m openrouter/auto` or policy when desired.
+Select it explicitly with `-m openrouter/auto` or policy when desired. The
+built-in `openrouter/ox-alpha` profile targets `stealth/ox-alpha` directly.
 
 ### Third-party OpenAI-compatible providers
 

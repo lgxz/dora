@@ -38,3 +38,8 @@ providers:
         context_window: 2000000
         capabilities: [image_input, text]
         preserve_thinking: true
+      - name: ox-alpha
+        model: stealth/ox-alpha
+        context_window: 1048576
+        capabilities: [image_input, text]
+        preserve_thinking: true

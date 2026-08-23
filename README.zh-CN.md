@@ -176,7 +176,7 @@ policy:
 
 嵌入式 provider catalog 为 `deepseek`、`trust` 和 `openrouter` 提供内建 `base_url`，因此同名 catalog 项可以省略该字段。模型始终显式列在 `providers[].profiles` 中。每项的 `name` 是由 `policy.*.profile` 选择的唯一 profile 名称；`model` 是发送给 provider 的模型标识。省略 `model` 时默认等于 `name`，多个 profile 可以使用同一个模型并配置不同参数。每个 profile 通过 `capabilities` 声明其能力，例如 `capabilities: [text]` 或 `capabilities: [text, image_input]`。可在 provider 或 model 层设置 `api: responses` 使用 Responses API。两种 API 都始终使用 SSE 流式输出。Responses 工具循环在本地重放类型化输出项，不依赖服务端的响应存储。
 
-设置 `OPENROUTER_API_KEY` 后，内建的 `openrouter/auto` profile 会自动参与文本和图片选模。catalog 顺序仍为 DeepSeek、Trust、OpenRouter，因此前面的可用 provider 仍优先。也可以通过 `-m openrouter/auto` 或 policy 显式选择。
+设置 `OPENROUTER_API_KEY` 后，内建的 `openrouter/auto` profile 会自动参与文本和图片选模。catalog 顺序仍为 DeepSeek、Trust、OpenRouter，因此前面的可用 provider 仍优先。也可以通过 `-m openrouter/auto` 或 policy 显式选择。内建的 `openrouter/ox-alpha` profile 会直接使用 `stealth/ox-alpha`。
 
 ### 第三方 OpenAI 兼容提供商
 
