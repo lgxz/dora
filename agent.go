@@ -205,6 +205,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 		}
 		wg.Wait()
 
+		var toolMessage Message
 		for i, call := range response.ToolCalls {
 			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: results[i].startedAt})
 
@@ -214,7 +215,6 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 				// event: that message is the one appended to toolMessages and
 				// later persisted to the conversation, so the Observer sees the
 				// exact same text the model will.
-				var toolMessage Message
 				if result.invalidJSON {
 					toolMessage = Message{
 						Role:       RoleTool,
@@ -224,18 +224,15 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 				} else {
 					toolMessage = toolErrorMessage(call, result.err)
 				}
-				toolMessages = append(toolMessages, toolMessage)
-				notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
-				continue
-			}
-
-			toolMessage := Message{
-				Role:       RoleTool,
-				Content:    result.result.Content,
-				ToolCallID: call.ID,
+			} else {
+				toolMessage = Message{
+					Role:       RoleTool,
+					Content:    result.result.Content,
+					ToolCallID: call.ID,
+				}
 			}
 			toolMessages = append(toolMessages, toolMessage)
-			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage})
+			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 		}
 		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages}, response.Continuation); err != nil {
 			return err
