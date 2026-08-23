@@ -16,7 +16,7 @@ import (
 )
 
 // defaultWaitSeconds is applied when the caller omits wait_seconds.
-var defaultWaitSeconds = 60
+var defaultWaitSeconds = 10
 
 // Config describes a command tool and controls its execution.
 type Config struct {
@@ -68,7 +68,7 @@ func (t *Tool) Spec() dora.ToolSpec {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Seconds to wait for completion before moving the command to the background. 0 moves it to the background immediately. Omitted (or negative) uses the default of 60. Default 60"
+      "description": "Seconds to wait for completion before moving the command to the background. 0 moves it to the background immediately. Omitted (or negative) uses the default of 10. Default 10"
     }
   },
   "required": ["command"],
@@ -88,7 +88,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	// Every command runs through executeWithBackground (the only execution
 	// path); there is no pure-foreground branch. wait_seconds selects how long
 	// to wait before adopting the command as a background job: omitted or
-	// negative uses the default (60), 0 adopts immediately, and a positive
+	// negative uses the default (10), 0 adopts immediately, and a positive
 	// value waits that many seconds before adopting.
 	waitSeconds := defaultWaitSeconds
 	if input.WaitSeconds != nil {
@@ -134,7 +134,10 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 			Stderr: stderr,
 		}
 		switch {
-		case runErr == nil:
+		case runErr == nil, errors.Is(runErr, exec.ErrWaitDelay):
+			// ErrWaitDelay means the process exited successfully but an
+			// orphaned child (for example `server &`) still holds the output
+			// pipes; the command itself succeeded.
 			result.ExitCode = 0
 		default:
 			var exitError *exec.ExitError

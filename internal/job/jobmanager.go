@@ -136,7 +136,9 @@ func (m *Manager) Adopt(
 		defer job.mu.Unlock()
 		job.FinishedAt = time.Now()
 		switch {
-		case err == nil:
+		case err == nil, errors.Is(err, exec.ErrWaitDelay):
+			// ErrWaitDelay means the process exited successfully but an
+			// orphaned child still holds the output pipes.
 			job.Status = StatusDone
 			job.ExitCode = 0
 		case job.killed:
@@ -217,24 +219,4 @@ func (m *Manager) HasActiveJobs() bool {
 		}
 	}
 	return false
-}
-
-// Cleanup kills all running jobs. Call at session end.
-func (m *Manager) Cleanup() {
-	m.mu.Lock()
-	jobs := make([]*Job, 0, len(m.jobs))
-	for _, job := range m.jobs {
-		jobs = append(jobs, job)
-	}
-	m.mu.Unlock()
-	for _, job := range jobs {
-		job.mu.Lock()
-		if job.Status == StatusRunning {
-			job.killed = true
-			if job.cancel != nil {
-				job.cancel()
-			}
-		}
-		job.mu.Unlock()
-	}
 }

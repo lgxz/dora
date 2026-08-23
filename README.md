@@ -570,9 +570,11 @@ inside a command when needed.
 Both command tools use a single `wait_seconds` knob. It is the maximum number
 of seconds to wait for the command to finish before moving it to the
 background; once in the background it continues running (it is not terminated)
-and Dora returns a `job_id` that the job tool can use to inspect it. By default
-(omitted) Dora waits 60 seconds, and a value of `0` moves the command to the
-background immediately:
+and Dora returns a `job_id` that the job tool can use to inspect it. Background
+processes are also not terminated when Dora itself exits — they keep running
+after the session ends, so stop them explicitly with the job tool's kill action
+when needed. By default (omitted) Dora waits 10 seconds, and a value of `0`
+moves the command to the background immediately:
 
 ```json
 {

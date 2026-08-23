@@ -92,7 +92,9 @@ func TestWaitTimeout(t *testing.T) {
 	if done.Status != StatusRunning {
 		t.Fatalf("expected running after short wait, got %s", done.Status)
 	}
-	m.Cleanup()
+	if err := m.Kill(j.ID); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
 }
 
 func TestOutputBufferDrain(t *testing.T) {
@@ -143,28 +145,19 @@ func TestHasActiveJobsFalseAfterOnlyJobFinishesDuringWait(t *testing.T) {
 	}
 }
 
-func TestCleanup(t *testing.T) {
+func TestAdoptWaitDelayCountsAsDone(t *testing.T) {
 	m := New()
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 10")
+	cmd := exec.Command("sh", "-c", "true")
 	out := &OutputBuffer{}
-	cmd.Stdout = out.StdoutWriter()
-	cmd.Stderr = out.StderrWriter()
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start: %v", err)
-	}
 	waitDone := make(chan error, 1)
-	go func() { waitDone <- cmd.Wait() }()
-	j := m.Adopt(cmd, cancel, "sleep 10", out, waitDone)
-	m.Cleanup()
-	// Wait for the job to actually finish (cancel is async)
-	done, _ := m.Wait(j.ID, 5*time.Second)
-	if done.Status != StatusKilled {
-		t.Fatalf("expected killed, got %s", done.Status)
+	waitDone <- exec.ErrWaitDelay
+	j := m.Adopt(cmd, func() {}, "true &", out, waitDone)
+
+	done, ok := m.Wait(j.ID, 5*time.Second)
+	if !ok {
+		t.Fatalf("job not found")
 	}
-	if m.HasActiveJobs() {
-		t.Fatalf("expected no active jobs after cleanup")
+	if done.Status != StatusDone || done.ExitCode != 0 {
+		t.Fatalf("expected done with exit code 0, got %s/%d", done.Status, done.ExitCode)
 	}
 }
-
-var _ = context.Background

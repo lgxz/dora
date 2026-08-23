@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -186,7 +187,6 @@ func TestExecuteTransitionsToBackground(t *testing.T) {
 	if done.Status != job.StatusDone {
 		t.Fatalf("expected done, got %s", done.Status)
 	}
-	jm.Cleanup()
 }
 
 func TestExecuteForegroundWithWaitCompletes(t *testing.T) {
@@ -205,6 +205,23 @@ func TestExecuteForegroundWithWaitCompletes(t *testing.T) {
 	}
 	if jm.HasActiveJobs() {
 		t.Fatalf("expected no background job for fast command")
+	}
+}
+
+func TestExecuteDetachedChildReturnsSuccess(t *testing.T) {
+	tool := newTestTool(t, Config{})
+
+	// "background-child" exits 0 after spawning a child that inherits the
+	// output pipes and outlives the WaitDelay, so cmd.Wait() returns
+	// exec.ErrWaitDelay. The command itself succeeded and must be reported
+	// as a normal exit 0 result, not a tool error.
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"background-child","wait_seconds":5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, toolResult.Content)
+	if result.ExitCode != 0 || result.Stdout != "parent-done" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -291,6 +308,16 @@ func TestCommandHelper(t *testing.T) {
 		fmt.Print("done")
 	case "output":
 		fmt.Print("123456")
+	case "background-child":
+		// Spawn a child that inherits this process's stdout/stderr (the
+		// tool's pipes) and outlives the parent, mimicking `server &`.
+		child := exec.Command(os.Args[0], "-test.run=TestCommandHelper", "--", "long-sleep")
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(3)
+		}
+		fmt.Print("parent-done")
 	default:
 		os.Exit(2)
 	}

@@ -337,8 +337,8 @@ The tool execution result contains the skill's absolute directory and the comple
 
 Bash is enabled automatically on Linux and macOS and disabled automatically on other platforms. When it is auto-enabled but the `bash` executable cannot be found, the CLI skips the tool; `enabled: true` can explicitly enable it on any platform, in which case a missing executable causes startup to fail. Discovery currently only checks `PATH` and does not launch a shell to probe the runtime environment. When the tool is available, each invocation executes via `bash -lc` in Dora's current directory; when the model needs to change directories, it uses `cd` within the command. The tool has the following boundaries:
 
-- a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 60; `0` moves it to the background immediately);
-- context cancellation does not terminate an adopted background process (it uses its own lifetime);
+- a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 10; `0` moves it to the background immediately);
+- context cancellation does not terminate an adopted background process (it uses its own lifetime), and adopted processes also keep running after the Dora process exits;
 - the result returns the exit code, stdout, and stderr as JSON; a moved-to-background result returns a `job_id`;
 - a non-zero command exit is a tool result the model can handle; infrastructure errors such as startup failures are returned as Go errors.
 

@@ -97,7 +97,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 	jobManager := job.New()
-	defer jobManager.Cleanup()
 	tools, err := buildTools(cfg, model, jobManager, sessionStore, historyAvailable, opts.noSkills)
 	if err != nil {
 		return err
@@ -123,6 +122,13 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath)
+	// Background jobs are not terminated on exit; tell interactive users so a
+	// process that outlives dora is not a surprise. Silenced by --quiet.
+	defer func() {
+		if jobManager.HasActiveJobs() {
+			info(observer, "background jobs are still running; they keep running after dora exits")
+		}
+	}()
 
 	// Read the system prompt once; it is reused across every turn so the
 	// daemon loop does not re-read AGENTS.md on each event.
