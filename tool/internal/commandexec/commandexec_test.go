@@ -67,11 +67,11 @@ func TestExecuteDefaultWaitUsesBackground(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &bg); err != nil {
 		t.Fatalf("decode background result: %v (output=%s)", err, output)
 	}
-	if bg.JobID == "" || bg.Status != "running" {
+	if bg.JobID != "test-command_0" || bg.Status != "running" {
 		t.Fatalf("expected job_id + running, got %#v", bg)
 	}
 
-	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	done, ok := jm.Poll(bg.JobID, 10*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}
@@ -97,14 +97,14 @@ func TestExecuteZeroWaitAdoptsImmediately(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &bg); err != nil {
 		t.Fatalf("decode background result: %v (output=%s)", err, output)
 	}
-	if bg.JobID == "" || bg.Status != "running" {
+	if bg.JobID != "test-command_0" || bg.Status != "running" {
 		t.Fatalf("expected immediate job_id + running, got %#v", bg)
 	}
 	if !jm.HasActiveJobs() {
 		t.Fatalf("expected active job after immediate adoption")
 	}
 
-	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	done, ok := jm.Poll(bg.JobID, 10*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}
@@ -135,7 +135,7 @@ func TestExecuteNegativeWaitDefaults(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &bg); err != nil {
 		t.Fatalf("decode background result: %v (output=%s)", err, output)
 	}
-	if bg.JobID == "" || bg.Status != "running" {
+	if bg.JobID != "test-command_0" || bg.Status != "running" {
 		t.Fatalf("expected job_id + running after negative wait, got %#v", bg)
 	}
 }
@@ -172,7 +172,7 @@ func TestExecuteTransitionsToBackground(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &bg); err != nil {
 		t.Fatalf("decode background result: %v (output=%s)", err, output)
 	}
-	if bg.JobID == "" || bg.Status != "running" {
+	if bg.JobID != "test-command_0" || bg.Status != "running" {
 		t.Fatalf("expected job_id + running, got %#v", bg)
 	}
 	if !jm.HasActiveJobs() {
@@ -180,7 +180,7 @@ func TestExecuteTransitionsToBackground(t *testing.T) {
 	}
 
 	// Wait for the job to finish (long-sleep is 2s).
-	done, ok := jm.Wait(bg.JobID, 10*time.Second)
+	done, ok := jm.Poll(bg.JobID, 10*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}

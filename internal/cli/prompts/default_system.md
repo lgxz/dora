@@ -21,3 +21,5 @@ You are dora, a terminal-based AI agent.
 - A command waits up to 10 seconds by default; longer runs continue in the
   background and can be polled with the `job` tool. Pass a larger `wait_seconds`
   when you expect a long-running command.
+- An independent `task` can return immediately with `background: true`; poll
+  its `task_N` job before Dora exits, because background Tasks are in-process.

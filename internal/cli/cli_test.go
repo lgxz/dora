@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/update"
@@ -833,6 +835,84 @@ model:
 	}
 	if stdout.String() != "parent result\n" || calls != 3 {
 		t.Fatalf("stdout = %q, calls = %d", stdout.String(), calls)
+	}
+}
+
+func TestRunStartsBackgroundTaskAndPollsResult(t *testing.T) {
+	t.Setenv("DORA_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	childStarted := make(chan struct{})
+	releaseChild := make(chan struct{})
+	var calls atomic.Int32
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		userContent := messages[1].(map[string]any)["content"]
+		switch userContent {
+		case "background work":
+			for _, raw := range body["tools"].([]any) {
+				function := raw.(map[string]any)["function"].(map[string]any)
+				if function["name"] == "task" {
+					t.Fatalf("nested background Task can call task: %#v", function)
+				}
+			}
+			close(childStarted)
+			<-releaseChild
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"background result"}}]}`), nil
+
+		case "parent background request":
+			switch len(messages) {
+			case 2:
+				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-task","type":"function","function":{"name":"task","arguments":"{\"instruction\":\"background work\",\"background\":true}"}}]}}]}`), nil
+			case 4:
+				toolMessage := messages[3].(map[string]any)
+				content := toolMessage["content"].(string)
+				if toolMessage["role"] != "tool" || !strings.Contains(content, `"job_id":"task_0"`) || !strings.Contains(content, `"status":"running"`) {
+					t.Fatalf("background task result = %#v", toolMessage)
+				}
+				<-childStarted
+				close(releaseChild)
+				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-poll","type":"function","function":{"name":"job","arguments":"{\"action\":\"poll\",\"job_id\":\"task_0\"}"}}]}}]}`), nil
+			case 6:
+				toolMessage := messages[5].(map[string]any)
+				content := toolMessage["content"].(string)
+				if toolMessage["role"] != "tool" || !strings.Contains(content, `"status":"done"`) || !strings.Contains(content, `"result":"background result"`) || strings.Contains(content, `"kind"`) {
+					t.Fatalf("background task poll result = %#v", toolMessage)
+				}
+				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"parent collected result"}}]}`), nil
+			default:
+				t.Fatalf("unexpected parent messages: %#v", messages)
+			}
+		default:
+			t.Fatalf("unexpected user content: %#v", userContent)
+		}
+		return nil, nil
+	})}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var stdout strings.Builder
+	if err := Run(ctx, []string{"-q", "--no-skills", "--config", configPath, "parent background request"}, IO{
+		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
+		StdinIsTerminal: true, HTTPClient: httpClient,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "parent collected result\n" || calls.Load() != 4 {
+		t.Fatalf("stdout = %q, calls = %d", stdout.String(), calls.Load())
 	}
 }
 

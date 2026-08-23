@@ -118,11 +118,15 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath)
-	// Background jobs are not terminated on exit; tell interactive users so a
-	// process that outlives dora is not a surprise. Silenced by --quiet.
+	// Command jobs are external processes and may outlive Dora; Task jobs are
+	// in-process and are lost on exit. Silenced by --quiet.
 	defer func() {
-		if jobManager.HasActiveJobs() {
+		commands, tasks := jobManager.ActiveCounts()
+		if commands > 0 {
 			info(observer, "background jobs are still running; they keep running after dora exits")
+		}
+		if tasks > 0 {
+			info(observer, "background tasks are still running; they stop and lose their results when dora exits")
 		}
 	}()
 

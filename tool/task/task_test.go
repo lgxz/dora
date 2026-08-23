@@ -63,3 +63,30 @@ func TestExecuteRequiresRunner(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestExecuteStartsBackgroundTask(t *testing.T) {
+	tool := New(func(context.Context, string) (string, error) {
+		t.Fatal("foreground runner must not be called by Execute")
+		return "", nil
+	})
+	var instruction string
+	tool.SetBackgroundStarter(func(got string) (string, error) {
+		instruction = got
+		return "task_0", nil
+	})
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"instruction":" inspect ","background":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instruction != "inspect" || !strings.Contains(result.Content, `"job_id":"task_0"`) || !strings.Contains(result.Content, `"status":"running"`) {
+		t.Fatalf("instruction = %q, result = %q", instruction, result.Content)
+	}
+}
+
+func TestExecuteBackgroundRequiresStarter(t *testing.T) {
+	tool := New(func(context.Context, string) (string, error) { return "", nil })
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"instruction":"go","background":true}`))
+	if err == nil || !strings.Contains(err.Error(), "no background starter configured") {
+		t.Fatalf("error = %v", err)
+	}
+}

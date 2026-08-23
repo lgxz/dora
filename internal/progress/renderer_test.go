@@ -519,6 +519,15 @@ func TestToolPresentations(t *testing.T) {
 			wantResult:  "1/9 rounds",
 		},
 		{
+			name:        "task background",
+			call:        dora.ToolCall{Name: "task", Input: json.RawMessage(`{"instruction":"inspect independently","background":true}`)},
+			message:     dora.Message{Content: `{"job_id":"task_0","status":"running"}`},
+			wantName:    "task",
+			wantSummary: "inspect independently",
+			wantResult:  "background task_0",
+			wantOutcome: outcomeWarning,
+		},
+		{
 			name:        "job error",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"status","job_id":"missing"}`)},
 			message:     dora.Message{Content: `{"error":"job not found"}`},
@@ -529,12 +538,20 @@ func TestToolPresentations(t *testing.T) {
 		},
 		{
 			name:        "job running",
-			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"job-1"}`)},
-			message:     dora.Message{Content: `{"job_id":"job-1","status":"running","exit_code":0}`},
+			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"bash_0"}`)},
+			message:     dora.Message{Content: `{"job_id":"bash_0","status":"running","exit_code":0}`},
 			wantName:    "job",
-			wantSummary: "poll job-1",
+			wantSummary: "poll bash_0",
 			wantResult:  "running, exit 0",
 			wantOutcome: outcomeWarning,
+		},
+		{
+			name:        "task job done",
+			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"task_0"}`)},
+			message:     dora.Message{Content: `{"job_id":"task_0","status":"done","result":"independent result"}`},
+			wantName:    "job",
+			wantSummary: "poll task_0",
+			wantResult:  "done",
 		},
 	}
 

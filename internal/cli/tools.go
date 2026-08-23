@@ -87,7 +87,14 @@ func buildTools(cfg config.Config, deps toolDependencies) ([]dora.Tool, error) {
 	tools = append(tools, buildFileTools()...)
 	tools = append(tools, deps.extraTools...)
 	if cfg.Tools.Task.Enabled == nil || *cfg.Tools.Task.Enabled {
-		tools = append(tools, tasktool.New(deps.taskRunner))
+		task := tasktool.New(deps.taskRunner)
+		task.SetBackgroundStarter(func(instruction string) (string, error) {
+			job := deps.jobs.StartTask(tasktool.Name, instruction, func(ctx context.Context) (string, error) {
+				return deps.taskRunner(ctx, instruction)
+			})
+			return job.ID, nil
+		})
+		tools = append(tools, task)
 	}
 	return tools, nil
 }

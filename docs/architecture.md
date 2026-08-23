@@ -353,7 +353,7 @@ Bash is enabled automatically on Linux and macOS and disabled automatically on o
 
 - a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 10; `0` moves it to the background immediately);
 - context cancellation does not terminate an adopted background process (it uses its own lifetime), and adopted processes also keep running after the Dora process exits;
-- the result returns the exit code, stdout, and stderr as JSON; a moved-to-background result returns a `job_id`;
+- the result returns the exit code, stdout, and stderr as JSON; a moved-to-background result returns a source-prefixed `job_id` such as `bash_0`;
 - a non-zero command exit is a tool result the model can handle; infrastructure errors such as startup failures are returned as Go errors.
 
 Bash is not a security sandbox. Enabling it is equivalent to allowing the model to execute commands with the system privileges of the Dora process.
@@ -381,6 +381,20 @@ Multiple Task calls returned in one response follow the Agent's normal
 unbounded concurrent tool execution. Nested runs use no Observer, preventing
 parallel child progress from interleaving in the terminal; the outer Task
 completion still reports its final result and duration.
+
+Task input also accepts `background: true`. The tool then registers the nested
+run with the shared in-memory job manager, returns a `task_N` ID immediately,
+and runs the fresh Turn in a context controlled by the job tool rather than the
+parent tool call. The existing job tool lists, polls, and kills both command and
+Task jobs. Its public protocol has no `kind` field: IDs are generated from the
+source tool (`bash_N`, `powershell_N`, or `task_N`) with a separate counter per
+source. Polling drains unread command output, but completed Task text or errors
+remain available on repeated polls.
+
+Background Tasks have no concurrency limit. They are goroutines in the Dora
+process, so they do not survive process exit and any uncollected result is
+lost. This differs from adopted command processes, which continue after Dora
+exits. Foreground Task calls retain the parent tool-call context behavior.
 
 ## Configuration and Paths
 

@@ -584,6 +584,10 @@ moves the command to the background immediately:
 }
 ```
 
+Command job IDs are prefixed by the source tool and counted independently, for
+example `bash_0` and `powershell_0`. The public job results do not include a
+separate job-kind field; the ID identifies the source.
+
 ## Independent tasks
 
 The `task` tool is enabled by default. It accepts one self-contained
@@ -598,6 +602,24 @@ Multiple task calls in one model response run concurrently, following Dora's
 normal tool execution semantics. There is no separate task concurrency limit.
 Child progress is not sent to the terminal Observer; only the parent message
 and the completed task summary and duration are rendered.
+
+Set `background` to `true` when the parent should continue immediately instead
+of waiting for the independent turn:
+
+```json
+{
+  "instruction": "Run the full test suite and summarize failures",
+  "background": true
+}
+```
+
+The result immediately contains a `task_N` job ID. Use the same `job` tool to
+list, poll, or kill it; `job.poll.wait_seconds` controls how long that poll
+waits, while Task itself has no duration estimate. A completed Task result is
+retained for repeated polls. Unlike background shell processes, background
+Tasks run inside Dora and stop—with their uncollected result lost—when the Dora
+process exits. Their nested progress remains hidden, including while they run
+in the background.
 
 Task context isolation is not a security sandbox. Parent and child runs share
 the process, current working directory, filesystem, permissions, model client,

@@ -1,4 +1,4 @@
-// Package job provides background job management for long-running commands.
+// Package job provides background job management for commands and Agent tasks.
 package job
 
 import (
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"sync"
 	"time"
 )
@@ -23,29 +24,51 @@ const (
 	StatusKilled   Status = "killed"
 )
 
-// Job is a background process adopted from a foreground command.
-type Job struct {
-	ID         string
-	Command    string
-	Status     Status
-	ExitCode   int
-	StartedAt  time.Time
-	FinishedAt time.Time
+// Kind identifies the internal result shape of a job. It is used by the CLI
+// and job tool but is not exposed in their JSON protocol; job IDs use the
+// source tool name as their prefix instead.
+type Kind uint8
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	cancel  context.CancelFunc
-	done    chan struct{}
-	out     *OutputBuffer
-	killed  bool
+const (
+	KindCommand Kind = iota
+	KindTask
+)
+
+// Job is one background command or Agent task.
+type Job struct {
+	ID string
+
+	mu          sync.Mutex
+	kind        Kind
+	source      string
+	description string
+	status      Status
+	exitCode    int
+	startedAt   time.Time
+	finishedAt  time.Time
+	result      string
+	errText     string
+	cancel      context.CancelFunc
+	done        chan struct{}
+	out         *OutputBuffer
+	killed      bool
 }
 
-// DrainOutput returns the job's unread output and clears the buffer.
-func (j *Job) DrainOutput() (stdout, stderr string) {
-	if j.out == nil {
-		return "", ""
-	}
-	return j.out.Drain()
+// Snapshot is a concurrency-safe view of a Job. Command stdout/stderr are
+// populated only by Manager.Poll, which drains unread command output.
+type Snapshot struct {
+	ID          string
+	Kind        Kind
+	Source      string
+	Description string
+	Status      Status
+	ExitCode    int
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	Stdout      string
+	Stderr      string
+	Result      string
+	Error       string
 }
 
 // OutputBuffer is a concurrency-safe output buffer that is drained (read and
@@ -93,69 +116,102 @@ func (b *OutputBuffer) Drain() (stdout, stderr string) {
 
 // Manager tracks background jobs.
 type Manager struct {
-	mu     sync.Mutex
-	jobs   map[string]*Job
-	nextID int
+	mu      sync.Mutex
+	jobs    map[string]*Job
+	nextIDs map[string]int
 }
 
 // New creates an empty job manager.
 func New() *Manager {
-	return &Manager{jobs: make(map[string]*Job)}
+	return &Manager{jobs: make(map[string]*Job), nextIDs: make(map[string]int)}
 }
 
-// Adopt takes over an already-started process and tracks it as a background
-// job. The process is NOT restarted; it continues running. waitDone is the
-// channel that receives the result of cmd.Wait() (set up by the caller).
-func (m *Manager) Adopt(
+// AdoptCommand takes over an already-started process and tracks it as a
+// background job. The process is NOT restarted; it continues running.
+// waitDone receives the result of cmd.Wait() from the caller.
+func (m *Manager) AdoptCommand(
+	source string,
 	cmd *exec.Cmd,
 	cancel context.CancelFunc,
-	command string,
+	description string,
 	out *OutputBuffer,
 	waitDone <-chan error,
 ) *Job {
-	m.mu.Lock()
-	id := fmt.Sprintf("job_%d", m.nextID)
-	m.nextID++
-	job := &Job{
-		ID:        id,
-		Command:   command,
-		Status:    StatusRunning,
-		StartedAt: time.Now(),
-		cmd:       cmd,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		out:       out,
-	}
-	m.jobs[id] = job
-	m.mu.Unlock()
+	job := m.register(source, KindCommand, description, cancel, out)
 
 	go func() {
 		defer close(job.done)
 		err := <-waitDone
 		job.mu.Lock()
 		defer job.mu.Unlock()
-		job.FinishedAt = time.Now()
+		job.finishedAt = time.Now()
 		switch {
 		case err == nil, errors.Is(err, exec.ErrWaitDelay):
 			// ErrWaitDelay means the process exited successfully but an
 			// orphaned child still holds the output pipes.
-			job.Status = StatusDone
-			job.ExitCode = 0
+			job.status = StatusDone
+			job.exitCode = 0
 		case job.killed:
-			job.Status = StatusKilled
-			job.ExitCode = -1
+			job.status = StatusKilled
+			job.exitCode = -1
 		case errors.Is(cmd.Err, context.Canceled):
-			job.Status = StatusKilled
-			job.ExitCode = -1
+			job.status = StatusKilled
+			job.exitCode = -1
 		default:
-			job.Status = StatusFailed
+			job.status = StatusFailed
 			if ee, ok := err.(*exec.ExitError); ok {
-				job.ExitCode = ee.ExitCode()
+				job.exitCode = ee.ExitCode()
 			} else {
-				job.ExitCode = -1
+				job.exitCode = -1
 			}
 		}
 	}()
+	return job
+}
+
+// StartTask runs work in an independent cancellable context and tracks its
+// final result in memory. The task cannot outlive the Dora process.
+func (m *Manager) StartTask(source, description string, run func(context.Context) (string, error)) *Job {
+	ctx, cancel := context.WithCancel(context.Background())
+	job := m.register(source, KindTask, description, cancel, nil)
+	go func() {
+		defer close(job.done)
+		result, err := run(ctx)
+		job.mu.Lock()
+		defer job.mu.Unlock()
+		job.finishedAt = time.Now()
+		switch {
+		case job.killed:
+			job.status = StatusKilled
+		case err != nil:
+			job.status = StatusFailed
+			job.errText = err.Error()
+		default:
+			job.status = StatusDone
+			job.result = result
+		}
+	}()
+	return job
+}
+
+func (m *Manager) register(source string, kind Kind, description string, cancel context.CancelFunc, out *OutputBuffer) *Job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	next := m.nextIDs[source]
+	m.nextIDs[source] = next + 1
+	id := fmt.Sprintf("%s_%d", source, next)
+	job := &Job{
+		ID:          id,
+		kind:        kind,
+		source:      source,
+		description: description,
+		status:      StatusRunning,
+		startedAt:   time.Now(),
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		out:         out,
+	}
+	m.jobs[id] = job
 	return job
 }
 
@@ -169,7 +225,7 @@ func (m *Manager) Kill(id string) error {
 	}
 	job.mu.Lock()
 	defer job.mu.Unlock()
-	if job.Status != StatusRunning {
+	if job.status != StatusRunning {
 		return nil
 	}
 	job.killed = true
@@ -179,31 +235,62 @@ func (m *Manager) Kill(id string) error {
 	return nil
 }
 
-// List returns all tracked jobs.
-func (m *Manager) List() []*Job {
+// List returns concurrency-safe snapshots of all tracked jobs, ordered by ID.
+func (m *Manager) List() []Snapshot {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	jobs := make([]*Job, 0, len(m.jobs))
 	for _, job := range m.jobs {
 		jobs = append(jobs, job)
 	}
-	return jobs
+	m.mu.Unlock()
+	snapshots := make([]Snapshot, 0, len(jobs))
+	for _, job := range jobs {
+		snapshots = append(snapshots, job.snapshot(false))
+	}
+	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].ID < snapshots[j].ID })
+	return snapshots
 }
 
-// Wait blocks until the job finishes or the timeout elapses, then returns the
-// job. It is used by the job tool's poll action.
-func (m *Manager) Wait(id string, timeout time.Duration) (*Job, bool) {
+// Poll blocks until the job finishes or the timeout elapses, then returns a
+// snapshot. Poll drains unread stdout/stderr for command jobs; Task results
+// remain available on repeated polls.
+func (m *Manager) Poll(id string, timeout time.Duration) (Snapshot, bool) {
 	m.mu.Lock()
 	job, ok := m.jobs[id]
 	m.mu.Unlock()
 	if !ok {
-		return nil, false
+		return Snapshot{}, false
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-job.done:
-	case <-time.After(timeout):
+	case <-timer.C:
 	}
-	return job, true
+	return job.snapshot(true), true
+}
+
+func (j *Job) snapshot(drainCommandOutput bool) Snapshot {
+	j.mu.Lock()
+	snapshot := Snapshot{
+		ID:          j.ID,
+		Kind:        j.kind,
+		Source:      j.source,
+		Description: j.description,
+		Status:      j.status,
+		ExitCode:    j.exitCode,
+		StartedAt:   j.startedAt,
+		FinishedAt:  j.finishedAt,
+		Result:      j.result,
+		Error:       j.errText,
+	}
+	out := j.out
+	kind := j.kind
+	j.mu.Unlock()
+	if drainCommandOutput && kind == KindCommand && out != nil {
+		snapshot.Stdout, snapshot.Stderr = out.Drain()
+	}
+	return snapshot
 }
 
 // HasActiveJobs reports whether any job is still running.
@@ -212,11 +299,33 @@ func (m *Manager) HasActiveJobs() bool {
 	defer m.mu.Unlock()
 	for _, job := range m.jobs {
 		job.mu.Lock()
-		running := job.Status == StatusRunning
+		running := job.status == StatusRunning
 		job.mu.Unlock()
 		if running {
 			return true
 		}
 	}
 	return false
+}
+
+// ActiveCounts reports the number of running command and Task jobs.
+func (m *Manager) ActiveCounts() (commands, tasks int) {
+	m.mu.Lock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
+	m.mu.Unlock()
+	for _, job := range jobs {
+		snapshot := job.snapshot(false)
+		if snapshot.Status != StatusRunning {
+			continue
+		}
+		if snapshot.Kind == KindTask {
+			tasks++
+		} else {
+			commands++
+		}
+	}
+	return commands, tasks
 }

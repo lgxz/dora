@@ -16,7 +16,7 @@ import (
 
 const defaultPollSeconds = 60
 
-// Tool manages background jobs started by the bash tool.
+// Tool manages background command and Agent Task jobs.
 type Tool struct {
 	manager *job.Manager
 }
@@ -30,7 +30,7 @@ func New(manager *job.Manager) *Tool {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "job",
-		Description: "Manage background jobs (kill, list, poll). Poll with wait_seconds:0 returns a non-blocking status snapshot.",
+		Description: "Manage background jobs started by bash, powershell, or task (kill, list, poll). Poll with wait_seconds:0 returns a non-blocking status snapshot.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -89,13 +89,27 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		if input.WaitSeconds != nil {
 			waitSeconds = *input.WaitSeconds
 		}
-		job, ok := t.manager.Wait(input.JobID, time.Duration(waitSeconds)*time.Second)
+		snapshot, ok := t.manager.Poll(input.JobID, time.Duration(waitSeconds)*time.Second)
 		if !ok {
 			return t.result(`{"error": "job not found"}`), nil
 		}
-		stdout, stderr := job.DrainOutput()
+		if snapshot.Kind == job.KindTask {
+			type taskResult struct {
+				JobID  string `json:"job_id"`
+				Status string `json:"status"`
+				Result string `json:"result,omitempty"`
+				Error  string `json:"error,omitempty"`
+			}
+			data, _ := json.Marshal(taskResult{
+				JobID:  snapshot.ID,
+				Status: string(snapshot.Status),
+				Result: snapshot.Result,
+				Error:  snapshot.Error,
+			})
+			return t.result(string(data)), nil
+		}
 		return t.result(fmt.Sprintf(`{"job_id": %q, "status": %q, "exit_code": %d, "stdout": %q, "stderr": %q}`,
-			job.ID, job.Status, job.ExitCode, stdout, stderr)), nil
+			snapshot.ID, snapshot.Status, snapshot.ExitCode, snapshot.Stdout, snapshot.Stderr)), nil
 
 	default:
 		return dora.ToolResult{}, fmt.Errorf("job: unknown action %q", input.Action)

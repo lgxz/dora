@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
 	"time"
@@ -18,10 +19,13 @@ func TestAdoptAndWait(t *testing.T) {
 	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
-	j := m.Adopt(cmd, func() {}, "echo hello; sleep 0.2; echo world", out, waitDone)
+	j := m.AdoptCommand("bash", cmd, func() {}, "echo hello; sleep 0.2; echo world", out, waitDone)
+	if j.ID != "bash_0" {
+		t.Fatalf("job ID = %q, want bash_0", j.ID)
+	}
 
 	// Wait for completion
-	done, ok := m.Wait(j.ID, 5*time.Second)
+	done, ok := m.Poll(j.ID, 5*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}
@@ -31,9 +35,8 @@ func TestAdoptAndWait(t *testing.T) {
 	if done.ExitCode != 0 {
 		t.Fatalf("expected exit 0, got %d", done.ExitCode)
 	}
-	stdout, _ := done.DrainOutput()
-	if stdout != "hello\nworld\n" {
-		t.Fatalf("unexpected stdout: %q", stdout)
+	if done.Stdout != "hello\nworld\n" {
+		t.Fatalf("unexpected stdout: %q", done.Stdout)
 	}
 	if m.HasActiveJobs() {
 		t.Fatalf("expected no active jobs after completion")
@@ -52,20 +55,21 @@ func TestAdoptRunning(t *testing.T) {
 	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
-	j := m.Adopt(cmd, cancel, "sleep 5", out, waitDone)
+	j := m.AdoptCommand("bash", cmd, cancel, "sleep 5", out, waitDone)
 
 	if !m.HasActiveJobs() {
 		t.Fatalf("expected active job")
 	}
-	if j.Status != StatusRunning {
-		t.Fatalf("expected running, got %s", j.Status)
+	running, _ := m.Poll(j.ID, 0)
+	if running.Status != StatusRunning {
+		t.Fatalf("expected running, got %s", running.Status)
 	}
 
 	// Kill it
 	if err := m.Kill(j.ID); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
-	done, _ := m.Wait(j.ID, 5*time.Second)
+	done, _ := m.Poll(j.ID, 5*time.Second)
 	if done.Status != StatusKilled {
 		t.Fatalf("expected killed, got %s", done.Status)
 	}
@@ -82,10 +86,10 @@ func TestWaitTimeout(t *testing.T) {
 	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
-	j := m.Adopt(cmd, func() {}, "sleep 5", out, waitDone)
+	j := m.AdoptCommand("bash", cmd, func() {}, "sleep 5", out, waitDone)
 
 	// Wait with short timeout; job should still be running
-	done, ok := m.Wait(j.ID, 100*time.Millisecond)
+	done, ok := m.Poll(j.ID, 100*time.Millisecond)
 	if !ok {
 		t.Fatalf("job not found")
 	}
@@ -124,14 +128,14 @@ func TestHasActiveJobsFalseAfterOnlyJobFinishesDuringWait(t *testing.T) {
 	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
-	j := m.Adopt(cmd, func() {}, "sleep 0.3", out, waitDone)
+	j := m.AdoptCommand("bash", cmd, func() {}, "sleep 0.3", out, waitDone)
 
 	if !m.HasActiveJobs() {
 		t.Fatalf("expected active job before completion")
 	}
 
 	// Poll waits for the job to finish (0.3s sleep).
-	done, ok := m.Wait(j.ID, 5*time.Second)
+	done, ok := m.Poll(j.ID, 5*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}
@@ -151,13 +155,70 @@ func TestAdoptWaitDelayCountsAsDone(t *testing.T) {
 	out := &OutputBuffer{}
 	waitDone := make(chan error, 1)
 	waitDone <- exec.ErrWaitDelay
-	j := m.Adopt(cmd, func() {}, "true &", out, waitDone)
+	j := m.AdoptCommand("bash", cmd, func() {}, "true &", out, waitDone)
 
-	done, ok := m.Wait(j.ID, 5*time.Second)
+	done, ok := m.Poll(j.ID, 5*time.Second)
 	if !ok {
 		t.Fatalf("job not found")
 	}
 	if done.Status != StatusDone || done.ExitCode != 0 {
 		t.Fatalf("expected done with exit code 0, got %s/%d", done.Status, done.ExitCode)
+	}
+}
+
+func TestStartTaskReturnsPersistentResultAndIndependentIDs(t *testing.T) {
+	m := New()
+	first := m.StartTask("task", "first", func(context.Context) (string, error) {
+		return "first result", nil
+	})
+	second := m.StartTask("task", "second", func(context.Context) (string, error) {
+		return "second result", nil
+	})
+	other := m.StartTask("worker", "other", func(context.Context) (string, error) {
+		return "other result", nil
+	})
+	if first.ID != "task_0" || second.ID != "task_1" || other.ID != "worker_0" {
+		t.Fatalf("IDs = %q, %q, %q", first.ID, second.ID, other.ID)
+	}
+	done, ok := m.Poll(first.ID, time.Second)
+	if !ok || done.Kind != KindTask || done.Status != StatusDone || done.Result != "first result" {
+		t.Fatalf("first task = %#v, ok = %v", done, ok)
+	}
+	again, ok := m.Poll(first.ID, 0)
+	if !ok || again.Result != "first result" {
+		t.Fatalf("repeated poll = %#v, ok = %v", again, ok)
+	}
+}
+
+func TestKillTaskCancelsItsContext(t *testing.T) {
+	m := New()
+	started := make(chan struct{})
+	task := m.StartTask("task", "wait", func(ctx context.Context) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	<-started
+	commands, tasks := m.ActiveCounts()
+	if commands != 0 || tasks != 1 {
+		t.Fatalf("active counts = commands %d, tasks %d", commands, tasks)
+	}
+	if err := m.Kill(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusKilled {
+		t.Fatalf("killed task = %#v, ok = %v", done, ok)
+	}
+}
+
+func TestTaskFailureIsRetained(t *testing.T) {
+	m := New()
+	task := m.StartTask("task", "fail", func(context.Context) (string, error) {
+		return "", errors.New("broken")
+	})
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusFailed || done.Error != "broken" {
+		t.Fatalf("failed task = %#v, ok = %v", done, ok)
 	}
 }

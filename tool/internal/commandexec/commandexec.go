@@ -155,7 +155,7 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 	case <-time.After(waitDuration):
 		// Transition to background: adopt the running process, do not restart.
 		// The Wait() goroutine above fills `done`; Adopt reaps it.
-		j := t.jobManager.Adopt(cmd, procCancel, input.Command, out, done)
+		j := t.jobManager.AdoptCommand(t.name, cmd, procCancel, input.Command, out, done)
 		stdout, stderr := out.Drain()
 		return t.result(fmt.Sprintf(`{"job_id": %q, "status": "running", "stdout": %q, "stderr": %q, "message": "Command did not finish within %s. It is now running in the background. Use the job tool to check status."}`,
 			j.ID, stdout, stderr, waitDuration)), nil
