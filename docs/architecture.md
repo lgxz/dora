@@ -109,6 +109,8 @@ type ContextSize interface {
 
 `Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional per-category `TokenDetails`). It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Neither the compactor nor session persistence reads `Usage`; it is carried by the `UpdateMessageReceived` observer event on every complete round and otherwise left untouched, and the renderer does not display it.
 
+`dora` provides `Occupancy`/`OccupancyTotal` as pure-function exits for accounting context occupancy from a `dora.Usage` (provider-neutral and nil safe); normalization conversion from provider wire formats remains in the adapters' private helpers.
+
 ### Tool
 
 ```go
