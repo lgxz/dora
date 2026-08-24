@@ -304,9 +304,9 @@ git diff | ./dora "Review this change"
 ./dora -s ./system-status.sqlite "Continue with the busiest processes"
 ```
 
-每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。指定的 session 数据库已经包含 completed turns 时，Dora 才会加入 `history` 工具：模型可以用 `list` 列出已完成的 turns 及各自的 round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库不会暴露该工具。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。只有获得最终 assistant 结果的 turn 才会一次性原子追加；provider continuation 只在当前 turn 运行期间保存在内存中。
+每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 从第一个 turn 开始就加入 `history` 工具：模型可以用 `list` 列出已保存的 turns 及各自的状态、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成或达到最大 rounds 的 turn 会一次性原子追加；provider continuation 只在当前 turn 运行期间保存在内存中。
 
-SQLite schema version 4 包含 `turns` 和 `messages` 表，记录 system prompt、用户输入、最终结果、中间工具 rounds、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（schema version 3 及更早的数据库会被拒绝，请新建文件）。省略 `--session`/`-s` 时 turn 不持久化。Session 数据库可能包含命令、工具输出及 token 使用信息，因此请将其视为敏感内容。
+指定 `--session` 时，SQLite schema version 5 包含 `turns` 和 `messages` 表，记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（schema version 4 及更早的数据库会被拒绝，请新建文件）。省略 `--session`/`-s` 时，Dora 会为当前进程创建内存 SQLite 数据库；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。持久化 Session 文件可能包含命令、工具输出及 token 使用信息，因此请将其视为敏感内容。
 
 使用 `--config`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 

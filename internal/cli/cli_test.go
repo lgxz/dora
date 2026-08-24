@@ -771,6 +771,16 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+func requestHasTool(tools []any, name string) bool {
+	for _, raw := range tools {
+		function := raw.(map[string]any)["function"].(map[string]any)
+		if function["name"] == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestReadPromptCombinesInstructionAndPipe(t *testing.T) {
 	prompt, err := readPrompt([]string{"review", "this"}, strings.NewReader("diff"), false)
 	if err != nil {
@@ -794,9 +804,8 @@ func TestRunExecutesEnabledBashTool(t *testing.T) {
 		switch calls {
 		case 1:
 			tools := body["tools"].([]any)
-			function := tools[0].(map[string]any)["function"].(map[string]any)
-			if function["name"] != "bash" {
-				t.Fatalf("function = %#v", function)
+			if !requestHasTool(tools, "history") || !requestHasTool(tools, "bash") {
+				t.Fatalf("tools = %#v", tools)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf dora\"}"}}]}}]}`), nil
 		case 2:
@@ -1300,7 +1309,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 10 {
+		if len(tools) != 11 {
 			t.Fatalf("tools = %#v", tools)
 		}
 		var names []string
@@ -1308,7 +1317,7 @@ func TestRunRegistersBashAndPowerShellWhenAvailable(t *testing.T) {
 			function := raw.(map[string]any)["function"].(map[string]any)
 			names = append(names, function["name"].(string))
 		}
-		if strings.Join(names, ",") != "bash,powershell,job,view_image,read,write,edit,grep,glob,task" {
+		if strings.Join(names, ",") != "history,bash,powershell,job,view_image,read,write,edit,grep,glob,task" {
 			t.Fatalf("tool names = %#v", names)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"both available"}}]}`), nil
@@ -1350,9 +1359,16 @@ func TestRunLoadsSkillFromDoraHome(t *testing.T) {
 		switch calls {
 		case 1:
 			tools := body["tools"].([]any)
-			function := tools[0].(map[string]any)["function"].(map[string]any)
-			if function["name"] != "skill" || !strings.Contains(function["description"].(string), "system-status") {
-				t.Fatalf("function = %#v", function)
+			var skillFunction map[string]any
+			for _, raw := range tools {
+				function := raw.(map[string]any)["function"].(map[string]any)
+				if function["name"] == "skill" {
+					skillFunction = function
+					break
+				}
+			}
+			if skillFunction == nil || !strings.Contains(skillFunction["description"].(string), "system-status") {
+				t.Fatalf("tools = %#v", tools)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-skill","type":"function","function":{"name":"skill","arguments":"{\"name\":\"system-status\"}"}}]}}]}`), nil
 		case 2:
@@ -2011,8 +2027,8 @@ func TestRunStoresIndependentTurnsInSQLiteSession(t *testing.T) {
 				foundHistory = true
 			}
 		}
-		if foundHistory != (calls > 1) {
-			t.Fatalf("call %d history tool present = %v", calls, foundHistory)
+		if !foundHistory {
+			t.Fatalf("call %d did not include history tool", calls)
 		}
 		return fakeJSONResponse(fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"answer %d"}}]}`, calls)), nil
 	})}

@@ -15,7 +15,6 @@ import (
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/model/registry"
 	"github.com/lgxz/dora/model/router"
-	"github.com/lgxz/dora/session"
 	sqlitesession "github.com/lgxz/dora/session/sqlite"
 )
 
@@ -109,20 +108,15 @@ func parseModelSpec(s string) (provider, profile string, err error) {
 	return provider, profile, nil
 }
 
-func openSession(ctx context.Context, path string) (*sqlitesession.Store, bool, error) {
+func openSession(ctx context.Context, path string) (*sqlitesession.Store, error) {
 	if path == "" {
-		return nil, false, nil
+		return sqlitesession.OpenMemory(ctx)
 	}
 	store, err := sqlitesession.Open(ctx, path)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	page, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
-	if err != nil {
-		store.Close()
-		return nil, false, err
-	}
-	return store, page.Total > 0, nil
+	return store, nil
 }
 
 func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) dora.Observer {

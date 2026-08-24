@@ -232,7 +232,7 @@ Current execution semantics:
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
 4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry.
-5. If `--session` specifies a SQLite file, open it. When it already contains saved turns, register a history tool backed by its Reader interface; never load old turns into the model request.
+5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
 6. Create the concrete model adapter based on the selected profile's effective API and model.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
@@ -303,8 +303,9 @@ tool-call validity. Invalid arguments are fed back to the model as a recoverable
 ## Session
 
 The `session` package is a provider-neutral persistence contract. The CLI's
-concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
-the SQLite database itself. There is no default session directory and no
+concrete implementation is `session/sqlite`; `--session`/`-s` selects a
+persistent SQLite file, while omitting it creates an in-memory SQLite database
+for the process lifetime. There is no default session directory and no
 automatic loading of prior messages.
 
 The database uses schema version 5 and two tables:
@@ -328,8 +329,8 @@ continuation is intentionally not stored. SQLite allocates the turn ID and
 foreign keys bind every message to its turn. Schema version 4 and older
 databases are rejected rather than migrated.
 
-`tool/history` is registered only when the selected session database already
-contains at least one saved turn. An empty database exposes no history tool.
+`tool/history` is registered from the first turn against the active session.
+An empty database is a valid history source whose `list` result is empty.
 `list` returns saved turns newest first and includes status, error, and the
 number of rounds in each turn. `get` selects one turn by ID and returns a chronological
 page of complete rounds; both actions accept `offset` and `limit`. History tool

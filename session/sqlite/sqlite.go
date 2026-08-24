@@ -36,12 +36,26 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := ensureFile(absolute); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", absolute)
+	return open(ctx, absolute, absolute)
+}
+
+// OpenMemory opens an ephemeral SQLite session database. Its contents live
+// only for the lifetime of the returned Store and are discarded on Close.
+func OpenMemory(ctx context.Context) (*Store, error) {
+	return open(ctx, ":memory:", ":memory:")
+}
+
+func open(ctx context.Context, dsn, path string) (*Store, error) {
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite session: %w", err)
 	}
+	// An in-memory SQLite database belongs to one connection. Keeping the pool
+	// at exactly one connection also preserves the existing serialized access
+	// behavior for file-backed sessions.
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db, path: absolute}
+	db.SetMaxIdleConns(1)
+	store := &Store{db: db, path: path}
 	if err := store.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err

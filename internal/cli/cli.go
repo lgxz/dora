@@ -19,7 +19,6 @@ import (
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/model/registry"
-	"github.com/lgxz/dora/session"
 )
 
 const maxStdinBytes = 16 << 20
@@ -87,29 +86,20 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 
-	sessionStore, historyAvailable, err := openSession(ctx, opts.sessionPath)
+	sessionStore, err := openSession(ctx, opts.sessionPath)
 	if err != nil {
 		return err
 	}
-	if sessionStore != nil {
-		defer sessionStore.Close()
-		if serverMode {
-			historyAvailable = true
-		}
-	}
+	defer sessionStore.Close()
 	jobManager := job.New()
 	extraTools, err := buildEventTools(source)
 	if err != nil {
 		return err
 	}
-	var history session.Reader
-	if historyAvailable {
-		history = sessionStore
-	}
 	agent, err := buildAgent(cfg, agentDependencies{
 		model:        model,
 		jobs:         jobManager,
-		history:      history,
+		history:      sessionStore,
 		noSkills:     opts.noSkills,
 		extraTools:   extraTools,
 		systemPrompt: systemPrompt(cfg.Agent),

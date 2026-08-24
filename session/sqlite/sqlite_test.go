@@ -61,6 +61,39 @@ func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	}
 }
 
+func TestOpenMemoryStoresTurnsUntilClosed(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.CommitTurn(ctx, completedTurn(t, "ephemeral", "answer", 0)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Turns) != 1 || page.Turns[0].User != "ephemeral" {
+		t.Fatalf("page = %#v", page)
+	}
+
+	other, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	otherPage, err := other.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherPage.Total != 0 {
+		t.Fatalf("independent memory store total = %d, want 0", otherPage.Total)
+	}
+}
+
 func TestStoreRejectsIncompleteTurnAndUnknownSchema(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "history.sqlite")
