@@ -145,6 +145,13 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		return err
 	}
 	tools, specs := a.toolsForRun(opts)
+	// modelHistory is the conversation snapshot actually visible to the model.
+	// It deliberately stays separate from Turn, which retains the complete,
+	// uncompressed history for persistence. After compaction, subsequent rounds
+	// must continue from this snapshot so lastUsage always describes the same
+	// history baseline instead of accidentally restoring messages that were not
+	// present in the previous request.
+	modelHistory := turn.Messages()
 
 	// lastUsage is the real token usage of the most recently completed model call
 	// in this run. It stays local to the loop (never stored on the immutable
@@ -157,8 +164,9 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
+		requestMessages := a.requestMessages(modelHistory, lastUsage)
 		request := Request{
-			Messages:     a.requestMessages(turn.Messages(), lastUsage),
+			Messages:     requestMessages,
 			Tools:        specs,
 			Continuation: turn.Continuation(),
 		}
@@ -276,6 +284,12 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages, Usage: response.Usage}, response.Continuation); err != nil {
 			return err
 		}
+		// Advance the model-visible snapshot from exactly what was sent. Turn keeps
+		// the full round independently, while future compaction and lastUsage stay
+		// anchored to the already-compacted request history.
+		modelHistory = cloneMessages(requestMessages)
+		modelHistory = append(modelHistory, cloneMessage(assistant))
+		modelHistory = append(modelHistory, cloneMessages(toolMessages)...)
 	}
 
 	return fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)

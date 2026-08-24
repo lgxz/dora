@@ -119,15 +119,23 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 	const roundBytes = 100
 	roundContent := strings.Repeat("t", roundBytes)
 	var calls int
+	var firstRequestLen int
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
 		switch calls {
 		case 1:
+			// The initial full Turn is compacted to the configured round cap.
+			firstRequestLen = len(request.Messages)
+			want := 1 + 2*maxRetainedRounds
+			if firstRequestLen != want {
+				t.Fatalf("first request message count = %d, want %d", firstRequestLen, want)
+			}
 			return Response{ToolCalls: []ToolCall{{ID: "c1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			// Compaction keeps leading user message + last maxRetainedRounds
-			// rounds (each an assistant plus its tool message).
-			want := 1 + 2*maxRetainedRounds
+			// With no reported usage, the effective history still fits after the
+			// newly completed tool round is appended. It must continue from the
+			// first compacted request rather than rebuild from the full Turn.
+			want := firstRequestLen + 2
 			if len(request.Messages) != want {
 				t.Fatalf("message count = %d, want %d", len(request.Messages), want)
 			}
@@ -163,7 +171,7 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 		{Role: RoleTool, Content: roundContent, ToolCallID: "cx"},
 	})
 	agent.contextWindow = maxRetainedRounds*roundTokens*10/9 + 100
-	// Seed enough history so the second call exceeds the dynamic round budget.
+	// Seed enough history so the initial call exceeds the dynamic round budget.
 	turn := NewTurn("u0")
 	for i := 0; i < seedRounds; i++ {
 		turn.rounds = append(turn.rounds, Round{
@@ -178,8 +186,72 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 		t.Fatalf("calls = %d", calls)
 	}
 }
+
+func TestAgentRunDoesNotRestoreHistoryAfterCompaction(t *testing.T) {
+	// The first request compacts a large persisted Turn. Its reported usage is
+	// then deliberately below the next-round threshold. That low usage describes
+	// only the compacted request and must not cause the second request to restore
+	// the complete persisted history.
+	const seedRounds = 64
+	var firstRequestLen int
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			firstRequestLen = len(request.Messages)
+			fullHistoryLen := 1 + seedRounds*2
+			if firstRequestLen >= fullHistoryLen {
+				t.Fatalf("first request was not compacted: len = %d, full = %d", firstRequestLen, fullHistoryLen)
+			}
+			return Response{
+				ToolCalls: []ToolCall{{ID: "c1", Name: "snap", Input: json.RawMessage(`{}`)}},
+				Usage:     &Usage{InputTokens: 80, OutputTokens: 20, TotalTokens: 100},
+			}, nil
+		case 2:
+			// The assistant tool-call message and its tool result are the only
+			// additions to the first request's effective history.
+			want := firstRequestLen + 2
+			if len(request.Messages) != want {
+				t.Fatalf("second request restored persisted history: len = %d, want %d", len(request.Messages), want)
+			}
+			return Response{Content: "done"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "snap"},
+		execute: func(context.Context, json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.contextWindow = 1024
+
+	turn := NewTurn("u0")
+	for i := 0; i < seedRounds; i++ {
+		turn.rounds = append(turn.rounds, Round{
+			Assistant: Message{Role: RoleAssistant, Content: "a"},
+			Tools: []Message{{
+				Role: RoleTool, ToolCallID: "seed", Content: strings.Repeat("x", 2000),
+			}},
+		})
+	}
+	if err := agent.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
 func TestCompactMessagesTruncatesLongToolOutput(t *testing.T) {
-	// A small contextWindow forces historical tool output to be truncated to a
+	// A small message budget forces historical tool output to be truncated to a
 	// bounded per-message budget while the current round stays unchanged.
 	long := strings.Repeat("x", 100)
 	history := []Message{
@@ -188,7 +260,7 @@ func TestCompactMessagesTruncatesLongToolOutput(t *testing.T) {
 		{Role: RoleTool, ToolCallID: "c1", Content: long},
 		{Role: RoleAssistant, Content: "current"},
 	}
-	// keepRounds 2: current round ("current") plus a1; contextWindow 20 leaves a
+	// keepRounds 2: current round ("current") plus a1; budget 20 leaves a
 	// tight estimated-token allowance for the two historical messages.
 	got := compactMessages(history, 2, 20)
 	if len(got) != 4 {
@@ -224,6 +296,59 @@ func TestCompactMessagesCompactsJSONInput(t *testing.T) {
 	s, _ := v["k"].(string)
 	if len(s) >= 200 {
 		t.Fatalf("JSON value not truncated: len = %d", len(s))
+	}
+}
+
+func TestCompactMessagesSubtractsPrefixFromBudget(t *testing.T) {
+	const budget = 64
+	history := []Message{
+		{Role: RoleSystem, Content: strings.Repeat("s", 40)},
+		{Role: RoleUser, Content: strings.Repeat("u", 40)},
+		{Role: RoleAssistant, Content: strings.Repeat("a", 100)},
+		{Role: RoleTool, ToolCallID: "c1", Content: strings.Repeat("t", 100)},
+		{Role: RoleAssistant, Content: "current"},
+	}
+	got := compactMessages(history, 2, budget)
+	if tokens := estimateTokens(got); tokens > budget {
+		t.Fatalf("compacted tokens = %d, want <= %d; got %#v", tokens, budget, got)
+	}
+}
+
+func TestCompactRoundSharesBudgetAcrossMessageFields(t *testing.T) {
+	const messageBudget = 64
+	big := strings.Repeat("x", 200)
+	round := []Message{{
+		Role:    RoleAssistant,
+		Content: big,
+		ToolCalls: []ToolCall{
+			{ID: "c1", Name: "first", Input: json.RawMessage(`{"left":"` + big + `","right":"` + big + `"}`)},
+			{ID: "c2", Name: "second", Input: json.RawMessage(`{"left":"` + big + `","right":"` + big + `"}`)},
+		},
+	}}
+	got := compactRound(round, messageBudget)
+	if tokens := estimateTokens(got); tokens > messageBudget {
+		t.Fatalf("compacted message tokens = %d, want <= %d; got %#v", tokens, messageBudget, got)
+	}
+	for i, call := range got[0].ToolCalls {
+		if !json.Valid(call.Input) {
+			t.Fatalf("tool input %d is invalid JSON after compaction: %s", i, call.Input)
+		}
+	}
+}
+
+func TestRequestMessagesUsesSafetyBudgetForCompaction(t *testing.T) {
+	a := &Agent{contextWindow: 200}
+	history := []Message{{Role: RoleUser, Content: "u0"}}
+	for i := 0; i < 16; i++ {
+		history = append(history,
+			Message{Role: RoleAssistant, Content: "a"},
+			Message{Role: RoleTool, ToolCallID: "c", Content: strings.Repeat("x", 100)},
+		)
+	}
+	got := a.requestMessages(history, nil)
+	wantBudget := int(float64(a.contextWindow) * budgetSafetyRatio)
+	if tokens := estimateTokens(got); tokens > wantBudget {
+		t.Fatalf("request tokens = %d, want <= safety budget %d", tokens, wantBudget)
 	}
 }
 

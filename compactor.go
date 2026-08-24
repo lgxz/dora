@@ -47,7 +47,11 @@ func (a *Agent) requestMessages(history []Message, lastUsage *Usage) []Message {
 	if keepAll {
 		return history
 	}
-	return compactMessages(history, keepRounds, a.contextWindow)
+	return compactMessages(history, keepRounds, a.compactionBudget())
+}
+
+func (a *Agent) compactionBudget() int {
+	return int(float64(a.contextWindow) * budgetSafetyRatio)
 }
 
 // dynamicRetainedRounds decides how many of the most recent rounds to retain
@@ -68,7 +72,7 @@ func (a *Agent) dynamicRetainedRounds(history []Message, lastUsage *Usage) (keep
 		// No assistant history yet; nothing to compact.
 		return 0, true
 	}
-	budget := int(float64(a.contextWindow) * budgetSafetyRatio)
+	budget := a.compactionBudget()
 
 	var occupancy int
 	if lastUsage != nil {
@@ -188,9 +192,9 @@ func estimateTextTokens(text string) int {
 // tool messages it triggered, so compaction never splits a round in the middle
 // of its tool results. The current (last) round is retained unchanged; earlier
 // retained rounds are compressed (images dropped, oversized content and tool
-// input truncated) so the estimated usage stays within the contextWindow token
+// input truncated) so the estimated usage stays within the supplied token
 // budget. The returned slice may share backing storage with history.
-func compactMessages(history []Message, keepRounds, contextWindow int) []Message {
+func compactMessages(history []Message, keepRounds, budget int) []Message {
 	if keepRounds <= 0 || len(history) == 0 {
 		return history
 	}
@@ -220,17 +224,18 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 	}
 
 	// Compute the per-message budget for historical rounds. A non-positive
-	// contextWindow disables budget-based truncation; compactRound then still
+	// budget disables budget-based truncation; compactRound then still
 	// drops images so multimodal history stays lean but otherwise returns the
 	// round intact (matching the pre-budget behavior).
 	perMessage := 0
-	if contextWindow > 0 {
-		// The current round is retained unchanged. Estimate its text size
-		// (images are ignored as they consume no text context) and subtract it
-		// from the budget.
-		remaining := contextWindow - estimateTokens(currentRound)
+	if budget > 0 {
+		// The prefix and current round are retained unchanged. Subtract both so
+		// historical messages cannot consume their reserved portion of the same
+		// request budget.
+		remaining := budget - estimateTokens(prefix) - estimateTokens(currentRound)
 		if remaining <= 0 || historicalCount == 0 {
-			// The current round already consumes the budget; keep only it.
+			// The mandatory prefix and current round already consume the budget;
+			// keep only them.
 			kept := make([]Message, 0, len(prefix)+len(currentRound))
 			kept = append(kept, prefix...)
 			kept = append(kept, currentRound...)
@@ -239,34 +244,106 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 		perMessage = remaining / historicalCount
 	}
 
-	// Keep the leading system/user prefix, the compacted historical rounds, and
+	// Compact each historical round independently, then enforce the aggregate
+	// budget. Fixed IDs and framing can make an individual message irreducibly
+	// larger than its allocation; in that case drop the oldest retained rounds
+	// whole until the request fits rather than splitting a tool round.
+	compactedHistorical := make([][]Message, 0, len(historicalRounds))
+	total := estimateTokens(prefix) + estimateTokens(currentRound)
+	for _, round := range historicalRounds {
+		compacted := compactRound(round, perMessage)
+		compactedHistorical = append(compactedHistorical, compacted)
+		total += estimateTokens(compacted)
+	}
+	firstHistorical := 0
+	if budget > 0 {
+		for total > budget && firstHistorical < len(compactedHistorical) {
+			total -= estimateTokens(compactedHistorical[firstHistorical])
+			firstHistorical++
+		}
+	}
+
+	// Keep the leading system/user prefix, the historical rounds that fit, and
 	// the current round unchanged.
 	kept := make([]Message, 0, len(prefix)+len(currentRound)+historicalCount)
 	kept = append(kept, prefix...)
-	for _, round := range historicalRounds {
-		kept = append(kept, compactRound(round, perMessage)...)
+	for _, round := range compactedHistorical[firstHistorical:] {
+		kept = append(kept, round...)
 	}
 	kept = append(kept, currentRound...)
 	return kept
 }
 
 // compactRound compresses a historical round (an assistant message plus its
-// tool messages): images are dropped and oversized content or tool call input
-// is truncated to at most maxMessageTokens estimated tokens. The current round
-// is never passed here. A non-positive maxMessageTokens keeps the round intact.
+// tool messages): images are dropped and each message's content and tool inputs
+// share one maxMessageTokens budget, including fixed framing and identifiers.
+// The current round is never passed here. A non-positive maxMessageTokens keeps
+// the round intact.
 func compactRound(round []Message, maxMessageTokens int) []Message {
 	compacted := make([]Message, len(round))
 	for i, message := range round {
 		message.Images = nil
 		if maxMessageTokens > 0 {
-			message.Content = truncateString(message.Content, maxMessageTokens)
-			for j := range message.ToolCalls {
-				message.ToolCalls[j].Input = compactJSON(message.ToolCalls[j].Input, maxMessageTokens)
-			}
+			message = compactMessage(message, maxMessageTokens)
 		}
 		compacted[i] = message
 	}
 	return compacted
+}
+
+// compactMessage shares maxTokens across all variable-sized fields in one
+// message. Tool call inputs reserve the one estimated token needed for an empty
+// JSON object; any remaining budget is divided among content and inputs as they
+// are processed. Fixed role/framing, IDs, and names are preserved because they
+// maintain the assistant/tool protocol relationship.
+func compactMessage(message Message, maxTokens int) Message {
+	fixed := estimatedMessageOverheadTokens + estimateTextTokens(message.ToolCallID)
+	jsonInputs := 0
+	for _, call := range message.ToolCalls {
+		fixed += estimatedMessageOverheadTokens
+		fixed += estimateTextTokens(call.ID)
+		fixed += estimateTextTokens(call.Name)
+		if len(call.Input) > 0 {
+			jsonInputs++
+		}
+	}
+
+	components := jsonInputs
+	if message.Content != "" {
+		components++
+	}
+	if components == 0 {
+		return message
+	}
+
+	// Each non-empty JSON input needs at least one token to remain valid as {}.
+	remaining := maxTokens - fixed - jsonInputs
+	if remaining < 0 {
+		remaining = 0
+	}
+	componentsLeft := components
+	if message.Content != "" {
+		allowance := remaining / componentsLeft
+		message.Content = truncateString(message.Content, allowance)
+		remaining -= estimateTextTokens(message.Content)
+		componentsLeft--
+	}
+	for i := range message.ToolCalls {
+		if len(message.ToolCalls[i].Input) == 0 {
+			continue
+		}
+		allowance := 1
+		if componentsLeft > 0 {
+			allowance += remaining / componentsLeft
+		}
+		message.ToolCalls[i].Input = compactJSON(message.ToolCalls[i].Input, allowance)
+		usedExtra := estimateTextTokens(string(message.ToolCalls[i].Input)) - 1
+		if usedExtra > 0 {
+			remaining -= usedExtra
+		}
+		componentsLeft--
+	}
+	return message
 }
 
 // truncateString truncates s to at most max estimated tokens, keeping the
@@ -319,22 +396,48 @@ func tokenSuffixRunes(runes []rune, max int) []rune {
 	return runes[len(runes)-low:]
 }
 
-// compactJSON truncates oversized string values inside a JSON document while
-// keeping it valid JSON. Non-JSON input is returned unchanged.
+// compactJSON truncates string values inside a JSON document so the entire
+// encoded input, rather than each individual value, fits within max estimated
+// tokens. Valid JSON remains valid; structurally oversized values fall back to
+// an empty object. Non-JSON input is truncated as opaque argument text.
 func compactJSON(raw json.RawMessage, max int) json.RawMessage {
 	if estimateTextTokens(string(raw)) <= max {
 		return raw
 	}
+	if max <= 0 {
+		return nil
+	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return raw
+		return json.RawMessage(truncateString(string(raw), max))
 	}
-	compactValue(&value, max)
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return raw
+
+	// Find the largest shared string-value allowance whose complete encoded
+	// document fits. Re-decode on each iteration so trials remain independent.
+	low, high := 0, max
+	var best json.RawMessage
+	for low <= high {
+		mid := (low + high) / 2
+		var candidate any
+		if err := json.Unmarshal(raw, &candidate); err != nil {
+			break
+		}
+		compactValue(&candidate, mid)
+		encoded, err := json.Marshal(candidate)
+		if err != nil {
+			break
+		}
+		if estimateTextTokens(string(encoded)) <= max {
+			best = encoded
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
 	}
-	return encoded
+	if best != nil {
+		return best
+	}
+	return json.RawMessage(`{}`)
 }
 
 // compactValue recursively truncates oversized string values in a JSON value.
