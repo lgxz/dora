@@ -452,6 +452,20 @@ terminal renderer does not print usage. Per-round usage and the final response
 usage are saved in the active SQLite session and returned by the history tool;
 without `--session`, that database is in memory and disappears when Dora exits.
 
+Use `--workdir` to choose the base directory for relative paths used by tools:
+
+```sh
+./dora --workdir /path/to/project "Run the tests and inspect failures"
+```
+
+The directory must already exist. Dora resolves it to an absolute path without
+changing the process working directory, so concurrent Agent runs can use
+different bases safely. It applies to command tools and to relative paths used
+by `read`, `write`, `edit`, `grep`, `glob`, and `view_image`. Absolute tool
+paths are unchanged. Configuration and `--session` paths continue to be
+resolved from the process working directory. `--workdir` selects a path
+reference, not a filesystem sandbox or an additional permission boundary.
+
 ### Sessions
 
 Pass a SQLite file to retain turns across CLI invocations:
@@ -579,7 +593,8 @@ enabled with `enabled: true` must exist on `PATH`, otherwise Dora reports an
 error. Discovery currently checks executable presence only; it does not launch
 the shell to probe its runtime environment.
 
-The Bash tool runs `bash -lc` in Dora's current directory. The model can use
+The Bash tool runs `bash -lc` in the directory selected by `--workdir`, or in
+Dora's process working directory when the option is omitted. The model can use
 `cd` inside a command when it needs another directory. The tool returns exit
 code, stdout, and stderr to the model as JSON. This tool grants the model the
 same filesystem and process permissions as the `dora` process, so disable it
@@ -589,7 +604,7 @@ The independent `powershell` tool prefers PowerShell Core (`pwsh`) and falls
 back to Windows PowerShell (`powershell.exe`). If both tools are explicitly
 enabled, they are exposed separately so their command syntaxes remain distinct.
 
-PowerShell also starts in Dora's current directory and can use `Set-Location`
+PowerShell uses the same working-directory rule and can use `Set-Location`
 inside a command when needed.
 
 Both command tools use a single `wait_seconds` knob. It is the maximum number

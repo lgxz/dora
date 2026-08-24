@@ -53,9 +53,13 @@ type AgentConfig struct {
 
 // RunOptions controls one Agent run without mutating the Agent. ExcludeTools
 // removes matching tools both from the definitions sent to the model and from
-// the set of tools that may be executed during this run.
+// the set of tools that may be executed during this run. WorkingDirectory is
+// the base directory built-in tools use to resolve relative paths; an empty
+// value preserves a directory already carried by ctx, or the process working
+// directory when ctx has none.
 type RunOptions struct {
-	ExcludeTools []string
+	ExcludeTools     []string
+	WorkingDirectory string
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -133,6 +137,9 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 	}
 	if turn.Completed() {
 		return errors.New("dora: turn is already complete")
+	}
+	if opts.WorkingDirectory != "" {
+		ctx = withWorkingDirectory(ctx, opts.WorkingDirectory)
 	}
 	if err := turn.bindSystem(a.systemPrompt); err != nil {
 		return err

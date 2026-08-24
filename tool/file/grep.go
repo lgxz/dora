@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/tool/internal/runpath"
 )
 
 // GrepTool searches file contents.
@@ -57,6 +58,7 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	if err != nil {
 		return dora.ToolResult{}, err
 	}
+	input.Path = runpath.Resolve(ctx, input.Path)
 
 	// Prefer ripgrep (respects .gitignore, skips hidden/binary files). Fall
 	// back to the built-in walker if rg is unavailable. The rg availability

@@ -14,6 +14,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/tool/internal/runpath"
 )
 
 // GlobTool finds files matching a glob pattern.
@@ -54,6 +55,7 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	if root == "" {
 		root = "."
 	}
+	root = runpath.Resolve(ctx, root)
 	info, err := os.Stat(root)
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("glob: %w", err)

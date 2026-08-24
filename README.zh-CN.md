@@ -295,6 +295,14 @@ git diff | ./dora "Review this change"
 
 推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，替代 "Thinking..." 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
 
+使用 `--workdir` 可以指定工具解析相对路径时使用的基准目录：
+
+```sh
+./dora --workdir /path/to/project "运行测试并检查失败原因"
+```
+
+该目录必须已经存在。Dora 会将它解析为绝对路径，但不会修改进程的当前目录，因此并发 Agent Run 可以安全地使用不同基准。它适用于命令工具，以及 `read`、`write`、`edit`、`grep`、`glob` 和 `view_image` 的相对路径；绝对路径不受影响。配置文件和 `--session` 路径仍相对于进程当前目录解析。`--workdir` 只是路径参照，并不是文件系统沙箱或额外的权限边界。
+
 ### 会话
 
 传入一个 SQLite 文件，可以跨多次 CLI 调用保留已完成的 turns：
@@ -374,11 +382,11 @@ tools:
 
 可执行文件不存在的自动工具会被跳过。用 `enabled: true` 显式启用的工具必须存在于 `PATH` 上，否则 Dora 会报告错误。目前发现机制仅检查可执行文件是否存在；它不会启动 shell 去探测其运行时环境。
 
-Bash 工具在 Dora 的当前目录下运行 `bash -lc`。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以 JSON 形式向模型返回退出码、stdout、stderr、超时和截断信息。每个流的输出限制为 1 MiB。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
+Bash 工具在 `--workdir` 指定的目录下运行 `bash -lc`；省略该参数时使用 Dora 进程的当前目录。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以 JSON 形式向模型返回退出码、stdout、stderr、超时和截断信息。每个流的输出限制为 1 MiB。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
 
 独立的 `powershell` 工具优先使用 PowerShell Core（`pwsh`），并在不可用时回退到 Windows PowerShell（`powershell.exe`）。如果两个工具都被显式启用，它们会分开暴露，以便区分各自的命令语法。
 
-PowerShell 也在 Dora 的当前目录中启动，需要时可在命令内部使用 `Set-Location`。
+PowerShell 使用相同的工作目录规则，需要时可在命令内部使用 `Set-Location`。
 
 两个命令工具都接受可选的每次命令超时。它覆盖该次调用的配置默认值，且不能超过 3600 秒：
 

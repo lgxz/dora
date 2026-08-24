@@ -17,6 +17,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/imagefile"
+	"github.com/lgxz/dora/tool/internal/runpath"
 )
 
 // Viewer understands an image and returns a text description. It is injected
@@ -62,7 +63,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	var image dora.Image
 	switch {
 	case input.Path != "":
-		path := expandHome(input.Path)
+		path := runpath.Resolve(ctx, expandHome(input.Path))
 		if err := imagefile.Validate(path); err != nil {
 			return dora.ToolResult{}, fmt.Errorf("view_image: %w", err)
 		}

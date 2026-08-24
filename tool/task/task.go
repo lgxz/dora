@@ -25,10 +25,15 @@ type Runner func(context.Context, string) (string, error)
 // and returns the job ID used to manage it.
 type BackgroundStarter func(string) (string, error)
 
+// ContextBackgroundStarter starts one instruction while preserving values
+// from the calling run context, such as its working directory.
+type ContextBackgroundStarter func(context.Context, string) (string, error)
+
 // Tool delegates instructions to an injected Runner.
 type Tool struct {
 	runner            Runner
 	backgroundStarter BackgroundStarter
+	contextStarter    ContextBackgroundStarter
 }
 
 // New creates a task tool. Runner is invoked only by Execute, so it may close
@@ -41,6 +46,12 @@ func New(runner Runner) *Tool {
 // the Tool is exposed to an Agent and is not safe to mutate during execution.
 func (t *Tool) SetBackgroundStarter(starter BackgroundStarter) {
 	t.backgroundStarter = starter
+}
+
+// SetContextBackgroundStarter enables background execution with access to the
+// calling run context. It takes precedence over SetBackgroundStarter.
+func (t *Tool) SetContextBackgroundStarter(starter ContextBackgroundStarter) {
+	t.contextStarter = starter
 }
 
 // Spec implements dora.Tool.
@@ -70,10 +81,15 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		return dora.ToolResult{}, errors.New("task: no runner configured")
 	}
 	if input.Background {
-		if t.backgroundStarter == nil {
+		if t.contextStarter == nil && t.backgroundStarter == nil {
 			return dora.ToolResult{}, errors.New("task: no background starter configured")
 		}
-		jobID, err := t.backgroundStarter(input.Instruction)
+		var jobID string
+		if t.contextStarter != nil {
+			jobID, err = t.contextStarter(ctx, input.Instruction)
+		} else {
+			jobID, err = t.backgroundStarter(input.Instruction)
+		}
 		if err != nil {
 			return dora.ToolResult{}, fmt.Errorf("task: start background: %w", err)
 		}

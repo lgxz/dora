@@ -62,6 +62,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
+	workdir, err := resolveWorkingDirectory(opts.workdir)
+	if err != nil {
+		return err
+	}
 
 	// --events forces event daemon mode regardless of events.enabled.
 	if opts.events {
@@ -141,7 +145,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
 		}
 		turn := dora.NewTurn(prompt)
-		outcome, err := runTurn(ctx, agent, turn, observer, streams)
+		outcome, err := runTurn(ctx, agent, turn, observer, streams, dora.RunOptions{
+			WorkingDirectory: workdir,
+		})
 		if outcome.maxRoundsErr != nil && sessionStore != nil {
 			if _, commitErr := sessionStore.CommitMaxRounds(ctx, turn, outcome.maxRoundsErr); commitErr != nil {
 				return commitErr
@@ -171,6 +177,24 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			return nil
 		}
 	}
+}
+
+func resolveWorkingDirectory(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory %q: %w", path, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("inspect working directory %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working directory %q is not a directory", path)
+	}
+	return abs, nil
 }
 
 func writeAnswer(streams IO, content string) error {

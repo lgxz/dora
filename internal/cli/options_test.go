@@ -28,6 +28,16 @@ func TestParseOptionsEventsFlag(t *testing.T) {
 	}
 }
 
+func TestParseOptionsWorkdir(t *testing.T) {
+	opts, err := parseOptions([]string{"--workdir", "project", "hello"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.workdir != "project" || len(opts.promptArgs) != 1 || opts.promptArgs[0] != "hello" {
+		t.Fatalf("options = %#v", opts)
+	}
+}
+
 func TestParseOptionsColor(t *testing.T) {
 	tests := []struct {
 		name      string

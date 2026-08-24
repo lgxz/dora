@@ -13,10 +13,10 @@ type turnOutcome struct {
 	maxRoundsErr error
 }
 
-func runTurn(ctx context.Context, agent *dora.Agent, turn *dora.Turn, observer dora.Observer, streams IO) (turnOutcome, error) {
+func runTurn(ctx context.Context, agent *dora.Agent, turn *dora.Turn, observer dora.Observer, streams IO, opts dora.RunOptions) (turnOutcome, error) {
 	input := bufio.NewReader(streams.Stdin)
 	for {
-		err := agent.RunObserved(ctx, turn, observer)
+		err := agent.RunObservedWithOptions(ctx, turn, observer, opts)
 		if err == nil {
 			return turnOutcome{completed: true}, nil
 		}

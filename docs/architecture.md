@@ -134,9 +134,13 @@ Within the same Agent, tool names must be non-empty and unique. Tool definitions
 
 `RunObservedWithOptions` accepts per-run `RunOptions`. Its `ExcludeTools`
 names are removed from both the definitions sent to the model and the lookup
-map used for execution. `Run` and `RunObserved` retain their original APIs and
-delegate with empty options. Filtering is local to a run and never mutates the
-Agent, so independent Turns may use different tool sets concurrently.
+map used for execution. `WorkingDirectory` is carried through the run context
+and is available to tools through `dora.WorkingDirectory`; the Agent does not
+change process state or interpret the path. Built-in filesystem, image, and
+command tools use it as the base for relative paths. `Run` and `RunObserved`
+retain their original APIs and delegate with empty options. Options are local
+to a run and never mutate the Agent, so independent Turns may use different
+tool sets and working directories concurrently.
 
 ### Observer
 
@@ -231,12 +235,12 @@ Current execution semantics:
 1. Parse arguments; `--version` and `-update` complete and exit before reading configuration or the prompt.
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
-4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry.
+4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry, and validate `--workdir` as an existing directory before resolving it to an absolute path.
 5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
 6. Create the concrete model adapter based on the selected profile's effective API and model.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
-9. Run the Agent, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
+9. Run the Agent with the resolved working directory, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
 10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. If execution stops at the maximum-round limit, append a `max_rounds` Turn before returning, declining, or continuing the event loop. Other failed Turns are not written.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
@@ -357,7 +361,7 @@ The tool execution result contains the skill's absolute directory and the comple
 
 ## Bash Tool
 
-Bash is enabled automatically on Linux and macOS and disabled automatically on other platforms. When it is auto-enabled but the `bash` executable cannot be found, the CLI skips the tool; `enabled: true` can explicitly enable it on any platform, in which case a missing executable causes startup to fail. Discovery currently only checks `PATH` and does not launch a shell to probe the runtime environment. When the tool is available, each invocation executes via `bash -lc` in Dora's current directory; when the model needs to change directories, it uses `cd` within the command. The tool has the following boundaries:
+Bash is enabled automatically on Linux and macOS and disabled automatically on other platforms. When it is auto-enabled but the `bash` executable cannot be found, the CLI skips the tool; `enabled: true` can explicitly enable it on any platform, in which case a missing executable causes startup to fail. Discovery currently only checks `PATH` and does not launch a shell to probe the runtime environment. When the tool is available, each invocation executes via `bash -lc` in the run's working directory, falling back to Dora's process working directory when none is set; when the model needs to change directories, it uses `cd` within the command. The tool has the following boundaries:
 
 - a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 10; `0` moves it to the background immediately);
 - context cancellation does not terminate an adopted background process (it uses its own lifetime), and adopted processes also keep running after the Dora process exits;
@@ -370,7 +374,7 @@ Bash is not a security sandbox. Enabling it is equivalent to allowing the model 
 
 PowerShell is a separate `powershell` tool from Bash, and its input Schema likewise accepts only `command`, preventing the model from mixing the syntax of the two shells in a single call. It is enabled automatically on Windows and disabled automatically on other platforms, and looks for `pwsh` and then `powershell.exe` in order. In automatic mode, when neither exists the CLI skips the tool; when explicitly enabled, it reports an error. Bash and PowerShell can be exposed simultaneously only when the user explicitly overrides the platform policy.
 
-PowerShell executes commands in Dora's current directory using `-NoLogo -NoProfile -NonInteractive -Command`, and the model uses `Set-Location` within the command to change directories. It shares the same `wait_seconds` background behavior and structured results as Bash, and is likewise not a security sandbox.
+PowerShell executes commands using the same run working-directory rule with `-NoLogo -NoProfile -NonInteractive -Command`, and the model uses `Set-Location` within the command to change directories. It shares the same `wait_seconds` background behavior and structured results as Bash, and is likewise not a security sandbox.
 
 Bash and PowerShell remain separate public tools with separate shell-launch policies, and both delegate to `tool/internal/commandexec` for input validation, process execution, and result encoding. This internal package cannot be imported from outside the module.
 
@@ -407,7 +411,10 @@ the nested run observes its context and returns.
 Background Tasks have no concurrency limit. They are goroutines in the Dora
 process, so they do not survive process exit and any uncollected result is
 lost. This differs from adopted command processes, which continue after Dora
-exits. Foreground Task calls retain the parent tool-call context behavior.
+exits. Foreground and background Task calls inherit run context values such as
+the working directory. Background Tasks deliberately drop the parent deadline
+and cancellation while retaining those values, preserving their independent
+lifecycle; they remain cancellable through the job tool.
 
 ## Configuration and Paths
 

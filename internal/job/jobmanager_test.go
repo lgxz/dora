@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -209,6 +210,32 @@ func TestKillTaskCancelsItsContext(t *testing.T) {
 	done, ok := m.Poll(task.ID, time.Second)
 	if !ok || done.Status != StatusKilled {
 		t.Fatalf("killed task = %#v, ok = %v", done, ok)
+	}
+}
+
+func TestStartTaskContextKeepsValuesWithoutParentCancellation(t *testing.T) {
+	type key struct{}
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "value"))
+	m := New()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	task := m.StartTaskContext(parent, "task", "inherit", func(ctx context.Context) (string, error) {
+		close(started)
+		<-release
+		if got := ctx.Value(key{}); got != "value" {
+			return "", fmt.Errorf("context value = %v", got)
+		}
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("context unexpectedly cancelled: %w", err)
+		}
+		return "done", nil
+	})
+	<-started
+	cancel()
+	close(release)
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusDone || done.Result != "done" {
+		t.Fatalf("task = %#v, ok = %v", done, ok)
 	}
 }
 

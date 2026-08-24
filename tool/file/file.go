@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/tool/internal/runpath"
 )
 
 const maxReadBytes = 1 << 20 // 1MB
@@ -51,6 +52,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	if err != nil {
 		return dora.ToolResult{}, err
 	}
+	input.Path = runpath.Resolve(ctx, input.Path)
 	f, err := os.Open(input.Path)
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("read: %w", err)
@@ -163,6 +165,7 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage) (dora.Tool
 	if err != nil {
 		return dora.ToolResult{}, err
 	}
+	input.Path = runpath.Resolve(ctx, input.Path)
 	created := false
 	if _, err := os.Stat(input.Path); os.IsNotExist(err) {
 		created = true
@@ -226,6 +229,7 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	if err != nil {
 		return dora.ToolResult{}, err
 	}
+	input.Path = runpath.Resolve(ctx, input.Path)
 	data, err := os.ReadFile(input.Path)
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("edit: %w", err)

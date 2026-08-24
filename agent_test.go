@@ -291,6 +291,35 @@ func TestRunObservedWithOptionsExcludesToolFromModelAndExecution(t *testing.T) {
 	}
 }
 
+func TestRunObservedWithOptionsProvidesWorkingDirectoryToTools(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, _ Request) (Response, error) {
+		calls++
+		if calls == 1 {
+			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
+		}
+		return Response{Content: "done"}, nil
+	})
+	tool := stubTool{
+		spec: ToolSpec{Name: "inspect"},
+		execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			if got := WorkingDirectory(ctx); got != "/tmp/project" {
+				t.Fatalf("working directory = %q, want /tmp/project", got)
+			}
+			return "ok", nil
+		},
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.RunObservedWithOptions(context.Background(), NewTurn("inspect"), nil, RunOptions{
+		WorkingDirectory: "/tmp/project",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 	var calls int
 	streamReturned := false

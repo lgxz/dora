@@ -173,7 +173,17 @@ func (m *Manager) AdoptCommand(
 // StartTask runs work in an independent cancellable context and tracks its
 // final result in memory. The task cannot outlive the Dora process.
 func (m *Manager) StartTask(source, description string, run func(context.Context) (string, error)) *Job {
-	ctx, cancel := context.WithCancel(context.Background())
+	return m.StartTaskContext(context.Background(), source, description, run)
+}
+
+// StartTaskContext runs work in an independently cancellable context that
+// retains values from parent while deliberately dropping its cancellation and
+// deadline. This lets background tasks inherit per-run execution settings.
+func (m *Manager) StartTaskContext(parent context.Context, source, description string, run func(context.Context) (string, error)) *Job {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	job := m.register(source, KindTask, description, cancel, nil)
 	go func() {
 		defer close(job.done)

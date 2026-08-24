@@ -83,6 +83,25 @@ func TestExecuteStartsBackgroundTask(t *testing.T) {
 	}
 }
 
+func TestExecutePassesContextToBackgroundStarter(t *testing.T) {
+	type key struct{}
+	ctx := context.WithValue(context.Background(), key{}, "value")
+	tool := New(func(context.Context, string) (string, error) { return "", nil })
+	tool.SetContextBackgroundStarter(func(got context.Context, instruction string) (string, error) {
+		if got.Value(key{}) != "value" || instruction != "inspect" {
+			t.Fatalf("context value = %v, instruction = %q", got.Value(key{}), instruction)
+		}
+		return "task_0", nil
+	})
+	result, err := tool.Execute(ctx, json.RawMessage(`{"instruction":"inspect","background":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, `"job_id":"task_0"`) {
+		t.Fatalf("result = %q", result.Content)
+	}
+}
+
 func TestExecuteBackgroundRequiresStarter(t *testing.T) {
 	tool := New(func(context.Context, string) (string, error) { return "", nil })
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"instruction":"go","background":true}`))
