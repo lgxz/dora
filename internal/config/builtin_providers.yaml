@@ -29,6 +29,9 @@ providers:
       - name: qwen3.7-plus
         context_window: 1000000
         capabilities: [image_input, text]
+      - name: glm-5.2
+        context_window: 1000000
+        capabilities: [text]
 
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
