@@ -1100,8 +1100,8 @@ func TestAgentFallsBackToDefaultContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.contextWindow != DefaultContextWindowBytes {
-		t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowBytes)
+	if agent.contextWindow != DefaultContextWindowTokens {
+		t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowTokens)
 	}
 }
 
@@ -1112,8 +1112,8 @@ func TestAgentFallsBackWhenContextSizeNonPositive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if agent.contextWindow != DefaultContextWindowBytes {
-			t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowBytes)
+		if agent.contextWindow != DefaultContextWindowTokens {
+			t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowTokens)
 		}
 	}
 }

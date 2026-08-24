@@ -36,10 +36,10 @@ type Agent struct {
 	// systemPrompt is immutable Agent identity/configuration. Each Turn binds
 	// a snapshot of it when the run starts.
 	systemPrompt string
-	// contextWindow is the model's approximate context capacity in content
-	// bytes, probed once at construction and cached for compaction to consume
+	// contextWindow is the model's context capacity in tokens, probed once at
+	// construction and cached for compaction to consume
 	// without re-asserting each round. It falls back to
-	// DefaultContextWindowBytes when the model does not report a positive size.
+	// DefaultContextWindowTokens when the model does not report a positive size.
 	contextWindow int
 }
 
@@ -75,7 +75,7 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
 	}
-	contextWindow := DefaultContextWindowBytes
+	contextWindow := DefaultContextWindowTokens
 	if cs, ok := model.(ContextSize); ok {
 		if v := cs.ContextSize(); v > 0 {
 			contextWindow = v
@@ -174,7 +174,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		}
 		// Anchor the next occupancy estimate on this call's real token usage.
 		// Setting it after the response keeps a nil usage (providers that report
-		// none) treated as a fall back to pure byte estimation.
+		// none) treated as a fallback to estimating the complete history.
 		lastUsage = response.Usage
 
 		assistant := Message{

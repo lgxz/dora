@@ -165,9 +165,9 @@ func TestRouterContextSize(t *testing.T) {
 		set  func(*registry.Profile)
 		want int
 	}{
-		{"nil", func(p *registry.Profile) {}, dora.DefaultContextWindowBytes},
-		{"zero", func(p *registry.Profile) { p.ContextWindow = intPtr(0) }, dora.DefaultContextWindowBytes},
-		{"negative", func(p *registry.Profile) { p.ContextWindow = intPtr(-5) }, dora.DefaultContextWindowBytes},
+		{"nil", func(p *registry.Profile) {}, dora.DefaultContextWindowTokens},
+		{"zero", func(p *registry.Profile) { p.ContextWindow = intPtr(0) }, dora.DefaultContextWindowTokens},
+		{"negative", func(p *registry.Profile) { p.ContextWindow = intPtr(-5) }, dora.DefaultContextWindowTokens},
 		{"positive", func(p *registry.Profile) { p.ContextWindow = intPtr(8192) }, 8192},
 	}
 	for _, tc := range cases {

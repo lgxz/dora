@@ -2,15 +2,15 @@ package dora
 
 import "context"
 
-// DefaultContextWindowBytes is the fallback context budget (message-content
-// bytes) used when a Model does not report its own context size. It matches the
+// DefaultContextWindowTokens is the fallback context budget in tokens used
+// when a Model does not report its own context size. It matches the
 // internal/config default so the agent behaves predictably out of the box.
-const DefaultContextWindowBytes = 1 << 20
+const DefaultContextWindowTokens = 1 << 20
 
 // ContextSize is optionally implemented by models that can report their
-// approximate context capacity in content bytes. It is a pure capability,
+// context capacity in tokens. It is a pure capability,
 // leaving the Model and StreamingModel contracts unchanged; models that do not
-// implement it keep working and fall back to DefaultContextWindowBytes.
+// implement it keep working and fall back to DefaultContextWindowTokens.
 type ContextSize interface {
 	ContextSize() int
 }

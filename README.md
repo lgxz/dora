@@ -320,11 +320,14 @@ tool-calling models ignore or reject non-default temperatures, treat
 `temperature` as best-effort. Both keys are model catalog settings; there are
 no command-line flags for them.
 
-`context_window` belongs to a model profile and approximates that model's
-context capacity using message-content bytes because Dora does not currently
-tokenize requests. It defaults to 1048576 (1 MiB), and configured values must
-be positive. This estimate does not include exact tokenization, tool schemas,
-or vision tokens.
+`context_window` belongs to a model profile and records that model's context
+capacity in tokens. It defaults to 1048576, and configured values must be
+positive. When a provider reports usage, Dora bases the next tool round on the
+previous call's exact `total_tokens` plus an estimate for tool results produced
+after that response. Without reported usage, Dora estimates the whole message
+history. The provider-neutral estimate treats about four ASCII bytes or one
+non-ASCII rune as a token and includes a small per-message framing allowance;
+it does not include tool schemas or vision tokens.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when

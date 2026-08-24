@@ -98,7 +98,7 @@ func TestRequestMessagesWithinBudgetIsUnchanged(t *testing.T) {
 		history = append(history, Message{Role: RoleAssistant, Content: "a"})
 		history = append(history, Message{Role: RoleTool, ToolCallID: "c", Content: "t"})
 	}
-	a := &Agent{contextWindow: DefaultContextWindowBytes}
+	a := &Agent{contextWindow: DefaultContextWindowTokens}
 	got := a.requestMessages(history, nil)
 	if len(got) != len(history) {
 		t.Fatalf("len = %d, want %d", len(got), len(history))
@@ -111,7 +111,7 @@ func TestRequestMessagesWithinBudgetIsUnchanged(t *testing.T) {
 }
 
 func TestAgentRunAppliesCompaction(t *testing.T) {
-	// Seed enough large rounds and a tight contextWindow so the byte budget
+	// Seed enough large rounds and a tight contextWindow so the token budget
 	// falls short of the whole history but is rich enough for the greedy
 	// retainer to hit its maxRetainedRounds cap, forcing compaction to keep
 	// exactly the leading user message plus the last maxRetainedRounds rounds.
@@ -158,7 +158,11 @@ func TestAgentRunAppliesCompaction(t *testing.T) {
 	}
 	// A tight contextWindow makes the whole seeded history exceed the budget
 	// while still allowing maxRetainedRounds rounds to be greedily retained.
-	agent.contextWindow = maxRetainedRounds*roundBytes + 1000
+	roundTokens := estimateTokens([]Message{
+		{Role: RoleAssistant, Content: "a"},
+		{Role: RoleTool, Content: roundContent, ToolCallID: "cx"},
+	})
+	agent.contextWindow = maxRetainedRounds*roundTokens*10/9 + 100
 	// Seed enough history so the second call exceeds the dynamic round budget.
 	turn := NewTurn("u0")
 	for i := 0; i < seedRounds; i++ {
@@ -184,8 +188,8 @@ func TestCompactMessagesTruncatesLongToolOutput(t *testing.T) {
 		{Role: RoleTool, ToolCallID: "c1", Content: long},
 		{Role: RoleAssistant, Content: "current"},
 	}
-	// keepRounds 2: current round ("current") plus a1; contextWindow 20 leaves
-	// 13 bytes for the two historical messages (a1, tool1).
+	// keepRounds 2: current round ("current") plus a1; contextWindow 20 leaves a
+	// tight estimated-token allowance for the two historical messages.
 	got := compactMessages(history, 2, 20)
 	if len(got) != 4 {
 		t.Fatalf("len = %d, want 4; got %#v", len(got), got)
@@ -277,7 +281,7 @@ func TestCompactRoundCurrentRoundNotTruncated(t *testing.T) {
 		{Role: RoleAssistant, Content: long},
 	}
 	tight := compactMessages(history, 2, 16)
-	// long (100 bytes) alone exceeds the 16-byte budget, so only the current
+	// The long current response exceeds the 16-token budget, so only the current
 	// round survives, unchanged.
 	if len(tight) != 2 || tight[0].Role != RoleUser || tight[1].Content != long {
 		t.Fatalf("tight budget result = %#v, want [user, long current]", tight)
@@ -303,7 +307,7 @@ func TestCompactMessagesDoesNotPollutePersistedTurn(t *testing.T) {
 	}, Round{
 		Assistant: Message{Role: RoleAssistant, Content: "current"},
 	})
-	// Exceed the byte budget so compaction actually runs.
+	// Exceed the token budget so compaction actually runs.
 	for i := 0; i < defaultCompactionRounds; i++ {
 		turn.rounds = append(turn.rounds, Round{
 			Assistant: Message{Role: RoleAssistant, Content: "fill"},
@@ -382,7 +386,7 @@ func TestRetainFloorWithOversizedRound(t *testing.T) {
 			Message{Role: RoleTool, ToolCallID: "c", Content: round},
 		)
 	}
-	a := &Agent{contextWindow: 1 << 10}
+	a := &Agent{contextWindow: 256}
 	keep, keepAll := a.dynamicRetainedRounds(history, nil)
 	if keepAll {
 		t.Fatal("tight budget should not keep all history")
@@ -402,7 +406,7 @@ func TestRetainCapWithManyTinyRounds(t *testing.T) {
 			Message{Role: RoleTool, ToolCallID: "c", Content: "t"},
 		)
 	}
-	a := &Agent{contextWindow: 120}
+	a := &Agent{contextWindow: 500}
 	keep, keepAll := a.dynamicRetainedRounds(history, nil)
 	if keepAll {
 		t.Fatal("history exceeds the budget, so not everything should be kept")
@@ -413,10 +417,9 @@ func TestRetainCapWithManyTinyRounds(t *testing.T) {
 }
 
 func TestRetainUsesReportedUsageBaseline(t *testing.T) {
-	// Tiny history. With nil usage the byte estimate is far under the budget, so
+	// Tiny history. With nil usage the token estimate is far under the budget, so
 	// everything is retained. With a reported large total_tokens baseline the
-	// occupancy jumps past the budget and drives compaction, even though the
-	// bytes are identical.
+	// occupancy jumps past the budget and drives compaction.
 	history := []Message{{Role: RoleUser, Content: "u0"}}
 	for i := 0; i < 64; i++ {
 		history = append(history,
@@ -434,7 +437,7 @@ func TestRetainUsesReportedUsageBaseline(t *testing.T) {
 		t.Fatalf("nil usage should return history unchanged: len = %d, want %d", len(nilGot), len(history))
 	}
 
-	// A huge reported total_tokens pushes the mixed occupancy baseline far past
+	// A huge reported total_tokens pushes the token occupancy baseline far past
 	// the budget.
 	lastUsage := &Usage{TotalTokens: 1 << 20}
 	keepUsage, keepAllUsage := a.dynamicRetainedRounds(history, lastUsage)
@@ -447,6 +450,55 @@ func TestRetainUsesReportedUsageBaseline(t *testing.T) {
 	got := a.requestMessages(history, lastUsage)
 	if len(got) >= len(history) {
 		t.Fatalf("usage baseline should compact: len = %d, want < %d", len(got), len(history))
+	}
+}
+
+func TestEstimateTextTokens(t *testing.T) {
+	if got := estimateTextTokens("abcdefgh"); got != 2 {
+		t.Fatalf("ASCII tokens = %d, want 2", got)
+	}
+	if got := estimateTextTokens("你好啊"); got != 3 {
+		t.Fatalf("CJK tokens = %d, want 3", got)
+	}
+}
+
+func TestTruncateStringUsesTokenBudget(t *testing.T) {
+	for _, input := range []string{
+		strings.Repeat("ascii", 100),
+		strings.Repeat("中文", 100),
+	} {
+		got := truncateString(input, 12)
+		if tokens := estimateTextTokens(got); tokens > 12 {
+			t.Fatalf("truncated tokens = %d, want <= 12: %q", tokens, got)
+		}
+		if got == input {
+			t.Fatal("oversized input was not truncated")
+		}
+	}
+}
+
+func TestReportedUsageAddsOnlyToolResults(t *testing.T) {
+	// total_tokens already includes the assistant response. A very large
+	// assistant message must therefore not be counted again, while tool output
+	// produced after that response must be added.
+	history := []Message{{Role: RoleUser, Content: "u0"}}
+	for i := 0; i < 64; i++ {
+		history = append(history,
+			Message{Role: RoleAssistant, Content: "a"},
+			Message{Role: RoleTool, ToolCallID: "c", Content: "t"},
+		)
+	}
+	history[len(history)-2].Content = strings.Repeat("assistant", 1000)
+
+	a := &Agent{contextWindow: 100}
+	usage := &Usage{TotalTokens: 80}
+	if _, keepAll := a.dynamicRetainedRounds(history, usage); !keepAll {
+		t.Fatal("assistant response was counted again; want history retained")
+	}
+
+	history[len(history)-1].Content = strings.Repeat("tool", 100)
+	if _, keepAll := a.dynamicRetainedRounds(history, usage); keepAll {
+		t.Fatal("post-response tool result was not added; want compaction")
 	}
 }
 

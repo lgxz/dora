@@ -19,10 +19,17 @@ const (
 	maxRetainedRounds = defaultCompactionRounds
 	// budgetSafetyRatio is the maximum fraction of the context window occupied
 	// before the compactor starts dropping history. It stays below 1 to absorb
-	// the token-vs-byte estimation error (plus images and header fields that the
-	// byte estimate ignores) so a session does not brush against the provider's
-	// hard limit.
+	// provider-tokenizer differences plus tool-schema and image tokens that the
+	// provider-neutral estimate cannot see, so a session does not brush against
+	// the provider's hard limit.
 	budgetSafetyRatio = 0.9
+	// ASCII prose and JSON average roughly four bytes per token across the
+	// supported tokenizer families. Non-ASCII runes are counted individually so
+	// CJK text is not underestimated by the ASCII ratio.
+	estimatedASCIIBytesPerToken = 4
+	// Account for provider-side role and framing tokens that are not present in
+	// Message.Content.
+	estimatedMessageOverheadTokens = 4
 )
 
 // requestMessages returns the messages to send to the model for the current
@@ -30,8 +37,9 @@ const (
 // the most recent rounds that fit within the agent's cached contextWindow
 // budget (see dynamicRetainedRounds). lastUsage is the real token usage of the
 // *previously completed* model call in the same run, used as the occupancy
-// baseline when estimating the current input size; when it is nil the estimate
-// falls back to a pure byte count of the whole history. When the whole history
+// baseline when estimating the current input size; only tool results produced
+// after that response are added to it. When lastUsage is nil the estimate falls
+// back to a token estimate of the whole history. When the whole history
 // already fits within the budget it is returned unchanged. The returned slice
 // may share backing storage with history.
 func (a *Agent) requestMessages(history []Message, lastUsage *Usage) []Message {
@@ -48,13 +56,12 @@ func (a *Agent) requestMessages(history []Message, lastUsage *Usage) []Message {
 // when the whole history fits within the budget (in which case requestMessages
 // returns it unchanged).
 //
-// The current occupancy is the previous round's real total_tokens (the model's
-// own accounting of the context that produced the last response, covering
-// everything up to and including that round's input) plus a byte estimate of
-// the newest round added since then. This mixes token and byte units and is an
-// upper-bound approximation, documented as such. When lastUsage is nil (no
-// usage reported) it falls back to a pure byte estimate of the entire history,
-// matching the pre-usage behavior.
+// The current occupancy is the previous model call's real total_tokens. That
+// already includes both its input and generated assistant response, so only the
+// tool result messages produced after the response are estimated and added.
+// When lastUsage is nil (no usage reported), the entire history is estimated in
+// tokens instead. Both paths therefore compare token occupancy with the token
+// capacity reported by ContextSize.
 func (a *Agent) dynamicRetainedRounds(history []Message, lastUsage *Usage) (keepRounds int, keepAll bool) {
 	prefix, rounds := splitRounds(history)
 	if len(rounds) == 0 {
@@ -65,11 +72,11 @@ func (a *Agent) dynamicRetainedRounds(history []Message, lastUsage *Usage) (keep
 
 	var occupancy int
 	if lastUsage != nil {
-		// Baseline: the previous round's real total footprint, plus the newest
-		// round's bytes added since that call.
-		occupancy = TotalTokens(lastUsage) + estimateBytes(rounds[len(rounds)-1])
+		// The assistant response is already included in total_tokens. Tool result
+		// messages are the only conversation content added after that response.
+		occupancy = TotalTokens(lastUsage) + estimateToolResultTokens(rounds[len(rounds)-1])
 	} else {
-		occupancy = estimateBytes(prefix) + estimateBytesRounds(rounds)
+		occupancy = estimateTokens(prefix) + estimateTokensRounds(rounds)
 	}
 	if occupancy <= budget {
 		// Budget holds the entire history; retain everything unchanged.
@@ -79,13 +86,13 @@ func (a *Agent) dynamicRetainedRounds(history []Message, lastUsage *Usage) (keep
 	// Greedily retain the newest rounds (each kept whole) until the prefix plus
 	// the retained rounds reaches the budget. Always retain at least
 	// minRetainedRounds and never more than maxRetainedRounds.
-	acc := estimateBytes(prefix)
+	acc := estimateTokens(prefix)
 	kept := 0
 	for i := len(rounds) - 1; i >= 0 && kept < maxRetainedRounds; i-- {
 		if acc > budget {
 			break
 		}
-		acc += estimateBytes(rounds[i])
+		acc += estimateTokens(rounds[i])
 		kept++
 	}
 	if kept < minRetainedRounds {
@@ -121,27 +128,59 @@ func splitRounds(history []Message) (prefix []Message, rounds [][]Message) {
 	return history[:firstAssistant], rounds
 }
 
-// estimateBytes sums the text bytes of a message set: each Content plus each
-// tool call's Input. Images and header fields are ignored, matching the existing
-// contextWindow byte accounting (a known limitation of the token-vs-byte
-// approximation documented on the compactor).
-func estimateBytes(messages []Message) int {
+// estimateTokens estimates provider-neutral context usage for a message set.
+// ASCII content uses the common four-bytes-per-token heuristic; every
+// non-ASCII rune counts as one token. A small per-message allowance covers role
+// and framing tokens. Images and provider-specific tool schema overhead remain
+// outside this estimate.
+func estimateTokens(messages []Message) int {
 	total := 0
 	for _, message := range messages {
-		total += len(message.Content)
+		total += estimatedMessageOverheadTokens
+		total += estimateTextTokens(message.Content)
+		total += estimateTextTokens(message.ToolCallID)
 		for _, call := range message.ToolCalls {
-			total += len(call.Input)
+			total += estimatedMessageOverheadTokens
+			total += estimateTextTokens(call.ID)
+			total += estimateTextTokens(call.Name)
+			total += estimateTextTokens(string(call.Input))
 		}
 	}
 	return total
 }
 
-func estimateBytesRounds(rounds [][]Message) int {
+func estimateTokensRounds(rounds [][]Message) int {
 	total := 0
 	for _, round := range rounds {
-		total += estimateBytes(round)
+		total += estimateTokens(round)
 	}
 	return total
+}
+
+// estimateToolResultTokens counts only messages created after the previous
+// model response. The assistant message at the start of the round is already
+// represented in that response's total_tokens.
+func estimateToolResultTokens(round []Message) int {
+	total := 0
+	for _, message := range round {
+		if message.Role == RoleTool {
+			total += estimateTokens([]Message{message})
+		}
+	}
+	return total
+}
+
+func estimateTextTokens(text string) int {
+	asciiBytes := 0
+	nonASCII := 0
+	for _, r := range text {
+		if r < 0x80 {
+			asciiBytes++
+		} else {
+			nonASCII++
+		}
+	}
+	return (asciiBytes+estimatedASCIIBytesPerToken-1)/estimatedASCIIBytesPerToken + nonASCII
 }
 
 // compactMessages keeps the leading system and user messages plus the most
@@ -149,7 +188,7 @@ func estimateBytesRounds(rounds [][]Message) int {
 // tool messages it triggered, so compaction never splits a round in the middle
 // of its tool results. The current (last) round is retained unchanged; earlier
 // retained rounds are compressed (images dropped, oversized content and tool
-// input truncated) so the total text stays within the contextWindow byte
+// input truncated) so the estimated usage stays within the contextWindow token
 // budget. The returned slice may share backing storage with history.
 func compactMessages(history []Message, keepRounds, contextWindow int) []Message {
 	if keepRounds <= 0 || len(history) == 0 {
@@ -189,7 +228,7 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 		// The current round is retained unchanged. Estimate its text size
 		// (images are ignored as they consume no text context) and subtract it
 		// from the budget.
-		remaining := contextWindow - estimateBytes(currentRound)
+		remaining := contextWindow - estimateTokens(currentRound)
 		if remaining <= 0 || historicalCount == 0 {
 			// The current round already consumes the budget; keep only it.
 			kept := make([]Message, 0, len(prefix)+len(currentRound))
@@ -213,16 +252,16 @@ func compactMessages(history []Message, keepRounds, contextWindow int) []Message
 
 // compactRound compresses a historical round (an assistant message plus its
 // tool messages): images are dropped and oversized content or tool call input
-// is truncated to at most maxMessageBytes. The current round is never passed
-// here. A non-positive maxMessageBytes keeps the round intact.
-func compactRound(round []Message, maxMessageBytes int) []Message {
+// is truncated to at most maxMessageTokens estimated tokens. The current round
+// is never passed here. A non-positive maxMessageTokens keeps the round intact.
+func compactRound(round []Message, maxMessageTokens int) []Message {
 	compacted := make([]Message, len(round))
 	for i, message := range round {
 		message.Images = nil
-		if maxMessageBytes > 0 {
-			message.Content = truncateString(message.Content, maxMessageBytes)
+		if maxMessageTokens > 0 {
+			message.Content = truncateString(message.Content, maxMessageTokens)
 			for j := range message.ToolCalls {
-				message.ToolCalls[j].Input = compactJSON(message.ToolCalls[j].Input, maxMessageBytes)
+				message.ToolCalls[j].Input = compactJSON(message.ToolCalls[j].Input, maxMessageTokens)
 			}
 		}
 		compacted[i] = message
@@ -230,21 +269,60 @@ func compactRound(round []Message, maxMessageBytes int) []Message {
 	return compacted
 }
 
-// truncateString truncates s to at most max bytes, keeping the beginning and
-// the end and marking the omitted middle. It is UTF-8 safe.
+// truncateString truncates s to at most max estimated tokens, keeping the
+// beginning and the end and marking the omitted middle. It is UTF-8 safe.
 func truncateString(s string, max int) string {
-	if len(s) <= max {
+	if estimateTextTokens(s) <= max {
 		return s
 	}
+	const marker = "... [truncated] ..."
+	markerTokens := estimateTextTokens(marker)
+	if max <= markerTokens {
+		return tokenPrefix(s, max)
+	}
 	runes := []rune(s)
-	half := max / 2
-	return string(runes[:half]) + "... [truncated] ..." + string(runes[len(runes)-half:])
+	contentBudget := max - markerTokens
+	leftBudget := contentBudget / 2
+	rightBudget := contentBudget - leftBudget
+	left := tokenPrefixRunes(runes, leftBudget)
+	right := tokenSuffixRunes(runes[len(left):], rightBudget)
+	return string(left) + marker + string(right)
+}
+
+func tokenPrefix(s string, max int) string {
+	return string(tokenPrefixRunes([]rune(s), max))
+}
+
+func tokenPrefixRunes(runes []rune, max int) []rune {
+	low, high := 0, len(runes)
+	for low < high {
+		mid := (low + high + 1) / 2
+		if estimateTextTokens(string(runes[:mid])) <= max {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	return runes[:low]
+}
+
+func tokenSuffixRunes(runes []rune, max int) []rune {
+	low, high := 0, len(runes)
+	for low < high {
+		mid := (low + high + 1) / 2
+		if estimateTextTokens(string(runes[len(runes)-mid:])) <= max {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	return runes[len(runes)-low:]
 }
 
 // compactJSON truncates oversized string values inside a JSON document while
 // keeping it valid JSON. Non-JSON input is returned unchanged.
 func compactJSON(raw json.RawMessage, max int) json.RawMessage {
-	if len(raw) <= max {
+	if estimateTextTokens(string(raw)) <= max {
 		return raw
 	}
 	var value any

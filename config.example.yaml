@@ -19,8 +19,7 @@ providers:
       # chat model) and image_input for vision-capable models.
       - name: deepseek-v4-flash
         # Defaults: model: deepseek-v4-flash, max_tokens: 32768.
-        # Approximate context capacity in message-content bytes. Default:
-        # 1048576 (1 MiB). Must be positive.
+        # Model context capacity in tokens. Default: 1048576. Must be positive.
         context_window: 1048576
         capabilities: [text]
       - name: deepseek-reasoning

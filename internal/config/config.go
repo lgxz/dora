@@ -79,9 +79,8 @@ type ProfileSpec struct {
 	// leaves it disabled.
 	PreserveThinking *bool `yaml:"preserve_thinking,omitempty"`
 	MaxTokens        *int  `yaml:"max_tokens,omitempty"`
-	// ContextWindow is an approximate model context capacity measured in
-	// message-content bytes. Nil uses the default; configured values must be
-	// positive.
+	// ContextWindow is the model context capacity measured in tokens. Nil uses
+	// the default; configured values must be positive.
 	ContextWindow *int     `yaml:"context_window,omitempty"`
 	Temperature   *float64 `yaml:"temperature,omitempty"`
 	// Capabilities advertises the provider-neutral capabilities this profile
