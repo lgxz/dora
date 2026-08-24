@@ -464,16 +464,19 @@ type chatStreamEvent struct {
 // chunk. When stream_options.include_usage is enabled the provider emits a
 // final chunk with empty choices that carries this block.
 type chatUsage struct {
-	PromptTokens      int64             `json:"prompt_tokens"`
-	CompletionTokens  int64             `json:"completion_tokens"`
-	TotalTokens       int64             `json:"total_tokens"`
-	PromptDetails     *chatUsageDetails `json:"prompt_tokens_details,omitempty"`
-	CompletionDetails *chatUsageDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokens      int64                       `json:"prompt_tokens"`
+	CompletionTokens  int64                       `json:"completion_tokens"`
+	TotalTokens       int64                       `json:"total_tokens"`
+	PromptDetails     *chatPromptUsageDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionDetails *chatCompletionUsageDetails `json:"completion_tokens_details,omitempty"`
 }
 
-type chatUsageDetails struct {
-	ReasoningTokens *int64 `json:"reasoning_tokens"`
-	CachedTokens    *int64 `json:"cached_tokens,omitempty"`
+type chatPromptUsageDetails struct {
+	CachedTokens *int64 `json:"cached_tokens,omitempty"`
+}
+
+type chatCompletionUsageDetails struct {
+	ReasoningTokens *int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // chatStreamDelta is one streamed message delta. Reasoning models expose their
@@ -640,11 +643,11 @@ func usageFromChat(u *chatUsage) *dora.Usage {
 		OutputTokens: u.CompletionTokens,
 		TotalTokens:  u.TotalTokens,
 	}
-	if u.PromptDetails != nil && u.PromptDetails.ReasoningTokens != nil {
-		usage.InputDetails = &dora.TokenDetails{ReasoningTokens: u.PromptDetails.ReasoningTokens}
+	if u.PromptDetails != nil && u.PromptDetails.CachedTokens != nil {
+		usage.InputDetails = &dora.InputTokenDetails{CachedTokens: u.PromptDetails.CachedTokens}
 	}
 	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens != nil {
-		usage.OutputDetails = &dora.TokenDetails{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
+		usage.OutputDetails = &dora.OutputTokenDetails{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
 	}
 	return usage
 }

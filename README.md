@@ -443,9 +443,11 @@ terminals; pass `--reasoning` to show it live in a dim style in place of the
 line, and `--quiet` suppresses the reasoning display along with all other
 progress.
 
-When a provider reports token usage, Dora prints a concise token summary per
-completed model round on stderr (input/output/total), and `--quiet` suppresses
-it. Token usage is observational only and is not persisted to sessions.
+When a provider reports token usage, Dora captures it for every completed model
+round, including cached and reasoning-token details when available. The
+terminal renderer does not print usage. With `--session`, per-round usage and
+the final response usage are persisted in the SQLite session and returned by
+the history tool.
 
 ### Sessions
 
@@ -459,21 +461,21 @@ Pass a SQLite file to retain completed turns across CLI invocations:
 Every invocation is a fresh, independent turn. Previous messages are never
 loaded into the model context automatically. When the selected session database
 already contains completed turns, Dora adds a `history` tool: the model can
-`list` completed turns, see each turn's round count, and `get` chronological
-round pages using `turn_id`, `offset`, and `limit`. An empty database does not
-expose the tool. A round is one assistant tool-call message plus all
-corresponding tool result messages. Only a successfully completed turn is
-appended atomically; provider continuation is kept only while that turn runs.
+`list` completed turns, see each turn's round count and final-response usage,
+and `get` chronological round pages using `turn_id`, `offset`, and `limit`. An
+empty database does not expose the tool. A round is one assistant tool-call
+message plus all corresponding tool result messages and that model call's
+optional usage. Only a successfully completed turn is appended atomically;
+provider continuation is kept only while that turn runs.
 
-The SQLite database contains `turns` and `messages` tables and records the
-system prompt, user input, final result, backend metadata, and intermediate
-tool rounds, including the reasoning captured on round assistant messages.
-Newly created files use `0600` permissions. The old named JSON
-session format, `--fresh`, and automatic migration are not supported (schema
-version 2 databases from earlier releases are rejected; start a new file).
-Omit
-`--session`/`-s` for an ephemeral turn. Session databases can contain commands
-and tool output, so treat them as sensitive.
+SQLite schema version 4 contains `turns` and `messages` tables and records the
+system prompt, user input, final result, intermediate tool rounds, reasoning
+captured on round assistant messages, and each model call's usage JSON. Newly
+created files use `0600` permissions. The old named JSON session format,
+`--fresh`, and automatic migration are not supported (schema version 3 and
+earlier databases are rejected; start a new file). Omit `--session`/`-s` for an
+ephemeral turn. Session databases can contain commands, tool output, and token
+usage, so treat them as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.

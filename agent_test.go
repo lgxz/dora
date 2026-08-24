@@ -129,8 +129,8 @@ func TestRunObservedEmitsUsagePerRound(t *testing.T) {
 	if len(messageReceives) != 2 {
 		t.Fatalf("messageReceives = %#v, want 2 updates", messageReceives)
 	}
-	if messageReceives[0].Usage != inputUsage {
-		t.Fatalf("round 1 usage = %#v, want %#v", messageReceives[0].Usage, inputUsage)
+	if messageReceives[0].Usage == inputUsage || messageReceives[0].Usage == nil || *messageReceives[0].Usage != *inputUsage {
+		t.Fatalf("round 1 usage = %#v, want defensive copy of %#v", messageReceives[0].Usage, inputUsage)
 	}
 	if messageReceives[1].Usage != nil {
 		t.Fatalf("round 2 usage = %#v, want nil", messageReceives[1].Usage)

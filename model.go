@@ -54,10 +54,16 @@ type Request struct {
 	Continuation string
 }
 
-// TokenDetails holds the optional per-category token breakdown that some
-// providers report. Each field is a pointer so that a missing category is
-// distinguishable from a zero value.
-type TokenDetails struct {
+// InputTokenDetails holds optional input-token categories. Each field is a
+// pointer so that a missing category is distinguishable from a reported zero.
+type InputTokenDetails struct {
+	CachedTokens *int64 `json:"cached_tokens,omitempty"`
+	AudioTokens  *int64 `json:"audio_tokens,omitempty"`
+}
+
+// OutputTokenDetails holds optional output-token categories. Each field is a
+// pointer so that a missing category is distinguishable from a reported zero.
+type OutputTokenDetails struct {
 	ReasoningTokens          *int64 `json:"reasoning_tokens,omitempty"`
 	AudioTokens              *int64 `json:"audio_tokens,omitempty"`
 	AcceptedPredictionTokens *int64 `json:"accepted_prediction_tokens,omitempty"`
@@ -69,11 +75,11 @@ type TokenDetails struct {
 // same neutral shape covers both OpenAI Chat Completions and Responses token
 // accounting.
 type Usage struct {
-	InputTokens   int64         `json:"input_tokens"`
-	OutputTokens  int64         `json:"output_tokens"`
-	TotalTokens   int64         `json:"total_tokens"`
-	InputDetails  *TokenDetails `json:"input_details,omitempty"`
-	OutputDetails *TokenDetails `json:"output_details,omitempty"`
+	InputTokens   int64               `json:"input_tokens"`
+	OutputTokens  int64               `json:"output_tokens"`
+	TotalTokens   int64               `json:"total_tokens"`
+	InputDetails  *InputTokenDetails  `json:"input_details,omitempty"`
+	OutputDetails *OutputTokenDetails `json:"output_details,omitempty"`
 }
 
 // Response is either a final assistant response, one or more tool calls, or

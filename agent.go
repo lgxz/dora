@@ -186,7 +186,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		notify(observer, Update{Kind: UpdateMessageReceived, Message: assistant, Usage: response.Usage})
 
 		if len(response.ToolCalls) == 0 {
-			if err := turn.Complete(response.Content, response.Continuation); err != nil {
+			if err := turn.completeWithUsage(response.Content, response.Continuation, response.Usage); err != nil {
 				return err
 			}
 			return nil
@@ -266,7 +266,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 			toolMessages[done.index] = toolMessage
 			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 		}
-		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages}, response.Continuation); err != nil {
+		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages, Usage: response.Usage}, response.Continuation); err != nil {
 			return err
 		}
 	}
@@ -362,6 +362,7 @@ func notify(observer Observer, update Update) {
 	}
 	update.Message = cloneMessage(update.Message)
 	update.ToolCall = cloneToolCall(update.ToolCall)
+	update.Usage = cloneUsage(update.Usage)
 	observer.Observe(update)
 }
 
@@ -394,6 +395,36 @@ func cloneMessages(messages []Message) []Message {
 		cloned[i].ToolCalls = cloneToolCalls(message.ToolCalls)
 	}
 	return cloned
+}
+
+func cloneUsage(usage *Usage) *Usage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	if usage.InputDetails != nil {
+		input := *usage.InputDetails
+		input.CachedTokens = cloneInt64(input.CachedTokens)
+		input.AudioTokens = cloneInt64(input.AudioTokens)
+		cloned.InputDetails = &input
+	}
+	if usage.OutputDetails != nil {
+		output := *usage.OutputDetails
+		output.ReasoningTokens = cloneInt64(output.ReasoningTokens)
+		output.AudioTokens = cloneInt64(output.AudioTokens)
+		output.AcceptedPredictionTokens = cloneInt64(output.AcceptedPredictionTokens)
+		output.RejectedPredictionTokens = cloneInt64(output.RejectedPredictionTokens)
+		cloned.OutputDetails = &output
+	}
+	return &cloned
+}
+
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneToolCalls(calls []ToolCall) []ToolCall {

@@ -24,12 +24,14 @@ type RoundOptions struct {
 }
 
 // TurnSummary is the compact representation returned by history listings.
+// Usage is the final model call's optional provider-reported accounting.
 type TurnSummary struct {
-	ID          int64     `json:"id"`
-	User        string    `json:"user"`
-	Result      string    `json:"result"`
-	RoundCount  int       `json:"rounds"`
-	CommittedAt time.Time `json:"committed_at"`
+	ID          int64       `json:"id"`
+	User        string      `json:"user"`
+	Result      string      `json:"result"`
+	RoundCount  int         `json:"rounds"`
+	Usage       *dora.Usage `json:"usage,omitempty"`
+	CommittedAt time.Time   `json:"committed_at"`
 }
 
 // TurnPage is a newest-first page of completed turns.
@@ -40,7 +42,8 @@ type TurnPage struct {
 	Turns  []TurnSummary `json:"turns"`
 }
 
-// RoundPage is a chronological page of complete rounds from one turn.
+// RoundPage is a chronological page of complete rounds from one turn. Each
+// round carries the optional usage reported for its assistant model call.
 type RoundPage struct {
 	Total  int          `json:"total"`
 	Offset int          `json:"offset"`

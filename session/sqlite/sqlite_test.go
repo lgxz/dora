@@ -90,7 +90,7 @@ func TestStoreReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
+func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
 	if err != nil {
@@ -107,6 +107,7 @@ func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
 	}
 
 	turn := dora.NewTurn("weather?")
+	cached := int64(7)
 	round := dora.Round{
 		Assistant: dora.Message{
 			Role:      dora.RoleAssistant,
@@ -115,11 +116,22 @@ func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
 			ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}},
 		},
 		Tools: []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "output"}},
+		Usage: &dora.Usage{
+			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
+			InputDetails: &dora.InputTokenDetails{CachedTokens: &cached},
+		},
 	}
 	if err := turn.AppendRound(round, ""); err != nil {
 		t.Fatal(err)
 	}
-	completeTurnWithSystem(t, turn, "sunny")
+	reasoning := int64(3)
+	completeTurnWithResponse(t, turn, dora.Response{
+		Content: "sunny",
+		Usage: &dora.Usage{
+			InputTokens: 15, OutputTokens: 4, TotalTokens: 19,
+			OutputDetails: &dora.OutputTokenDetails{ReasoningTokens: &reasoning},
+		},
+	})
 	id, err := store.CommitTurn(ctx, turn)
 	if err != nil {
 		t.Fatal(err)
@@ -131,10 +143,20 @@ func TestStoreRoundTripsAssistantReasoning(t *testing.T) {
 	if len(page.Rounds) != 1 || page.Rounds[0].Assistant.Reasoning != "let me look" {
 		t.Fatalf("rounds = %#v", page.Rounds)
 	}
+	if usage := page.Rounds[0].Usage; usage == nil || usage.TotalTokens != 12 || usage.InputDetails == nil || usage.InputDetails.CachedTokens == nil || *usage.InputDetails.CachedTokens != 7 {
+		t.Fatalf("round usage = %#v", usage)
+	}
+	turns, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns.Turns) != 1 || turns.Turns[0].Usage == nil || turns.Turns[0].Usage.TotalTokens != 19 || turns.Turns[0].Usage.OutputDetails == nil || turns.Turns[0].Usage.OutputDetails.ReasoningTokens == nil || *turns.Turns[0].Usage.OutputDetails.ReasoningTokens != 3 {
+		t.Fatalf("turn summary = %#v", turns.Turns)
+	}
 }
 
-func TestStoreRejectsVersionTwoWithoutMigration(t *testing.T) {
-	// v2 databases predate the reasoning column and are rejected rather than
+func TestStoreRejectsVersionThreeWithoutMigration(t *testing.T) {
+	// v3 databases predate persisted usage and are rejected rather than
 	// migrated, by design.
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "history.sqlite")
@@ -142,7 +164,7 @@ func TestStoreRejectsVersionTwoWithoutMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 2`); err != nil {
+	if _, err := store.db.Exec(`PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -186,9 +208,28 @@ func (m finalModel) Generate(context.Context, dora.Request) (dora.Response, erro
 	return dora.Response{Content: string(m)}, nil
 }
 
+type finalResponseModel struct {
+	response dora.Response
+}
+
+func (m finalResponseModel) Generate(context.Context, dora.Request) (dora.Response, error) {
+	return m.response, nil
+}
+
 func completeTurnWithSystem(t *testing.T, turn *dora.Turn, result string) {
 	t.Helper()
 	agent, err := dora.NewWithConfig(finalModel(result), dora.AgentConfig{SystemPrompt: "system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func completeTurnWithResponse(t *testing.T, turn *dora.Turn, response dora.Response) {
+	t.Helper()
+	agent, err := dora.NewWithConfig(finalResponseModel{response: response}, dora.AgentConfig{SystemPrompt: "system"})
 	if err != nil {
 		t.Fatal(err)
 	}

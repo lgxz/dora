@@ -360,7 +360,7 @@ func TestReadStreamCapturesLastChunkUsage(t *testing.T) {
 		return streamResponse(
 			`{"choices":[{"index":0,"delta":{"content":"hello"}}]}`,
 			// Final chunk with include_usage: empty choices plus usage.
-			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":7},"completion_tokens_details":{"reasoning_tokens":2}}}`,
 		), nil
 	})}
 	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", HTTPClient: httpClient})
@@ -379,6 +379,12 @@ func TestReadStreamCapturesLastChunkUsage(t *testing.T) {
 	}
 	if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 5 || response.Usage.TotalTokens != 15 {
 		t.Fatalf("Usage = %#v", response.Usage)
+	}
+	if response.Usage.InputDetails == nil || response.Usage.InputDetails.CachedTokens == nil || *response.Usage.InputDetails.CachedTokens != 7 {
+		t.Fatalf("InputDetails = %#v, want cached_tokens 7", response.Usage.InputDetails)
+	}
+	if response.Usage.OutputDetails == nil || response.Usage.OutputDetails.ReasoningTokens == nil || *response.Usage.OutputDetails.ReasoningTokens != 2 {
+		t.Fatalf("OutputDetails = %#v, want reasoning_tokens 2", response.Usage.OutputDetails)
 	}
 }
 

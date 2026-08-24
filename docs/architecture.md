@@ -111,7 +111,7 @@ type ContextSize interface {
 
 `Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls.
 
-`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional per-category `TokenDetails`). It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Session persistence does not read `Usage`; it is carried by the `UpdateMessageReceived` observer event on every complete round and by the compactor, which uses the previous round's reported `total_tokens` plus estimated tokens for the subsequent tool results as the occupancy baseline for its retention decision (falling back to a token estimate of the complete history when usage is nil), and the renderer does not display it.
+`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional `InputTokenDetails`/`OutputTokenDetails` breakdowns). Input details include cached and audio tokens; output details include reasoning, audio, and accepted/rejected prediction tokens. It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Usage is carried by the `UpdateMessageReceived` observer event on every complete round, retained on the corresponding `Round` or final `Turn`, persisted by session storage, and used by the compactor as the previous round's `total_tokens` occupancy baseline (falling back to a token estimate when usage is nil). The renderer does not display it.
 
 `dora` provides `InputTokens`/`TotalTokens` as pure-function exits for accounting context usage from a `dora.Usage` (provider-neutral and nil safe); normalization conversion from provider wire formats remains in the adapters' private helpers.
 
@@ -158,6 +158,7 @@ Callbacks run on the Agent's current goroutine, so implementations should return
 type Round struct {
     Assistant Message
     Tools     []Message
+    Usage     *Usage
 }
 
 agent, err := dora.NewWithConfig(model, dora.AgentConfig{
@@ -171,10 +172,12 @@ result, complete := turn.Result()
 `Turn` is the Agent's mutable run state. It is constructed from one user input.
 On its first run, the Agent binds a snapshot of its immutable system prompt to
 the Turn; an empty prompt omits the system message. The Turn then appends only
-complete rounds and ends with a final assistant result without tool calls. A round contains one assistant message with one or
-more tool calls and all corresponding tool messages in call order. Provider
-continuation is opaque and exists only in the live Turn; it is not persisted.
-All exported accessors return defensive copies.
+complete rounds and ends with a final assistant result without tool calls. A
+round contains one assistant message with one or more tool calls, all
+corresponding tool messages in call order, and the optional usage reported for
+that model call. The Turn separately retains the final response usage, exposed
+through `Turn.Usage`. Provider continuation is opaque and exists only in the
+live Turn; it is not persisted. All exported accessors return defensive copies.
 
 ## Agent Loop
 
@@ -304,22 +307,24 @@ concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
 the SQLite database itself. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 3 and two tables:
+The database uses schema version 4 and two tables:
 
 - `turns`: one row per successfully completed invocation, including plain-text
-  `system`, `user`, and final `result`, round count, and commit time;
+  `system`, `user`, and final `result`, round count, final-response `usage_json`,
+  and commit time;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls and images are JSON columns because
   they are structured fields of a message. Assistant messages also store their
-  captured `reasoning`; like the provider continuation, the final response's
-  reasoning is displayed live but intentionally not stored, because the final
-  assistant message never enters this table.
+  captured `reasoning`. Assistant rows also store that model call's optional
+  `usage_json`; tool rows never carry usage. Like the provider continuation,
+  the final response's reasoning is displayed live but intentionally not
+  stored, because the final assistant message never enters this table.
 
-`CommitTurn` inserts the turn and all messages in one transaction (no backend
-metadata). Incomplete Turns are rejected, so there is no status column. Provider
-continuation is intentionally not stored. SQLite allocates the turn ID and
-foreign keys bind every message to its turn. Older schema databases are
-rejected rather than migrated.
+`CommitTurn` inserts the turn, messages, and per-call usage in one transaction
+(no backend metadata). Incomplete Turns are rejected, so there is no status
+column. Provider continuation is intentionally not stored. SQLite allocates the
+turn ID and foreign keys bind every message to its turn. Older schema databases
+are rejected rather than migrated.
 
 `tool/history` is registered only when the selected session database already
 contains at least one completed turn. An empty database exposes no history
@@ -443,7 +448,7 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
 - Session history is append-only at the turn level; individual turns are committed once after completion.
-- Model `Usage` payloads are carried by `UpdateMessageReceived` but are not rendered or persisted to session history; persistence and any usage-driven behavior are left to a later phase.
+- Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, and persisted to session history, but are not rendered.
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI is the composition root; as providers and tools grow, a factory/registry could be extracted, but at the current scale keeping an explicit switch is simpler.
 - There is currently no event bus, interactive REPL, or background daemon.

@@ -467,11 +467,11 @@ func usageFromResponses(u *responsesUsage) *dora.Usage {
 		OutputTokens: u.OutputTokens,
 		TotalTokens:  u.TotalTokens,
 	}
-	if u.InputTokensDetails.ReasoningTokens != nil || u.InputTokensDetails.CachedTokens != nil {
-		usage.InputDetails = &dora.TokenDetails{ReasoningTokens: u.InputTokensDetails.ReasoningTokens}
+	if u.InputTokensDetails.CachedTokens != nil {
+		usage.InputDetails = &dora.InputTokenDetails{CachedTokens: u.InputTokensDetails.CachedTokens}
 	}
 	if u.OutputTokensDetails.ReasoningTokens != nil {
-		usage.OutputDetails = &dora.TokenDetails{ReasoningTokens: u.OutputTokensDetails.ReasoningTokens}
+		usage.OutputDetails = &dora.OutputTokenDetails{ReasoningTokens: u.OutputTokensDetails.ReasoningTokens}
 	}
 	return usage
 }
@@ -551,8 +551,7 @@ type responsesUsage struct {
 	OutputTokens       int64 `json:"output_tokens"`
 	TotalTokens        int64 `json:"total_tokens"`
 	InputTokensDetails struct {
-		ReasoningTokens *int64 `json:"reasoning_tokens"`
-		CachedTokens    *int64 `json:"cached_tokens"`
+		CachedTokens *int64 `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`

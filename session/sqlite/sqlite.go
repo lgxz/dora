@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -66,6 +66,10 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) 
 		return 0, errors.New("cannot commit an incomplete turn")
 	}
 	result, _ := turn.Result()
+	usageJSON, err := encodeUsage(turn.Usage())
+	if err != nil {
+		return 0, fmt.Errorf("encode final usage: %w", err)
+	}
 	rounds := turn.Rounds()
 	committedAt := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -76,9 +80,9 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) 
 
 	inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
-    system, user, result, round_count, committed_at
-) VALUES (?, ?, ?, ?, ?)`,
-		turn.System(), turn.User(), result, len(rounds), committedAt.Format(time.RFC3339Nano),
+    system, user, result, round_count, usage_json, committed_at
+) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?)`,
+		turn.System(), turn.User(), result, len(rounds), usageJSON, committedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert turn: %w", err)
@@ -88,11 +92,11 @@ INSERT INTO turns (
 		return 0, fmt.Errorf("read inserted turn ID: %w", err)
 	}
 	for roundIndex, round := range rounds {
-		if err := insertMessage(ctx, tx, turnID, roundIndex, 0, round.Assistant); err != nil {
+		if err := insertMessage(ctx, tx, turnID, roundIndex, 0, round.Assistant, round.Usage); err != nil {
 			return 0, err
 		}
 		for toolIndex, message := range round.Tools {
-			if err := insertMessage(ctx, tx, turnID, roundIndex, toolIndex+1, message); err != nil {
+			if err := insertMessage(ctx, tx, turnID, roundIndex, toolIndex+1, message, nil); err != nil {
 				return 0, err
 			}
 		}
@@ -116,7 +120,7 @@ func (s *Store) ListTurns(ctx context.Context, options session.ListOptions) (ses
 		return session.TurnPage{}, fmt.Errorf("count turns: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, user, result, round_count, committed_at
+SELECT id, user, result, round_count, usage_json, committed_at
 FROM turns
 ORDER BY id DESC
 LIMIT ? OFFSET ?`, options.Limit, options.Offset)
@@ -127,9 +131,14 @@ LIMIT ? OFFSET ?`, options.Limit, options.Offset)
 	page := session.TurnPage{Total: total, Offset: options.Offset, Limit: options.Limit, Turns: []session.TurnSummary{}}
 	for rows.Next() {
 		var summary session.TurnSummary
+		var usageJSON sql.NullString
 		var committedAt string
-		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.RoundCount, &committedAt); err != nil {
+		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.RoundCount, &usageJSON, &committedAt); err != nil {
 			return session.TurnPage{}, fmt.Errorf("scan turn summary: %w", err)
+		}
+		summary.Usage, err = decodeUsage(usageJSON.String)
+		if err != nil {
+			return session.TurnPage{}, fmt.Errorf("decode turn %d final usage: %w", summary.ID, err)
 		}
 		summary.CommittedAt, err = parseTime(committedAt)
 		if err != nil {
@@ -167,7 +176,7 @@ func (s *Store) GetRounds(ctx context.Context, id int64, options session.RoundOp
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT round_index, position, role, content, reasoning, tool_calls_json, tool_call_id
+SELECT round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json
 FROM messages
 WHERE turn_id = ? AND round_index >= ? AND round_index < ?
 ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limit)
@@ -180,8 +189,8 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 	for rows.Next() {
 		var roundIndex, position int
 		var role string
-		var content, reasoning, callsJSON, callID sql.NullString
-		if err := rows.Scan(&roundIndex, &position, &role, &content, &reasoning, &callsJSON, &callID); err != nil {
+		var content, reasoning, callsJSON, callID, usageJSON sql.NullString
+		if err := rows.Scan(&roundIndex, &position, &role, &content, &reasoning, &callsJSON, &callID, &usageJSON); err != nil {
 			return session.RoundPage{}, fmt.Errorf("scan turn %d message: %w", id, err)
 		}
 		message, err := decodeMessage(role, content.String, reasoning.String, callsJSON.String, callID.String)
@@ -192,10 +201,17 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 			if roundIndex != expectedRound || position != 0 {
 				return session.RoundPage{}, fmt.Errorf("decode turn %d: expected round %d position 0, got round %d position %d", id, expectedRound, roundIndex, position)
 			}
-			page.Rounds = append(page.Rounds, dora.Round{Assistant: message})
+			usage, err := decodeUsage(usageJSON.String)
+			if err != nil {
+				return session.RoundPage{}, fmt.Errorf("decode turn %d round %d usage: %w", id, roundIndex, err)
+			}
+			page.Rounds = append(page.Rounds, dora.Round{Assistant: message, Usage: usage})
 			currentIndex = roundIndex
 			expectedRound++
 		} else {
+			if usageJSON.Valid {
+				return session.RoundPage{}, fmt.Errorf("decode turn %d round %d: tool position %d has usage", id, roundIndex, position)
+			}
 			expectedPosition := len(page.Rounds[len(page.Rounds)-1].Tools) + 1
 			if position != expectedPosition {
 				return session.RoundPage{}, fmt.Errorf("decode turn %d round %d: expected position %d, got %d", id, roundIndex, expectedPosition, position)
@@ -257,8 +273,8 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
-		`SELECT id, system, user, result, round_count, committed_at FROM turns LIMIT 0`,
-		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id FROM messages LIMIT 0`,
+		`SELECT id, system, user, result, round_count, usage_json, committed_at FROM turns LIMIT 0`,
+		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
 		rows, err := s.db.QueryContext(ctx, query)
@@ -279,6 +295,7 @@ var schemaStatements = []string{
         user TEXT NOT NULL,
         result TEXT NOT NULL,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
+		usage_json TEXT,
         committed_at TEXT NOT NULL
     )`,
 	`CREATE TABLE messages (
@@ -290,9 +307,11 @@ var schemaStatements = []string{
         reasoning TEXT,
         tool_calls_json TEXT,
         tool_call_id TEXT,
+		usage_json TEXT,
         PRIMARY KEY (turn_id, round_index, position),
         FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE CASCADE,
-        CHECK ((position = 0 AND role = 'assistant') OR (position > 0 AND role = 'tool'))
+		CHECK ((position = 0 AND role = 'assistant') OR (position > 0 AND role = 'tool')),
+		CHECK (position = 0 OR usage_json IS NULL)
     )`,
 }
 
@@ -302,20 +321,43 @@ type toolCallRecord struct {
 	Input json.RawMessage `json:"input"`
 }
 
-func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, position int, message dora.Message) error {
+func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, position int, message dora.Message, usage *dora.Usage) error {
 	calls, err := encodeToolCalls(message.ToolCalls)
 	if err != nil {
 		return fmt.Errorf("encode turn %d round %d position %d tool calls: %w", turnID, roundIndex, position, err)
 	}
+	usageJSON, err := encodeUsage(usage)
+	if err != nil {
+		return fmt.Errorf("encode turn %d round %d position %d usage: %w", turnID, roundIndex, position, err)
+	}
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO messages (turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id)
-VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`,
-		turnID, roundIndex, position, string(message.Role), message.Content, message.Reasoning, calls, message.ToolCallID,
+INSERT INTO messages (turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json)
+VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
+		turnID, roundIndex, position, string(message.Role), message.Content, message.Reasoning, calls, message.ToolCallID, usageJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("insert turn %d round %d position %d: %w", turnID, roundIndex, position, err)
 	}
 	return nil
+}
+
+func encodeUsage(usage *dora.Usage) (string, error) {
+	if usage == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(usage)
+	return string(encoded), err
+}
+
+func decodeUsage(value string) (*dora.Usage, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var usage dora.Usage
+	if err := json.Unmarshal([]byte(value), &usage); err != nil {
+		return nil, err
+	}
+	return &usage, nil
 }
 
 func encodeToolCalls(calls []dora.ToolCall) (string, error) {

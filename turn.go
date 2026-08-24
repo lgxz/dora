@@ -10,6 +10,7 @@ import (
 type Round struct {
 	Assistant Message   `json:"assistant"`
 	Tools     []Message `json:"tools"`
+	Usage     *Usage    `json:"usage,omitempty"`
 }
 
 // Turn is one independent Agent run. It is created with a user message, binds
@@ -22,6 +23,7 @@ type Turn struct {
 	user         string
 	rounds       []Round
 	result       string
+	usage        *Usage
 	continuation string
 	completed    bool
 }
@@ -115,9 +117,13 @@ func (t *Turn) AppendRound(round Round, continuation string) error {
 	return nil
 }
 
-// Complete records the final assistant text. The final response has no tool
-// calls, so only its text is retained.
+// Complete records the final assistant text without model usage. Agent runs use
+// completeWithUsage so provider-reported accounting is retained with the Turn.
 func (t *Turn) Complete(result, continuation string) error {
+	return t.completeWithUsage(result, continuation, nil)
+}
+
+func (t *Turn) completeWithUsage(result, continuation string, usage *Usage) error {
 	if t == nil {
 		return errors.New("dora: turn is nil")
 	}
@@ -125,9 +131,19 @@ func (t *Turn) Complete(result, continuation string) error {
 		return errors.New("dora: turn is already complete")
 	}
 	t.result = result
+	t.usage = cloneUsage(usage)
 	t.continuation = continuation
 	t.completed = true
 	return nil
+}
+
+// Usage returns a defensive copy of the final model call's usage. It returns
+// nil when the provider reported no usage or the turn is incomplete.
+func (t *Turn) Usage() *Usage {
+	if t == nil || !t.completed {
+		return nil
+	}
+	return cloneUsage(t.usage)
 }
 
 // Completed reports whether the turn has a final assistant result.
@@ -182,5 +198,6 @@ func cloneRound(round Round) Round {
 	return Round{
 		Assistant: cloneMessage(round.Assistant),
 		Tools:     cloneMessages(round.Tools),
+		Usage:     cloneUsage(round.Usage),
 	}
 }
