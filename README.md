@@ -433,8 +433,11 @@ Redirected or piped stdout is identical, preserving stable output for scripts:
 ./dora "Write release notes" > release-notes.md
 ```
 
-Colors are enabled automatically for terminal output. Set `NO_COLOR=1` to keep
-the layout without ANSI colors; progress remains visible on stderr.
+Progress colors use `--color=auto` by default: they are enabled when stderr is
+a terminal and `NO_COLOR` is unset. Use `--color=always` to preserve ANSI color
+when stderr is redirected, or `--color=never` to disable it. An explicit color
+mode overrides automatic terminal and environment detection; progress remains
+visible on stderr in every mode.
 
 Reasoning models stream their chain-of-thought before the final answer. Dora
 hides it by default because streaming it to the terminal slows runs on slow

@@ -22,6 +22,7 @@ type options struct {
 	forceUpdate  bool
 	noSkills     bool
 	quiet        bool
+	color        string
 	reasoning    bool
 	events       bool
 	sessionPath  string
@@ -50,6 +51,15 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.forceUpdate, "force", false, "force update, bypassing the standalone-install marker and version checks")
 	flags.BoolVar(&opts.noSkills, "no-skills", false, "disable all skills")
 	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress, only print the final result to stdout.")
+	flags.Func("color", "progress color mode: auto, always, or never (default auto)", func(value string) error {
+		switch value {
+		case "auto", "always", "never":
+			opts.color = value
+			return nil
+		default:
+			return errors.New("must be auto, always, or never")
+		}
+	})
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query saved turns")
@@ -62,6 +72,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		flags.PrintDefaults()
 	}
 	opts.usage = flags.Usage
+	opts.color = "auto"
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}

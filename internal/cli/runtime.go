@@ -125,11 +125,18 @@ func openSession(ctx context.Context, path string) (*sqlitesession.Store, bool, 
 	return store, page.Total > 0, nil
 }
 
-func buildObserver(streams IO, quiet, reasoning bool, sessionPath string) dora.Observer {
+func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) dora.Observer {
 	if quiet {
 		return nil
 	}
-	renderer := progress.New(streams.Stderr, streams.TerminalProgress, streams.ColorProgress, reasoning)
+	color := streams.ColorProgress
+	switch colorMode {
+	case "always":
+		color = true
+	case "never":
+		color = false
+	}
+	renderer := progress.New(streams.Stderr, streams.TerminalProgress, color, reasoning)
 	if sessionPath != "" {
 		renderer.Session(sessionPath)
 	}

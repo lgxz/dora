@@ -4,8 +4,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
 )
+
+func TestBuildObserverColorMode(t *testing.T) {
+	tests := []struct {
+		name          string
+		mode          string
+		terminal      bool
+		autoColor     bool
+		wantANSIColor bool
+	}{
+		{name: "auto disabled", mode: "auto", autoColor: false, wantANSIColor: false},
+		{name: "auto enabled", mode: "auto", terminal: true, autoColor: true, wantANSIColor: true},
+		{name: "always overrides disabled auto color", mode: "always", autoColor: false, wantANSIColor: true},
+		{name: "never overrides enabled auto color", mode: "never", terminal: true, autoColor: true, wantANSIColor: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr strings.Builder
+			observer := buildObserver(IO{
+				Stderr:           &stderr,
+				TerminalProgress: test.terminal,
+				ColorProgress:    test.autoColor,
+			}, false, false, test.mode, "")
+			observer.Observe(dora.Update{Kind: dora.UpdateThinking})
+			gotANSIColor := strings.Contains(stderr.String(), "\x1b[")
+			if gotANSIColor != test.wantANSIColor {
+				t.Fatalf("stderr = %q, ANSI color = %v, want %v", stderr.String(), gotANSIColor, test.wantANSIColor)
+			}
+		})
+	}
+}
 
 func TestParseModelSpec(t *testing.T) {
 	cases := []struct {

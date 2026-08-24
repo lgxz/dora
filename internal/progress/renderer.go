@@ -110,7 +110,7 @@ func (r *Renderer) renderThinking() {
 	r.modelStarted = time.Now()
 	r.modelBytes = 0
 	r.modelStatusAt = time.Time{}
-	if r.terminal {
+	if r.terminal || r.color {
 		fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
 	} else {
 		fmt.Fprintln(r.output, "Thinking...")

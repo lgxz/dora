@@ -117,7 +117,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.sessionPath)
+	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
 	// Command jobs are external processes and may outlive Dora; Task jobs are
 	// in-process and are lost on exit. Silenced by --quiet.
 	defer func() {
