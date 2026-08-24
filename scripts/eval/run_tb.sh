@@ -72,8 +72,7 @@ for optional_key_var in TRUST_API_KEY DEEPSEEK_API_KEY OPENROUTER_API_KEY; do
 done
 
 # 打印即将执行的完整 harbor run 命令，便于核对。
-echo ">>> 即将执行（PYTHONPATH=${PYTHONPATH}）："
-echo ">>> harbor run -d \"$DORA_DATASET\" -a dora_tb:DoraAgent --ak model=\"$DORA_MODEL\" ${agent_env_args[*]} -o \"$DORA_JOBS_DIR\" $*"
+echo "> harbor run -d \"$DORA_DATASET\" -a dora_tb:DoraAgent --ak model=\"$DORA_MODEL\" ${agent_env_args[*]} -o \"$DORA_JOBS_DIR\" $*"
 
 # 执行 Harbor Terminal-Bench 评估。
 # shellcheck disable=SC2086
