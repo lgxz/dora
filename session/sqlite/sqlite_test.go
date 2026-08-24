@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,9 @@ func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	if page.Total != 2 || len(page.Turns) != 1 || page.Turns[0].ID != secondID || page.Turns[0].RoundCount != 0 {
 		t.Fatalf("page = %#v", page)
 	}
+	if page.Turns[0].Status != session.TurnStatusCompleted || page.Turns[0].Error != "" {
+		t.Fatalf("turn status = %q, error = %q", page.Turns[0].Status, page.Turns[0].Error)
+	}
 	rounds, err := store.GetRounds(ctx, firstID, session.RoundOptions{Offset: 1, Limit: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +79,60 @@ func TestStoreRejectsIncompleteTurnAndUnknownSchema(t *testing.T) {
 	}
 	if _, err := Open(ctx, path); err == nil {
 		t.Fatal("expected unsupported schema error")
+	}
+}
+
+func TestStoreCommitsMaximumRoundsTurn(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	cached := int64(4)
+	turn := dora.NewTurn("keep working")
+	round := dora.Round{
+		Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}}},
+		Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "partial output"}},
+		Usage: &dora.Usage{
+			InputTokens: 8, OutputTokens: 2, TotalTokens: 10,
+			InputDetails: &dora.InputTokenDetails{CachedTokens: &cached},
+		},
+	}
+	if err := turn.AppendRound(round, "system"); err != nil {
+		t.Fatal(err)
+	}
+	cause := fmt.Errorf("%w (limit 1)", dora.ErrMaxRounds)
+	id, err := store.CommitMaxRounds(ctx, turn, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns.Turns) != 1 {
+		t.Fatalf("turns = %#v", turns.Turns)
+	}
+	summary := turns.Turns[0]
+	if summary.ID != id || summary.Status != session.TurnStatusMaxRounds || summary.Error != cause.Error() || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 1 {
+		t.Fatalf("turn summary = %#v", summary)
+	}
+	rounds, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rounds.Rounds) != 1 || rounds.Rounds[0].Usage == nil || rounds.Rounds[0].Usage.TotalTokens != 10 {
+		t.Fatalf("rounds = %#v", rounds)
+	}
+	if _, err := store.CommitMaxRounds(ctx, turn, errors.New("other")); err == nil {
+		t.Fatal("expected non-max-round error to be rejected")
+	}
+	completed := completedTurn(t, "done", "answer", 0)
+	if _, err := store.CommitMaxRounds(ctx, completed, cause); err == nil {
+		t.Fatal("expected completed turn to be rejected")
 	}
 }
 
@@ -155,8 +213,8 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionThreeWithoutMigration(t *testing.T) {
-	// v3 databases predate persisted usage and are rejected rather than
+func TestStoreRejectsVersionFourWithoutMigration(t *testing.T) {
+	// v4 databases predate turn statuses and are rejected rather than
 	// migrated, by design.
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "history.sqlite")
@@ -164,7 +222,7 @@ func TestStoreRejectsVersionThreeWithoutMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 3`); err != nil {
+	if _, err := store.db.Exec(`PRAGMA user_version = 4`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

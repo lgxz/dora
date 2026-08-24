@@ -8,23 +8,33 @@ import (
 	"github.com/lgxz/dora"
 )
 
-func runTurn(ctx context.Context, agent *dora.Agent, turn *dora.Turn, observer dora.Observer, streams IO) (bool, error) {
+type turnOutcome struct {
+	completed    bool
+	maxRoundsErr error
+}
+
+func runTurn(ctx context.Context, agent *dora.Agent, turn *dora.Turn, observer dora.Observer, streams IO) (turnOutcome, error) {
 	input := bufio.NewReader(streams.Stdin)
 	for {
 		err := agent.RunObserved(ctx, turn, observer)
 		if err == nil {
-			return true, nil
+			return turnOutcome{completed: true}, nil
 		}
 		if !errors.Is(err, dora.ErrMaxRounds) ||
 			!streams.StdinIsTerminal || !streams.TerminalProgress {
-			return false, err
+			outcome := turnOutcome{}
+			if errors.Is(err, dora.ErrMaxRounds) {
+				outcome.maxRoundsErr = err
+			}
+			return outcome, err
 		}
-		keepGoing, err := confirmContinue(input, streams.Stderr)
-		if err != nil {
-			return false, err
+		maxRoundsErr := err
+		keepGoing, confirmErr := confirmContinue(input, streams.Stderr)
+		if confirmErr != nil {
+			return turnOutcome{maxRoundsErr: maxRoundsErr}, confirmErr
 		}
 		if !keepGoing {
-			return false, nil
+			return turnOutcome{maxRoundsErr: maxRoundsErr}, nil
 		}
 	}
 }

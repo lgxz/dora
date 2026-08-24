@@ -1066,7 +1066,8 @@ tools:
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--quiet", "--max-rounds", "1", "--config", configPath, "run it"}, IO{
+	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	err := Run(context.Background(), []string{"--quiet", "--max-rounds", "1", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader("yes\n"),
 		Stdout:           &stdout,
 		Stderr:           &stderr,
@@ -1080,6 +1081,18 @@ tools:
 	if calls != 2 || stdout.String() != "finished\n" ||
 		!strings.Contains(stderr.String(), "maximum rounds reached") {
 		t.Fatalf("calls = %d, stdout = %q, stderr = %q", calls, stdout.String(), stderr.String())
+	}
+	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || page.Turns[0].Status != session.TurnStatusCompleted {
+		t.Fatalf("saved turns = %#v", page.Turns)
 	}
 }
 
@@ -1103,7 +1116,8 @@ tools:
 	}
 
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--quiet", "--config", configPath, "run it"}, IO{
+	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           io.Discard,
 		Stderr:           &stderr,
@@ -1116,6 +1130,72 @@ tools:
 	}
 	if strings.Contains(stderr.String(), "continue?") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+	assertSavedMaxRounds(t, sessionPath, 1)
+}
+
+func TestRunSavesMaximumRoundsWhenContinuationDeclined(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf limited\"}"}}]}}]}`), nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+agent:
+  max_rounds: 1
+tools:
+  bash:
+    enabled: true
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
+		Stdin:            strings.NewReader("no\n"),
+		Stdout:           io.Discard,
+		Stderr:           &stderr,
+		StdinIsTerminal:  true,
+		TerminalProgress: true,
+		HTTPClient:       httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "maximum rounds reached") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	assertSavedMaxRounds(t, sessionPath, 1)
+}
+
+func assertSavedMaxRounds(t *testing.T, path string, roundCount int) {
+	t.Helper()
+	store, err := sqlitesession.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Turns) != 1 {
+		t.Fatalf("saved turns = %#v", page.Turns)
+	}
+	summary := page.Turns[0]
+	if summary.Status != session.TurnStatusMaxRounds || summary.RoundCount != roundCount || summary.Result != "" || summary.Usage != nil || !strings.Contains(summary.Error, "maximum rounds exceeded") {
+		t.Fatalf("saved turn = %#v", summary)
+	}
+	rounds, err := store.GetRounds(context.Background(), summary.ID, session.RoundOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds.Total != roundCount || len(rounds.Rounds) != roundCount {
+		t.Fatalf("saved rounds = %#v", rounds)
 	}
 }
 

@@ -1,4 +1,4 @@
-// Package sqlite stores completed Dora turns in a SQLite database.
+// Package sqlite stores Dora turns in a SQLite database.
 package sqlite
 
 import (
@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -66,7 +66,25 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) 
 		return 0, errors.New("cannot commit an incomplete turn")
 	}
 	result, _ := turn.Result()
-	usageJSON, err := encodeUsage(turn.Usage())
+	return s.commitTurn(ctx, turn, session.TurnStatusCompleted, result, "", turn.Usage())
+}
+
+// CommitMaxRounds atomically appends an incomplete turn stopped by the round limit.
+func (s *Store) CommitMaxRounds(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("sqlite session is not initialized")
+	}
+	if turn == nil || turn.Completed() {
+		return 0, errors.New("cannot commit a completed turn as max rounds")
+	}
+	if !errors.Is(cause, dora.ErrMaxRounds) {
+		return 0, errors.New("max-round turn requires ErrMaxRounds")
+	}
+	return s.commitTurn(ctx, turn, session.TurnStatusMaxRounds, "", cause.Error(), nil)
+}
+
+func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
+	usageJSON, err := encodeUsage(usage)
 	if err != nil {
 		return 0, fmt.Errorf("encode final usage: %w", err)
 	}
@@ -80,9 +98,9 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) 
 
 	inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
-    system, user, result, round_count, usage_json, committed_at
-) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?)`,
-		turn.System(), turn.User(), result, len(rounds), usageJSON, committedAt.Format(time.RFC3339Nano),
+    system, user, result, status, error, round_count, usage_json, committed_at
+) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), ?)`,
+		turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, committedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert turn: %w", err)
@@ -107,7 +125,7 @@ INSERT INTO turns (
 	return turnID, nil
 }
 
-// ListTurns returns completed turns newest first.
+// ListTurns returns saved turns newest first.
 func (s *Store) ListTurns(ctx context.Context, options session.ListOptions) (session.TurnPage, error) {
 	if s == nil || s.db == nil {
 		return session.TurnPage{}, errors.New("sqlite session is not initialized")
@@ -120,7 +138,7 @@ func (s *Store) ListTurns(ctx context.Context, options session.ListOptions) (ses
 		return session.TurnPage{}, fmt.Errorf("count turns: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, user, result, round_count, usage_json, committed_at
+SELECT id, user, result, status, error, round_count, usage_json, committed_at
 FROM turns
 ORDER BY id DESC
 LIMIT ? OFFSET ?`, options.Limit, options.Offset)
@@ -131,11 +149,12 @@ LIMIT ? OFFSET ?`, options.Limit, options.Offset)
 	page := session.TurnPage{Total: total, Offset: options.Offset, Limit: options.Limit, Turns: []session.TurnSummary{}}
 	for rows.Next() {
 		var summary session.TurnSummary
-		var usageJSON sql.NullString
+		var errorText, usageJSON sql.NullString
 		var committedAt string
-		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.RoundCount, &usageJSON, &committedAt); err != nil {
+		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.Status, &errorText, &summary.RoundCount, &usageJSON, &committedAt); err != nil {
 			return session.TurnPage{}, fmt.Errorf("scan turn summary: %w", err)
 		}
+		summary.Error = errorText.String
 		summary.Usage, err = decodeUsage(usageJSON.String)
 		if err != nil {
 			return session.TurnPage{}, fmt.Errorf("decode turn %d final usage: %w", summary.ID, err)
@@ -273,7 +292,7 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
-		`SELECT id, system, user, result, round_count, usage_json, committed_at FROM turns LIMIT 0`,
+		`SELECT id, system, user, result, status, error, round_count, usage_json, committed_at FROM turns LIMIT 0`,
 		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
@@ -294,9 +313,13 @@ var schemaStatements = []string{
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
+		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds')),
+		error TEXT,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
 		usage_json TEXT,
-        committed_at TEXT NOT NULL
+		committed_at TEXT NOT NULL,
+		CHECK ((status = 'completed' AND error IS NULL) OR (status = 'max_rounds' AND error IS NOT NULL)),
+		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
     )`,
 	`CREATE TABLE messages (
         turn_id INTEGER NOT NULL,

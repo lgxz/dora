@@ -1,4 +1,4 @@
-// Package history exposes completed turns from a session to the model.
+// Package history exposes saved turns from a session to the model.
 package history
 
 import (
@@ -19,7 +19,7 @@ const (
 	maxLimit          = 50
 )
 
-// Tool lets the model explicitly inspect completed turns. Previous turns are
+// Tool lets the model explicitly inspect saved turns. Previous turns are
 // never inserted into the current model context automatically.
 type Tool struct {
 	reader session.Reader
@@ -37,7 +37,7 @@ func New(reader session.Reader) (*Tool, error) {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "history",
-		Description: "Inspect completed turns and model usage in this session. Earlier turns are not in the current context; use list to find turn IDs and final-response usage, then get to read tool rounds and their usage.",
+		Description: "Inspect saved turns and model usage in this session. Earlier turns are not in the current context; use list to find turn IDs, status, errors, and final-response usage, then get to read tool rounds and their usage.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {

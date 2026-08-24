@@ -151,7 +151,12 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
 		}
 		turn := dora.NewTurn(prompt)
-		completed, err := runTurn(ctx, agent, turn, observer, streams)
+		outcome, err := runTurn(ctx, agent, turn, observer, streams)
+		if outcome.maxRoundsErr != nil && sessionStore != nil {
+			if _, commitErr := sessionStore.CommitMaxRounds(ctx, turn, outcome.maxRoundsErr); commitErr != nil {
+				return commitErr
+			}
+		}
 		if err != nil {
 			if serverMode {
 				info(observer, "run turn: %v", err)
@@ -159,10 +164,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 			return err
 		}
-		if !serverMode && !completed {
+		if !serverMode && !outcome.completed {
 			return nil
 		}
-		if completed && sessionStore != nil {
+		if outcome.completed && sessionStore != nil {
 			if _, err := sessionStore.CommitTurn(ctx, turn); err != nil {
 				return err
 			}

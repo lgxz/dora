@@ -52,7 +52,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress, only print the final result to stdout.")
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
-	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query completed turns")
+	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query saved turns")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Dora - A tiny, extensible, and efficient LLM agent.\n\n")
 		fmt.Fprintf(stderr, "Usage: dora [options] <prompt>\n")

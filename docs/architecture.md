@@ -20,7 +20,7 @@ flowchart TD
 
     CLI --> Config["internal/config<br/>YAML config"]
     CLI --> Paths["internal/paths<br/>~/.dora paths"]
-    CLI --> Session["session/sqlite<br/>completed turn history"]
+    CLI --> Session["session/sqlite<br/>saved turn history"]
     CLI --> Update["internal/update<br/>standalone self-update"]
     CLI --> Progress["internal/progress<br/>terminal progress"]
     CLI --> Core["dora<br/>Agent core"]
@@ -72,7 +72,7 @@ Key constraints on dependency direction:
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
 | `session` | Defines completed-turn history contracts and query records | `Reader`, `Store` |
-| `session/sqlite` | Appends completed turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.ListTurns`, `Store.GetRounds` |
+| `session/sqlite` | Appends completed and maximum-round turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.CommitMaxRounds`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
@@ -83,7 +83,7 @@ Key constraints on dependency direction:
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory with background transition and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
-| `tool/history` | Gives the model paginated access to completed turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/history` | Gives the model paginated access to saved turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/viewimage` | Loads a local image file or remote URL and returns a text description via a transient visual model | `New`, `Tool.SetViewer`, `Tool.Spec`, `Tool.Execute` |
 | `tool/task` | Runs an instruction through the same Agent in a fresh Turn, excluding itself from the nested run | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/internal/commandexec` | Implements input validation, process execution, background transition via wait_seconds, and structured results for command tools | `New`, `Tool.Spec`, `Tool.Execute` |
@@ -220,7 +220,7 @@ Current execution semantics:
 - When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
-- If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Declining does not persist the incomplete Turn. Non-interactive runs report the error directly.
+- If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Continuing does not persist an intermediate record. Declining, a non-interactive failure, or an event-daemon failure persists the Turn with status `max_rounds` when a session is configured; non-interactive runs still report the error directly.
 - The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 - Before building a request for the model, the Agent compacts long histories (a round is an assistant message together with the tool messages it triggered, and is never split in half). Whether to compact, and how many of the most recent rounds to retain, is decided dynamically from the current context occupancy: it retains the newest rounds until the prefix plus the retained rounds approaches a `budgetSafetyRatio` (0.9) fraction of the model-reported `contextWindow` tokens, bounded by `minRetainedRounds` (8) and `maxRetainedRounds` (`defaultCompactionRounds` = 32). The occupancy estimate anchors on the previous model call's real `total_tokens` (from `Response.Usage`), which already includes the assistant response, and adds only estimated tokens for tool result messages produced afterwards. When usage is not reported it estimates the complete history, using about four ASCII bytes or one non-ASCII rune per token plus a small per-message framing allowance. When the history already fits within the budget it is returned unchanged. Retained historical rounds are further compressed against the token budget by dropping images and truncating oversized content and JSON tool input; the current (last) round is retained unchanged. A non-positive budget disables truncation (images are still dropped). Truncation applies to a copy of the request messages, never rewriting the persisted Turn history.
 
@@ -232,12 +232,12 @@ Current execution semantics:
 2. For a normal Agent run, compose the user prompt from command arguments and standard input.
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
 4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry.
-5. If `--session` specifies a SQLite file, open it. When it already contains completed turns, register a history tool backed by its Reader interface; never load old turns into the model request.
+5. If `--session` specifies a SQLite file, open it. When it already contains saved turns, register a history tool backed by its Reader interface; never load old turns into the model request.
 6. Create the concrete model adapter based on the selected profile's effective API and model.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
 9. Run the Agent, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
-10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. Failed or declined Turns are not written.
+10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. If execution stops at the maximum-round limit, append a `max_rounds` Turn before returning, declining, or continuing the event loop. Other failed Turns are not written.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
@@ -307,11 +307,12 @@ concrete implementation is `session/sqlite`; `--session`/`-s` is the path of
 the SQLite database itself. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 4 and two tables:
+The database uses schema version 5 and two tables:
 
-- `turns`: one row per successfully completed invocation, including plain-text
-  `system`, `user`, and final `result`, round count, final-response `usage_json`,
-  and commit time;
+- `turns`: one row per saved invocation, including `status` (`completed` or
+  `max_rounds`), optional error, plain-text `system`, `user`, final `result`,
+  round count, final-response `usage_json`, and commit time. `max_rounds` rows
+  have an error and empty result/final usage;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls and images are JSON columns because
   they are structured fields of a message. Assistant messages also store their
@@ -320,16 +321,17 @@ The database uses schema version 4 and two tables:
   the final response's reasoning is displayed live but intentionally not
   stored, because the final assistant message never enters this table.
 
-`CommitTurn` inserts the turn, messages, and per-call usage in one transaction
-(no backend metadata). Incomplete Turns are rejected, so there is no status
-column. Provider continuation is intentionally not stored. SQLite allocates the
-turn ID and foreign keys bind every message to its turn. Older schema databases
-are rejected rather than migrated.
+`CommitTurn` inserts a completed turn, messages, and per-call usage in one
+transaction (no backend metadata). `CommitMaxRounds` is the sole incomplete-Turn
+exception and stores all complete rounds plus the limit error. Provider
+continuation is intentionally not stored. SQLite allocates the turn ID and
+foreign keys bind every message to its turn. Schema version 4 and older
+databases are rejected rather than migrated.
 
 `tool/history` is registered only when the selected session database already
-contains at least one completed turn. An empty database exposes no history
-tool. `list` returns completed turns newest first and includes the number of
-rounds in each turn. `get` selects one turn by ID and returns a chronological
+contains at least one saved turn. An empty database exposes no history tool.
+`list` returns saved turns newest first and includes status, error, and the
+number of rounds in each turn. `get` selects one turn by ID and returns a chronological
 page of complete rounds; both actions accept `offset` and `limit`. History tool
 calls and their results are ordinary messages in the current Turn and are
 persisted with it on completion.

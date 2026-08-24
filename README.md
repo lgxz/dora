@@ -451,7 +451,7 @@ the history tool.
 
 ### Sessions
 
-Pass a SQLite file to retain completed turns across CLI invocations:
+Pass a SQLite file to retain turns across CLI invocations:
 
 ```sh
 ./dora -s ./system-status.sqlite "Analyze this machine's system status"
@@ -460,20 +460,24 @@ Pass a SQLite file to retain completed turns across CLI invocations:
 
 Every invocation is a fresh, independent turn. Previous messages are never
 loaded into the model context automatically. When the selected session database
-already contains completed turns, Dora adds a `history` tool: the model can
-`list` completed turns, see each turn's round count and final-response usage,
+already contains saved turns, Dora adds a `history` tool: the model can
+`list` turns, see each turn's status, error, round count, and final-response usage,
 and `get` chronological round pages using `turn_id`, `offset`, and `limit`. An
 empty database does not expose the tool. A round is one assistant tool-call
 message plus all corresponding tool result messages and that model call's
-optional usage. Only a successfully completed turn is appended atomically;
-provider continuation is kept only while that turn runs.
+optional usage. Successfully completed turns are appended atomically. A turn
+stopped by the maximum-round limit is also saved with status `max_rounds`, its
+error, and all completed tool rounds; it has no final result or final-response
+usage. Confirming the interactive continuation prompt keeps using the same Turn
+and does not save an intermediate `max_rounds` record. Provider continuation is
+kept only while that turn runs.
 
-SQLite schema version 4 contains `turns` and `messages` tables and records the
-system prompt, user input, final result, intermediate tool rounds, reasoning
-captured on round assistant messages, and each model call's usage JSON. Newly
-created files use `0600` permissions. The old named JSON session format,
-`--fresh`, and automatic migration are not supported (schema version 3 and
-earlier databases are rejected; start a new file). Omit `--session`/`-s` for an
+SQLite schema version 5 contains `turns` and `messages` tables and records the
+turn status and error, system prompt, user input, final result, intermediate
+tool rounds, reasoning captured on round assistant messages, and each model
+call's usage JSON. Newly created files use `0600` permissions. The old named
+JSON session format, `--fresh`, and automatic migration are not supported
+(schema version 4 and earlier databases are rejected; start a new file). Omit `--session`/`-s` for an
 ephemeral turn. Session databases can contain commands, tool output, and token
 usage, so treat them as sensitive.
 

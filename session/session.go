@@ -1,4 +1,4 @@
-// Package session defines persistent storage for completed Dora turns.
+// Package session defines persistent storage for saved Dora turns.
 package session
 
 import (
@@ -10,6 +10,14 @@ import (
 )
 
 var ErrNotFound = errors.New("session turn not found")
+
+// TurnStatus describes why a saved turn stopped.
+type TurnStatus string
+
+const (
+	TurnStatusCompleted TurnStatus = "completed"
+	TurnStatusMaxRounds TurnStatus = "max_rounds"
+)
 
 // ListOptions selects a page of turns. Offset zero starts at the newest turn.
 type ListOptions struct {
@@ -24,17 +32,20 @@ type RoundOptions struct {
 }
 
 // TurnSummary is the compact representation returned by history listings.
-// Usage is the final model call's optional provider-reported accounting.
+// Usage is the final model call's optional provider-reported accounting and is
+// nil for turns stopped at the maximum-round limit.
 type TurnSummary struct {
 	ID          int64       `json:"id"`
 	User        string      `json:"user"`
 	Result      string      `json:"result"`
+	Status      TurnStatus  `json:"status"`
+	Error       string      `json:"error,omitempty"`
 	RoundCount  int         `json:"rounds"`
 	Usage       *dora.Usage `json:"usage,omitempty"`
 	CommittedAt time.Time   `json:"committed_at"`
 }
 
-// TurnPage is a newest-first page of completed turns.
+// TurnPage is a newest-first page of saved turns.
 type TurnPage struct {
 	Total  int           `json:"total"`
 	Offset int           `json:"offset"`
@@ -51,15 +62,16 @@ type RoundPage struct {
 	Rounds []dora.Round `json:"rounds"`
 }
 
-// Reader provides read-only access to completed turns.
+// Reader provides read-only access to saved turns.
 type Reader interface {
 	ListTurns(context.Context, ListOptions) (TurnPage, error)
 	GetRounds(context.Context, int64, RoundOptions) (RoundPage, error)
 }
 
-// Store appends completed turns and provides history queries.
+// Store appends completed turns and provides saved-turn history queries.
 type Store interface {
 	Reader
 	CommitTurn(context.Context, *dora.Turn) (int64, error)
+	CommitMaxRounds(context.Context, *dora.Turn, error) (int64, error)
 	Close() error
 }
