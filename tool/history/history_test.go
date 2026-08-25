@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/session"
 )
 
@@ -62,4 +63,52 @@ func TestHistoryValidatesInput(t *testing.T) {
 			t.Fatalf("input %s succeeded", raw)
 		}
 	}
+}
+
+func TestHistoryCapsLargeResults(t *testing.T) {
+	big := strings.Repeat("x", 200_000)
+	reader := &bigReaderStub{content: big}
+	tool, err := New(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, raw := range []string{
+		`{"action":"get","turn_id":1,"limit":50}`,
+		`{"action":"list","limit":50}`,
+	} {
+		result, err := tool.Execute(context.Background(), json.RawMessage(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Content) > maxResultBytes+256 {
+			t.Fatalf("%s result not capped: %d bytes", raw, len(result.Content))
+		}
+		if !strings.Contains(result.Content, "history result truncated") {
+			t.Fatalf("%s result missing truncation marker", raw)
+		}
+		if !strings.HasPrefix(result.Content, `{"total":`) {
+			t.Fatalf("%s result head not preserved: %q", raw, result.Content[:20])
+		}
+	}
+}
+
+type bigReaderStub struct {
+	content string
+}
+
+func (reader *bigReaderStub) ListTurns(_ context.Context, _ session.ListOptions) (session.TurnPage, error) {
+	return session.TurnPage{
+		Total: 1,
+		Turns: []session.TurnSummary{{ID: 1, User: reader.content, Result: reader.content}},
+	}, nil
+}
+
+func (reader *bigReaderStub) GetRounds(_ context.Context, _ int64, _ session.RoundOptions) (session.RoundPage, error) {
+	return session.RoundPage{
+		Total: 1,
+		Rounds: []dora.Round{{
+			Assistant: dora.Message{Role: dora.RoleAssistant, Content: reader.content},
+		}},
+	}, nil
 }

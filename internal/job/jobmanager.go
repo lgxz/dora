@@ -11,6 +11,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/lgxz/dora/internal/capstr"
 )
 
 // Status describes the lifecycle state of a background job.
@@ -308,6 +310,23 @@ func (j *Job) snapshot(drainCommandOutput bool) Snapshot {
 		snapshot.Stderr = CapOutput(stderr)
 	}
 	return snapshot
+}
+
+// MaxResultBytes caps the stdout or stderr one command result returns to the
+// model. Output beyond the cap is truncated head+tail with a marker directing
+// the model to redirect to a file, so a single oversized command cannot
+// overflow the model request or the context budget.
+const MaxResultBytes = 32 << 10
+
+// The retained output is split between head and tail; the tail keeps late
+// errors and summaries visible.
+const capHeadBytes = 24 << 10
+
+// CapOutput truncates command output to at most MaxResultBytes (plus the
+// marker), keeping the head and tail.
+func CapOutput(s string) string {
+	return capstr.HeadTail(s, MaxResultBytes, capHeadBytes,
+		"\n... [truncated: %d bytes total, showing head+tail; redirect output to a file to inspect all of it] ...\n")
 }
 
 // HasActiveJobs reports whether any job is still running.

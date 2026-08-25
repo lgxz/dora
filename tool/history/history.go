@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/capstr"
 	"github.com/lgxz/dora/session"
 )
 
@@ -17,6 +18,13 @@ const (
 	defaultListLimit  = 10
 	defaultRoundLimit = 5
 	maxLimit          = 50
+	// maxResultBytes bounds the marshaled list/get payload. A page of saved
+	// turns can embed arbitrarily large user prompts, final responses, and
+	// tool results; without a cap one history call could overflow the model
+	// request the same way an oversized command output does.
+	maxResultBytes   = 32 << 10
+	resultHeadBytes  = 24 << 10
+	resultMarkerText = "\n... [history result truncated: %d bytes total; narrow the query with a smaller limit or an offset] ...\n"
 )
 
 // Tool lets the model explicitly inspect saved turns. Previous turns are
@@ -89,7 +97,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("history: encode result: %w", err)
 	}
-	return dora.ToolResult{Content: string(encoded)}, nil
+	return dora.ToolResult{Content: capstr.HeadTail(string(encoded), maxResultBytes, resultHeadBytes, resultMarkerText)}, nil
 }
 
 type input struct {
