@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -95,6 +95,22 @@ func (s *Store) CommitMaxRounds(ctx context.Context, turn *dora.Turn, cause erro
 		return 0, errors.New("max-round turn requires ErrMaxRounds")
 	}
 	return s.commitTurn(ctx, turn, session.TurnStatusMaxRounds, "", cause.Error(), nil)
+}
+
+// CommitFailed atomically appends an incomplete turn stopped by an error. Only
+// complete assistant/tool rounds are stored; any partial streamed model output
+// is deliberately absent from Turn and therefore is not persisted.
+func (s *Store) CommitFailed(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("sqlite session is not initialized")
+	}
+	if turn == nil || turn.Completed() {
+		return 0, errors.New("cannot commit a completed turn as failed")
+	}
+	if cause == nil {
+		return 0, errors.New("failed turn requires an error")
+	}
+	return s.commitTurn(ctx, turn, session.TurnStatusFailed, "", cause.Error(), nil)
 }
 
 func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
@@ -327,12 +343,12 @@ var schemaStatements = []string{
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
-		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds')),
+		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed')),
 		error TEXT,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
 		usage_json TEXT,
 		committed_at TEXT NOT NULL,
-		CHECK ((status = 'completed' AND error IS NULL) OR (status = 'max_rounds' AND error IS NOT NULL)),
+		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed') AND error IS NOT NULL)),
 		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
     )`,
 	`CREATE TABLE messages (

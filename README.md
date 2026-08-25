@@ -485,16 +485,18 @@ plus all corresponding tool result messages and that model call's optional
 usage. Successfully completed turns are appended atomically. A turn
 stopped by the maximum-round limit is also saved with status `max_rounds`, its
 error, and all completed tool rounds; it has no final result or final-response
-usage. Confirming the interactive continuation prompt keeps using the same Turn
-and does not save an intermediate `max_rounds` record. Provider continuation is
-kept only while that turn runs.
+usage. Any other failed turn is saved with status `failed`, its error, and only
+the tool rounds that completed before the failure; partial streamed model output
+is not saved. Confirming the interactive continuation prompt keeps using the
+same Turn and does not save an intermediate `max_rounds` record. Provider
+continuation is kept only while that turn runs.
 
-With `--session`, SQLite schema version 5 contains `turns` and `messages` tables and records the
+With `--session`, SQLite schema version 6 contains `turns` and `messages` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, reasoning captured on round assistant messages, and each model
 call's usage JSON. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 4 and earlier databases are rejected; start a new file). When
+(schema version 5 and earlier databases are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain

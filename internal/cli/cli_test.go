@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/lgxz/dora"
@@ -1205,6 +1206,62 @@ func assertSavedMaxRounds(t *testing.T, path string, roundCount int) {
 	}
 	if rounds.Total != roundCount || len(rounds.Rounds) != roundCount {
 		t.Fatalf("saved rounds = %#v", rounds)
+	}
+}
+
+func TestRunSavesFailedTurnWithoutPartialResult(t *testing.T) {
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(io.MultiReader(
+				strings.NewReader("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"),
+				iotest.ErrReader(errors.New("connection timed out")),
+			)),
+			Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		}, nil
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: false,
+		HTTPClient:      httpClient,
+	})
+	if err == nil || !strings.Contains(err.Error(), "connection timed out") {
+		t.Fatalf("error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 after partial output", calls)
+	}
+
+	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Turns) != 1 {
+		t.Fatalf("saved turns = %#v", page.Turns)
+	}
+	summary := page.Turns[0]
+	if summary.Status != session.TurnStatusFailed || !strings.Contains(summary.Error, "connection timed out") || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 0 {
+		t.Fatalf("saved turn = %#v", summary)
 	}
 }
 

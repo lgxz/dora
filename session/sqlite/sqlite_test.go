@@ -169,6 +169,55 @@ func TestStoreCommitsMaximumRoundsTurn(t *testing.T) {
 	}
 }
 
+func TestStoreCommitsFailedTurn(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	turn := dora.NewTurn("keep working")
+	round := dora.Round{
+		Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}}},
+		Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "complete output"}},
+	}
+	if err := turn.AppendRound(round, "provider-state"); err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("model stream failed")
+	id, err := store.CommitFailed(ctx, turn, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns.Turns) != 1 {
+		t.Fatalf("turns = %#v", turns.Turns)
+	}
+	summary := turns.Turns[0]
+	if summary.ID != id || summary.Status != session.TurnStatusFailed || summary.Error != cause.Error() || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 1 {
+		t.Fatalf("turn summary = %#v", summary)
+	}
+	rounds, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rounds.Rounds) != 1 || rounds.Rounds[0].Tools[0].Content != "complete output" {
+		t.Fatalf("rounds = %#v", rounds)
+	}
+	if _, err := store.CommitFailed(ctx, dora.NewTurn("nil cause"), nil); err == nil {
+		t.Fatal("expected nil failure cause to be rejected")
+	}
+	completed := completedTurn(t, "done", "answer", 0)
+	if _, err := store.CommitFailed(ctx, completed, cause); err == nil {
+		t.Fatal("expected completed turn to be rejected")
+	}
+}
+
 func TestStoreReturnsNotFound(t *testing.T) {
 	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.sqlite"))
 	if err != nil {
@@ -246,8 +295,8 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionFourWithoutMigration(t *testing.T) {
-	// v4 databases predate turn statuses and are rejected rather than
+func TestStoreRejectsVersionFiveWithoutMigration(t *testing.T) {
+	// v5 databases do not support failed turns and are rejected rather than
 	// migrated, by design.
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "history.sqlite")
@@ -255,7 +304,7 @@ func TestStoreRejectsVersionFourWithoutMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 4`); err != nil {
+	if _, err := store.db.Exec(`PRAGMA user_version = 5`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

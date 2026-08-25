@@ -1,4 +1,5 @@
-// Package session defines persistent storage for saved Dora turns.
+// Package session defines persistent storage for completed and terminally
+// stopped Dora turns.
 package session
 
 import (
@@ -17,6 +18,7 @@ type TurnStatus string
 const (
 	TurnStatusCompleted TurnStatus = "completed"
 	TurnStatusMaxRounds TurnStatus = "max_rounds"
+	TurnStatusFailed    TurnStatus = "failed"
 )
 
 // ListOptions selects a page of turns. Offset zero starts at the newest turn.
@@ -33,7 +35,7 @@ type RoundOptions struct {
 
 // TurnSummary is the compact representation returned by history listings.
 // Usage is the final model call's optional provider-reported accounting and is
-// nil for turns stopped at the maximum-round limit.
+// nil for turns stopped at the maximum-round limit or by an error.
 type TurnSummary struct {
 	ID          int64       `json:"id"`
 	User        string      `json:"user"`
@@ -68,10 +70,12 @@ type Reader interface {
 	GetRounds(context.Context, int64, RoundOptions) (RoundPage, error)
 }
 
-// Store appends completed turns and provides saved-turn history queries.
+// Store appends completed and terminally stopped turns and provides saved-turn
+// history queries.
 type Store interface {
 	Reader
 	CommitTurn(context.Context, *dora.Turn) (int64, error)
 	CommitMaxRounds(context.Context, *dora.Turn, error) (int64, error)
+	CommitFailed(context.Context, *dora.Turn, error) (int64, error)
 	Close() error
 }

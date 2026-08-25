@@ -154,6 +154,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 		}
 		if err != nil {
+			if outcome.maxRoundsErr == nil && sessionStore != nil {
+				if _, commitErr := sessionStore.CommitFailed(ctx, turn, err); commitErr != nil {
+					return commitErr
+				}
+			}
 			if serverMode {
 				info(observer, "run turn: %v", err)
 				continue
