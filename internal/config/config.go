@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	defaultMaxTokens          = 32768
 	defaultModelContextWindow = 1 << 20
 )
 
@@ -341,7 +342,7 @@ func (cfg *Config) resolveProviders() error {
 				return fmt.Errorf("providers[%d].profiles[%d].max_tokens cannot be negative", i, j)
 			}
 			if m.MaxTokens == nil {
-				m.MaxTokens = intPtr(32768)
+				m.MaxTokens = intPtr(defaultMaxTokens)
 			}
 			if m.ContextWindow != nil && *m.ContextWindow <= 0 {
 				return fmt.Errorf("providers[%d].profiles[%d].context_window must be positive", i, j)
