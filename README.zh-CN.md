@@ -228,7 +228,7 @@ policy:
 
 `max_tokens` 限制模型在一次响应中生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这两个键属于 model catalog，没有对应的命令行标志。
 
-`context_window` 属于 model profile，表示模型以 token 为单位的上下文容量。默认值为 1048576，配置值必须为正数。当提供商返回 usage 时，Dora 使用上一次调用的准确 `total_tokens`，再加上该响应之后产生的工具结果 token 估算；没有 usage 时则估算完整消息历史。提供商中立的估算规则约为每四个 ASCII 字节或每个非 ASCII 字符一个 token，并包含少量消息 framing 开销；该估算不包含工具 schema 或视觉 token。
+`context_window` 属于 model profile，表示模型以 token 为单位的上下文容量。默认值为 1048576，配置值必须为正数。当提供商返回 usage 时，Dora 使用上一次调用的准确 `total_tokens`，再加上该响应之后产生的工具结果 token 估算；没有 usage 时则估算完整消息历史和工具 schema。提供商中立的估算规则约为每四个 ASCII 字节或每个非 ASCII 字符一个 token，并包含少量消息 framing 开销；该估算不估算视觉 token。当包含输出预留在内的预测用量达到上下文窗口的 80% 时，Dora 会请当前模型生成不超过窗口 20% 的语义摘要，用它替换模型可见历史。摘要调用不携带工具或 continuation。用于持久化的完整 Turn 保持不变，摘要失败时也不会回退到删除或本地截断历史。
 
 `thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium` 或 `high` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。
 不同提供商的支持情况各异，不支持的值会被静默忽略而不是报错：

@@ -325,9 +325,14 @@ capacity in tokens. It defaults to 1048576, and configured values must be
 positive. When a provider reports usage, Dora bases the next tool round on the
 previous call's exact `total_tokens` plus an estimate for tool results produced
 after that response. Without reported usage, Dora estimates the whole message
-history. The provider-neutral estimate treats about four ASCII bytes or one
-non-ASCII rune as a token and includes a small per-message framing allowance;
-it does not include tool schemas or vision tokens.
+history and tool schemas. The provider-neutral estimate treats about four
+ASCII bytes or one non-ASCII rune as a token and includes a small per-message
+framing allowance; it does not estimate vision tokens. When predicted usage,
+including an output reserve, reaches 80% of the context window, Dora asks the
+active model to replace the model-visible history with a semantic summary of
+at most 20% of the window. The summary call has no tools or continuation. The
+complete Turn remains unchanged for persistence, and a failed summary never
+falls back to deleting or locally truncating history.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when

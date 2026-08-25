@@ -152,6 +152,10 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 	// history baseline instead of accidentally restoring messages that were not
 	// present in the previous request.
 	modelHistory := turn.Messages()
+	// modelContinuation tracks provider-only state for modelHistory. Semantic
+	// compaction replaces that history, so the old continuation must be cleared
+	// at the same time instead of being read repeatedly from the complete Turn.
+	modelContinuation := turn.Continuation()
 
 	// lastUsage is the real token usage of the most recently completed model call
 	// in this run. It stays local to the loop (never stored on the immutable
@@ -164,11 +168,18 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
-		requestMessages := a.requestMessages(modelHistory, lastUsage)
+		requestMessages, compacted, compactionErr := a.ensureContextCapacity(ctx, modelHistory, lastUsage, specs)
+		if compactionErr != nil {
+			return fmt.Errorf("dora: compact context: %w", compactionErr)
+		}
+		if compacted {
+			modelContinuation = ""
+			notify(observer, Update{Kind: UpdateInfo, Info: "Context compacted"})
+		}
 		request := Request{
 			Messages:     requestMessages,
 			Tools:        specs,
-			Continuation: turn.Continuation(),
+			Continuation: modelContinuation,
 		}
 		var response Response
 		var err error
@@ -191,6 +202,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		// Setting it after the response keeps a nil usage (providers that report
 		// none) treated as a fallback to estimating the complete history.
 		lastUsage = response.Usage
+		modelContinuation = response.Continuation
 
 		assistant := Message{
 			Role:      RoleAssistant,
