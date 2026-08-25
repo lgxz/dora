@@ -168,16 +168,23 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
-		requestMessages, compacted, compactionErr := a.ensureContextCapacity(ctx, modelHistory, lastUsage, specs)
+		capacity, compactionErr := a.ensureContextCapacity(ctx, modelHistory, lastUsage, specs)
 		if compactionErr != nil {
 			return fmt.Errorf("dora: compact context: %w", compactionErr)
 		}
-		if compacted {
+		if capacity.Compacted {
 			modelContinuation = ""
-			notify(observer, Update{Kind: UpdateInfo, Info: "Context compacted"})
+			notify(observer, Update{
+				Kind: UpdateInfo,
+				Info: fmt.Sprintf(
+					"Context compacted: %d -> %d predicted tokens",
+					capacity.PredictedTokensBefore,
+					capacity.PredictedTokensAfter,
+				),
+			})
 		}
 		request := Request{
-			Messages:     requestMessages,
+			Messages:     capacity.Messages,
 			Tools:        specs,
 			Continuation: modelContinuation,
 		}
@@ -299,7 +306,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		// Advance the model-visible snapshot from exactly what was sent. Turn keeps
 		// the full round independently, while future compaction and lastUsage stay
 		// anchored to the already-compacted request history.
-		modelHistory = cloneMessages(requestMessages)
+		modelHistory = cloneMessages(capacity.Messages)
 		modelHistory = append(modelHistory, cloneMessage(assistant))
 		modelHistory = append(modelHistory, cloneMessages(toolMessages)...)
 	}

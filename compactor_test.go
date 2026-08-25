@@ -19,14 +19,20 @@ func TestEnsureContextCapacityKeepsHistoryBelowTrigger(t *testing.T) {
 	}
 	history := []Message{{Role: RoleUser, Content: "small request"}}
 
-	got, compacted, err := a.ensureContextCapacity(context.Background(), history, nil, nil)
+	result, err := a.ensureContextCapacity(context.Background(), history, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compacted || calls != 0 {
-		t.Fatalf("compacted = %v, calls = %d; want unchanged", compacted, calls)
+	if result.Compacted || calls != 0 {
+		t.Fatalf("compacted = %v, calls = %d; want unchanged", result.Compacted, calls)
 	}
-	if &got[0] != &history[0] {
+	if result.PredictedTokensBefore != result.PredictedTokensAfter {
+		t.Fatalf("before = %d, after = %d", result.PredictedTokensBefore, result.PredictedTokensAfter)
+	}
+	if result.Attempts != 0 || result.SummaryTokens != 0 {
+		t.Fatalf("unexpected summary stats: %#v", result)
+	}
+	if &result.Messages[0] != &history[0] {
 		t.Fatal("history below the trigger should be returned directly")
 	}
 }
@@ -48,11 +54,11 @@ func TestEnsureContextCapacitySummarizesAtomically(t *testing.T) {
 	}
 	before := cloneMessages(history)
 
-	got, compacted, err := a.ensureContextCapacity(context.Background(), history, nil, []ToolSpec{{Name: "run"}})
+	result, err := a.ensureContextCapacity(context.Background(), history, nil, []ToolSpec{{Name: "run"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !compacted {
+	if !result.Compacted {
 		t.Fatal("expected context compaction")
 	}
 	if len(request.Tools) != 0 || request.Continuation != "" {
@@ -64,11 +70,17 @@ func TestEnsureContextCapacitySummarizesAtomically(t *testing.T) {
 	if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "Return only the summary") {
 		t.Fatalf("missing summary instruction: %q", request.Messages[len(request.Messages)-1].Content)
 	}
-	if len(got) != 2 || got[0].Role != RoleSystem || got[1].Role != RoleUser {
-		t.Fatalf("compacted history = %#v", got)
+	if len(result.Messages) != 2 || result.Messages[0].Role != RoleSystem || result.Messages[1].Role != RoleUser {
+		t.Fatalf("compacted history = %#v", result.Messages)
 	}
-	if !strings.Contains(got[1].Content, "requirements and completed work") {
-		t.Fatalf("summary message = %q", got[1].Content)
+	if !strings.Contains(result.Messages[1].Content, "requirements and completed work") {
+		t.Fatalf("summary message = %q", result.Messages[1].Content)
+	}
+	if result.PredictedTokensAfter >= result.PredictedTokensBefore {
+		t.Fatalf("compaction stats = %#v", result)
+	}
+	if result.SummaryTokens == 0 || result.Attempts != 1 {
+		t.Fatalf("summary stats = %#v", result)
 	}
 	if !reflect.DeepEqual(history, before) {
 		t.Fatal("compaction mutated the original history")
@@ -102,8 +114,8 @@ func TestGenerateContextSummaryRetriesOversizedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary != "short" || calls != 2 {
-		t.Fatalf("summary = %q, calls = %d", summary, calls)
+	if summary.content != "short" || summary.tokens == 0 || summary.attempts != 2 || calls != 2 {
+		t.Fatalf("summary = %#v, calls = %d", summary, calls)
 	}
 }
 
@@ -135,7 +147,7 @@ func TestEnsureContextCapacityRejectsRequestThatStillDoesNotFit(t *testing.T) {
 	history := []Message{{Role: RoleUser, Content: strings.Repeat("x", 400)}}
 	specs := []ToolSpec{{Description: strings.Repeat("schema", 100)}}
 
-	got, compacted, err := a.ensureContextCapacity(
+	result, err := a.ensureContextCapacity(
 		context.Background(),
 		history,
 		nil,
@@ -144,8 +156,11 @@ func TestEnsureContextCapacityRejectsRequestThatStillDoesNotFit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not fit after compaction") {
 		t.Fatalf("error = %v", err)
 	}
-	if compacted || !reflect.DeepEqual(got, history) {
+	if result.Compacted || !reflect.DeepEqual(result.Messages, history) {
 		t.Fatal("failed capacity check changed history")
+	}
+	if result.PredictedTokensAfter == result.PredictedTokensBefore || result.SummaryTokens == 0 || result.Attempts != 1 {
+		t.Fatalf("failed compaction stats = %#v", result)
 	}
 }
 
@@ -239,7 +254,7 @@ func TestAgentRunCompactsAndClearsContinuation(t *testing.T) {
 	before := turn.Messages()
 	var compacted bool
 	err = agent.RunObserved(context.Background(), turn, ObserverFunc(func(update Update) {
-		if update.Kind == UpdateInfo && update.Info == "Context compacted" {
+		if update.Kind == UpdateInfo && strings.HasPrefix(update.Info, "Context compacted:") {
 			compacted = true
 		}
 	}))

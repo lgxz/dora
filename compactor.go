@@ -33,19 +33,51 @@ Preserve:
 
 Omit repetition, conversational filler, and failed attempts that produced no useful insight. The summary must let another model continue the task without access to the original messages.`
 
+// CompactionResult describes the capacity decision and the model-visible
+// history produced by it. Token counts are predictions: they may combine
+// provider-reported usage with provider-neutral local estimates.
+type CompactionResult struct {
+	Messages              []Message
+	Compacted             bool
+	PredictedTokensBefore int
+	PredictedTokensAfter  int
+	SummaryTokens         int
+	ContextWindow         int
+	TriggerTokens         int
+	TargetTokens          int
+	Attempts              int
+}
+
+type summaryResult struct {
+	content  string
+	tokens   int
+	attempts int
+}
+
 // ensureContextCapacity returns the model-visible history for the next normal
 // request. It leaves history unchanged below the trigger. At or above the
 // trigger it asks the active model for a replacement summary, validates the
 // result, and atomically returns system messages plus that summary. Failure
 // never falls back to deleting or truncating local history.
-func (a *Agent) ensureContextCapacity(ctx context.Context, history []Message, lastUsage *Usage, specs []ToolSpec) ([]Message, bool, error) {
-	if len(history) == 0 || a.predictedTokens(history, lastUsage, specs) < a.compactionTrigger() {
-		return history, false, nil
+func (a *Agent) ensureContextCapacity(ctx context.Context, history []Message, lastUsage *Usage, specs []ToolSpec) (CompactionResult, error) {
+	predictedBefore := a.predictedTokens(history, lastUsage, specs)
+	result := CompactionResult{
+		Messages:              history,
+		PredictedTokensBefore: predictedBefore,
+		PredictedTokensAfter:  predictedBefore,
+		ContextWindow:         a.contextWindow,
+		TriggerTokens:         a.compactionTrigger(),
+		TargetTokens:          a.compactionTarget(),
+	}
+	if len(history) == 0 || predictedBefore < result.TriggerTokens {
+		return result, nil
 	}
 
-	summary, err := a.generateContextSummary(ctx, history, a.compactionTarget())
+	summary, err := a.generateContextSummary(ctx, history, result.TargetTokens)
+	result.SummaryTokens = summary.tokens
+	result.Attempts = summary.attempts
 	if err != nil {
-		return history, false, err
+		return result, err
 	}
 
 	compacted := make([]Message, 0, 2)
@@ -57,16 +89,19 @@ func (a *Agent) ensureContextCapacity(ctx context.Context, history []Message, la
 	}
 	compacted = append(compacted, Message{
 		Role:    RoleUser,
-		Content: "Conversation summary:\n\n" + summary,
+		Content: "Conversation summary:\n\n" + summary.content,
 	})
-	if predicted := a.predictedTokens(compacted, nil, specs); predicted >= a.contextWindow {
-		return history, false, fmt.Errorf(
+	result.PredictedTokensAfter = a.predictedTokens(compacted, nil, specs)
+	if result.PredictedTokensAfter >= a.contextWindow {
+		return result, fmt.Errorf(
 			"request does not fit after compaction: %d >= %d tokens",
-			predicted,
+			result.PredictedTokensAfter,
 			a.contextWindow,
 		)
 	}
-	return compacted, true, nil
+	result.Messages = compacted
+	result.Compacted = true
+	return result, nil
 }
 
 func (a *Agent) compactionTrigger() int {
@@ -109,9 +144,11 @@ func (a *Agent) predictedTokens(history []Message, lastUsage *Usage, specs []Too
 	return occupied + a.outputReserve()
 }
 
-func (a *Agent) generateContextSummary(ctx context.Context, history []Message, targetTokens int) (string, error) {
+func (a *Agent) generateContextSummary(ctx context.Context, history []Message, targetTokens int) (summaryResult, error) {
+	var result summaryResult
 	lastError := errors.New("summary was empty")
 	for attempt := 0; attempt < maxCompactionAttempts; attempt++ {
+		result.attempts = attempt + 1
 		strictness := ""
 		if attempt > 0 {
 			strictness = " The previous summary was too long; be substantially more concise."
@@ -126,27 +163,28 @@ func (a *Agent) generateContextSummary(ctx context.Context, history []Message, t
 		messages = append(messages, Message{Role: RoleUser, Content: prompt})
 		response, err := a.generateWithRetry(ctx, Request{Messages: messages}, nil)
 		if err != nil {
-			return "", fmt.Errorf("generate summary: %w", err)
+			return result, fmt.Errorf("generate summary: %w", err)
 		}
 		if len(response.ToolCalls) > 0 {
-			return "", errors.New("summary response unexpectedly requested tools")
+			return result, errors.New("summary response unexpectedly requested tools")
 		}
-		summary := strings.TrimSpace(response.Content)
-		if summary == "" {
+		result.content = strings.TrimSpace(response.Content)
+		if result.content == "" {
+			result.tokens = 0
 			lastError = errors.New("summary was empty")
 			continue
 		}
-		summaryTokens := estimateTextTokens(summary)
-		if response.Usage != nil && int(response.Usage.OutputTokens) > summaryTokens {
-			summaryTokens = int(response.Usage.OutputTokens)
+		result.tokens = estimateTextTokens(result.content)
+		if response.Usage != nil && int(response.Usage.OutputTokens) > result.tokens {
+			result.tokens = int(response.Usage.OutputTokens)
 		}
-		if summaryTokens > targetTokens {
-			lastError = fmt.Errorf("summary exceeds target: %d > %d tokens", summaryTokens, targetTokens)
+		if result.tokens > targetTokens {
+			lastError = fmt.Errorf("summary exceeds target: %d > %d tokens", result.tokens, targetTokens)
 			continue
 		}
-		return summary, nil
+		return result, nil
 	}
-	return "", lastError
+	return result, lastError
 }
 
 func estimateTokens(messages []Message) int {
