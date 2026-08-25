@@ -97,6 +97,25 @@ func TestConstructResponses(t *testing.T) {
 	}
 }
 
+func TestConstructPreservesMaxOutputTokens(t *testing.T) {
+	limit := 8192
+	for _, api := range []string{"chat_completions", "responses"} {
+		t.Run(api, func(t *testing.T) {
+			model, err := Construct(
+				ProviderConfig{Name: "openai", BaseURL: "https://example.test/v1", API: api, HTTPClient: &http.Client{}},
+				Profile{Name: "m", Model: "test-model", MaxOutputTokens: &limit},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outputSize, ok := model.(dora.OutputSize)
+			if !ok || outputSize.MaxOutputTokens() != limit {
+				t.Fatalf("output size = %T %v", model, outputSize)
+			}
+		})
+	}
+}
+
 // TestConstructPreserveThinking verifies the constructed chat adapter
 // surfaces the profile-level PreserveThinking flag, and that the default
 // (nil) leaves it disabled.

@@ -41,6 +41,9 @@ type Config struct {
 	// MaxTokens caps the number of tokens the model is allowed to generate in
 	// one response. Nil sends no cap and leaves it to the provider default.
 	MaxTokens *int
+	// MaxOutputTokens is the model's hard output capacity. It clamps both the
+	// default MaxTokens value and request-level output limits when positive.
+	MaxOutputTokens *int
 	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
 	// and leaves it to the provider default.
 	Temperature *float64
@@ -67,6 +70,7 @@ type Client struct {
 	provider         *provider.Provider
 	model            string
 	maxTokens        *int
+	maxOutputTokens  *int
 	temperature      *float64
 	reasoningEffort  *string
 	thinking         *thinkingControl
@@ -95,11 +99,20 @@ func New(cfg Config) (*Client, error) {
 		provider:         p,
 		model:            cfg.Model,
 		maxTokens:        cfg.MaxTokens,
+		maxOutputTokens:  cfg.MaxOutputTokens,
 		temperature:      cfg.Temperature,
 		reasoningEffort:  cfg.ReasoningEffort,
 		thinking:         cfg.Thinking,
 		preserveThinking: cfg.PreserveThinking != nil && *cfg.PreserveThinking,
 	}, nil
+}
+
+// MaxOutputTokens reports the configured hard model output capacity.
+func (c *Client) MaxOutputTokens() int {
+	if c.maxOutputTokens == nil {
+		return 0
+	}
+	return *c.maxOutputTokens
 }
 
 // PreserveThinking reports whether the configured flag is enabled. It is used
@@ -172,7 +185,7 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 }
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
-	body := chatRequest{Model: c.model, Stream: true, MaxTokens: c.maxTokens, Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
+	body := chatRequest{Model: c.model, Stream: true, MaxTokens: effectiveOutputLimit(request.MaxOutputTokens, c.maxTokens, c.maxOutputTokens), Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
 	body.StreamOptions = &chatStreamOptions{IncludeUsage: boolPtr(true)}
 	reasoningByMessage := make(map[int][]json.RawMessage)
 	if c.preserveThinking {
@@ -245,6 +258,18 @@ func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 		})
 	}
 	return body, nil
+}
+
+func effectiveOutputLimit(requested, fallback, hard *int) *int {
+	limit := fallback
+	if requested != nil {
+		limit = requested
+	}
+	if limit == nil || hard == nil || *hard <= 0 || *limit <= *hard {
+		return limit
+	}
+	clamped := *hard
+	return &clamped
 }
 
 // encodeContent renders a message's text and images into the Chat Completions

@@ -44,6 +44,7 @@ type Profile struct {
 	Thinking         *string
 	PreserveThinking *bool
 	MaxTokens        *int
+	MaxOutputTokens  *int
 	ContextWindow    *int
 	Temperature      *float64
 	Capabilities     []dora.Capability
@@ -106,6 +107,7 @@ func Construct(p ProviderConfig, profile Profile) (dora.Model, error) {
 			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
 			Timeout:           dur(p.TimeoutSeconds),
 			MaxTokens:         profile.MaxTokens,
+			MaxOutputTokens:   profile.MaxOutputTokens,
 			Temperature:       profile.Temperature,
 			ReasoningEffort:   reasoningEffort,
 			Thinking:          thinking,
@@ -122,6 +124,7 @@ func Construct(p ProviderConfig, profile Profile) (dora.Model, error) {
 			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
 			Timeout:           dur(p.TimeoutSeconds),
 			MaxTokens:         profile.MaxTokens,
+			MaxOutputTokens:   profile.MaxOutputTokens,
 			Temperature:       profile.Temperature,
 			Reasoning:         reasoning,
 		})

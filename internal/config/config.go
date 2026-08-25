@@ -80,6 +80,8 @@ type ProfileSpec struct {
 	// leaves it disabled.
 	PreserveThinking *bool `yaml:"preserve_thinking,omitempty"`
 	MaxTokens        *int  `yaml:"max_tokens,omitempty"`
+	// MaxOutputTokens is the model's hard output capacity. Nil means unknown.
+	MaxOutputTokens *int `yaml:"max_output_tokens,omitempty"`
 	// ContextWindow is the model context capacity measured in tokens. Nil uses
 	// the default; configured values must be positive.
 	ContextWindow *int     `yaml:"context_window,omitempty"`
@@ -343,6 +345,9 @@ func (cfg *Config) resolveProviders() error {
 			}
 			if m.MaxTokens == nil {
 				m.MaxTokens = intPtr(defaultMaxTokens)
+			}
+			if m.MaxOutputTokens != nil && *m.MaxOutputTokens <= 0 {
+				return fmt.Errorf("providers[%d].profiles[%d].max_output_tokens must be positive", i, j)
 			}
 			if m.ContextWindow != nil && *m.ContextWindow <= 0 {
 				return fmt.Errorf("providers[%d].profiles[%d].context_window must be positive", i, j)

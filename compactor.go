@@ -9,7 +9,7 @@ import (
 
 const (
 	compactionTriggerRatio = 0.8
-	compactionTargetRatio  = 0.2
+	summaryTargetRatio     = 0.2
 	reservedOutputTokens   = 8192
 	maxCompactionAttempts  = 2
 
@@ -67,7 +67,7 @@ func (a *Agent) ensureContextCapacity(ctx context.Context, history []Message, la
 		PredictedTokensAfter:  predictedBefore,
 		ContextWindow:         a.contextWindow,
 		TriggerTokens:         a.compactionTrigger(),
-		TargetTokens:          a.compactionTarget(),
+		TargetTokens:          a.summaryTarget(),
 	}
 	if len(history) == 0 || predictedBefore < result.TriggerTokens {
 		return result, nil
@@ -112,10 +112,13 @@ func (a *Agent) compactionTrigger() int {
 	return trigger
 }
 
-func (a *Agent) compactionTarget() int {
-	target := int(float64(a.contextWindow) * compactionTargetRatio)
+func (a *Agent) summaryTarget() int {
+	target := int(float64(a.contextWindow) * summaryTargetRatio)
 	if target < 1 {
-		return 1
+		target = 1
+	}
+	if a.maxOutputTokens > 0 && target > a.maxOutputTokens {
+		target = a.maxOutputTokens
 	}
 	return target
 }
@@ -161,7 +164,10 @@ func (a *Agent) generateContextSummary(ctx context.Context, history []Message, t
 		)
 		messages := cloneMessages(history)
 		messages = append(messages, Message{Role: RoleUser, Content: prompt})
-		response, err := a.generateWithRetry(ctx, Request{Messages: messages}, nil)
+		response, err := a.generateWithRetry(ctx, Request{
+			Messages:        messages,
+			MaxOutputTokens: &targetTokens,
+		}, nil)
 		if err != nil {
 			return result, fmt.Errorf("generate summary: %w", err)
 		}

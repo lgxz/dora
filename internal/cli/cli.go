@@ -221,6 +221,7 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 				Thinking:         m.Thinking,
 				PreserveThinking: m.PreserveThinking,
 				MaxTokens:        m.MaxTokens,
+				MaxOutputTokens:  m.MaxOutputTokens,
 				ContextWindow:    m.ContextWindow,
 				Temperature:      m.Temperature,
 				Capabilities:     m.Capabilities,

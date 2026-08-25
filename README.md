@@ -292,8 +292,8 @@ API key (any placeholder value works) to be selectable. Provider names that
 normalize to the same environment variable are rejected. Config files
 containing keys are secrets and should be protected accordingly.
 
-Control the per-response output budget and sampling with `max_tokens` and
-`temperature`:
+Control the normal per-response output budget, hard model output capacity, and
+sampling with `max_tokens`, `max_output_tokens`, and `temperature`:
 
 ```yaml
 providers:
@@ -303,6 +303,7 @@ providers:
       - name: balanced
         model: openrouter/auto
         max_tokens: 32768
+        max_output_tokens: 65536
         temperature: 0.7
 policy:
   text:
@@ -317,8 +318,10 @@ explicit `0` means "no explicit cap" and is relayed as-is. `temperature` has no
 default: when it is omitted, no value is sent and the provider uses its default
 sampling. It accepts values in `[0, 2]`. Because some reasoning and
 tool-calling models ignore or reject non-default temperatures, treat
-`temperature` as best-effort. Both keys are model catalog settings; there are
-no command-line flags for them.
+`temperature` as best-effort. `max_output_tokens` is an optional positive model
+capability with no default. It clamps both `max_tokens` and a request-specific
+output limit. These keys are model catalog settings; there are no command-line
+flags for them.
 
 `context_window` belongs to a model profile and records that model's context
 capacity in tokens. It defaults to 1048576, and configured values must be
@@ -330,7 +333,11 @@ ASCII bytes or one non-ASCII rune as a token and includes a small per-message
 framing allowance; it does not estimate vision tokens. When predicted usage,
 including an output reserve, reaches 80% of the context window, Dora asks the
 active model to replace the model-visible history with a semantic summary of
-at most 20% of the window. The summary call has no tools or continuation. The
+at most 20% of the window, further capped by the profile's optional
+`max_output_tokens`. That effective target is sent as a request-specific output
+limit, overriding the ordinary `max_tokens` value so a provider's smaller
+default cannot silently constrain compaction. The summary call has no tools or
+continuation. A non-empty summary returned at the output limit is accepted. The
 complete Turn remains unchanged for persistence, and a failed summary never
 falls back to deleting or locally truncating history.
 

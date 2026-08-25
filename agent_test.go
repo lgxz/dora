@@ -1112,6 +1112,13 @@ type contextSizeModel struct {
 
 func (m contextSizeModel) ContextSize() int { return m.size }
 
+type outputSizeModel struct {
+	modelFunc
+	size int
+}
+
+func (m outputSizeModel) MaxOutputTokens() int { return m.size }
+
 func TestAgentCapturesContextWindow(t *testing.T) {
 	model := contextSizeModel{modelFunc: modelFunc(noopGenerate), size: 4096}
 	agent, err := New(model)
@@ -1143,6 +1150,29 @@ func TestAgentFallsBackWhenContextSizeNonPositive(t *testing.T) {
 		}
 		if agent.contextWindow != DefaultContextWindowTokens {
 			t.Fatalf("contextWindow = %d, want %d", agent.contextWindow, DefaultContextWindowTokens)
+		}
+	}
+}
+
+func TestAgentCapturesMaxOutputTokens(t *testing.T) {
+	model := outputSizeModel{modelFunc: modelFunc(noopGenerate), size: 8192}
+	agent, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.maxOutputTokens != 8192 {
+		t.Fatalf("maxOutputTokens = %d, want 8192", agent.maxOutputTokens)
+	}
+}
+
+func TestAgentIgnoresNonPositiveMaxOutputTokens(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		agent, err := New(outputSizeModel{modelFunc: modelFunc(noopGenerate), size: size})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if agent.maxOutputTokens != 0 {
+			t.Fatalf("maxOutputTokens = %d, want unknown", agent.maxOutputTokens)
 		}
 	}
 }

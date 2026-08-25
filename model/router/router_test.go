@@ -194,4 +194,24 @@ func TestRouterContextSize(t *testing.T) {
 	}
 }
 
+func TestRouterMaxOutputTokens(t *testing.T) {
+	cat := routerCatalog(t)
+	r, err := newRouter(cat, func(registry.ProviderConfig, registry.Profile) (dora.Model, error) {
+		return &stubModel{content: "hello"}, nil
+	},
+		dora.Constraints{Needs: []dora.Capability{dora.CapabilityText}},
+		dora.Constraints{Needs: []dora.Capability{dora.CapabilityImageInput}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.MaxOutputTokens(); got != 0 {
+		t.Fatalf("unknown MaxOutputTokens() = %d", got)
+	}
+	r.textSel.profile.MaxOutputTokens = intPtr(8192)
+	if got := r.MaxOutputTokens(); got != 8192 {
+		t.Fatalf("MaxOutputTokens() = %d, want 8192", got)
+	}
+}
+
 func intPtr(v int) *int { return &v }

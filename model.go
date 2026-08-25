@@ -15,6 +15,13 @@ type ContextSize interface {
 	ContextSize() int
 }
 
+// OutputSize is optionally implemented by models that can report their hard
+// output capacity in tokens. A non-positive value means the capacity is
+// unknown. Request-level limits may be lower than this model capability.
+type OutputSize interface {
+	MaxOutputTokens() int
+}
+
 // Model produces the next assistant response for a conversation.
 type Model interface {
 	Generate(context.Context, Request) (Response, error)
@@ -52,6 +59,9 @@ type Request struct {
 	Messages     []Message
 	Tools        []ToolSpec
 	Continuation string
+	// MaxOutputTokens overrides the model profile's ordinary response budget
+	// for this request. Nil keeps the profile default.
+	MaxOutputTokens *int
 }
 
 // InputTokenDetails holds optional input-token categories. Each field is a

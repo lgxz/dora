@@ -24,7 +24,7 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 		t.Fatalf("deepseek = %#v", p)
 	}
 	m := modelByName(t, p, "deepseek-v4-flash")
-	if m.MaxTokens == nil || *m.MaxTokens != 32768 ||
+	if m.MaxTokens == nil || *m.MaxTokens != 32768 || m.MaxOutputTokens != nil ||
 		m.ContextWindow == nil || *m.ContextWindow != 1000000 {
 		t.Fatalf("profiles = %#v", p.Profiles)
 	}
@@ -367,17 +367,19 @@ providers:
       - name: reasoner
         model: flash
         max_tokens: 0
+        max_output_tokens: 8192
         context_window: 2048
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	profiles := cfg.Providers[0].Profiles
-	if profiles[0].Model != "flash" || profiles[0].MaxTokens == nil || *profiles[0].MaxTokens != 32768 ||
+	if profiles[0].Model != "flash" || profiles[0].MaxTokens == nil || *profiles[0].MaxTokens != 32768 || profiles[0].MaxOutputTokens != nil ||
 		profiles[0].ContextWindow == nil || *profiles[0].ContextWindow != 1<<20 || profiles[0].Thinking != nil {
 		t.Fatalf("default model = %#v", profiles[0])
 	}
 	if profiles[1].Model != "flash" || profiles[1].MaxTokens == nil || *profiles[1].MaxTokens != 0 ||
+		profiles[1].MaxOutputTokens == nil || *profiles[1].MaxOutputTokens != 8192 ||
 		profiles[1].ContextWindow == nil || *profiles[1].ContextWindow != 2048 {
 		t.Fatalf("explicit values = %#v", profiles[1])
 	}
@@ -420,6 +422,8 @@ func TestLoadRejectsInvalidProviderAndModelValues(t *testing.T) {
 		{"invalid api", "providers:\n  - name: deepseek\n    api: bogus\n    profiles: [{name: model}]\n", "must be"},
 		{"negative timeout", "providers:\n  - name: deepseek\n    timeout_seconds: -1\n    profiles: [{name: model}]\n", "cannot be negative"},
 		{"negative max tokens", "providers:\n  - name: deepseek\n    profiles: [{name: model, max_tokens: -1}]\n", "cannot be negative"},
+		{"zero max output tokens", "providers:\n  - name: deepseek\n    profiles: [{name: model, max_output_tokens: 0}]\n", "max_output_tokens must be positive"},
+		{"negative max output tokens", "providers:\n  - name: deepseek\n    profiles: [{name: model, max_output_tokens: -1}]\n", "max_output_tokens must be positive"},
 		{"zero context window", "providers:\n  - name: deepseek\n    profiles: [{name: model, context_window: 0}]\n", "context_window must be positive"},
 		{"negative context window", "providers:\n  - name: deepseek\n    profiles: [{name: model, context_window: -1}]\n", "context_window must be positive"},
 		{"temperature", "providers:\n  - name: deepseek\n    profiles: [{name: model, temperature: 3}]\n", "within [0, 2]"},

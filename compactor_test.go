@@ -64,6 +64,9 @@ func TestEnsureContextCapacitySummarizesAtomically(t *testing.T) {
 	if len(request.Tools) != 0 || request.Continuation != "" {
 		t.Fatalf("summary request leaked tools or continuation: %#v", request)
 	}
+	if request.MaxOutputTokens == nil || *request.MaxOutputTokens != result.TargetTokens {
+		t.Fatalf("summary output limit = %v, target = %d", request.MaxOutputTokens, result.TargetTokens)
+	}
 	if len(request.Messages) != len(history)+1 {
 		t.Fatalf("summary request messages = %d, want %d", len(request.Messages), len(history)+1)
 	}
@@ -204,8 +207,15 @@ func TestSmallContextScalesOutputReserve(t *testing.T) {
 	if got := a.compactionTrigger(); got != 80 {
 		t.Fatalf("trigger = %d, want 80", got)
 	}
-	if got := a.compactionTarget(); got != 20 {
+	if got := a.summaryTarget(); got != 20 {
 		t.Fatalf("target = %d, want 20", got)
+	}
+}
+
+func TestSummaryTargetRespectsModelOutputCapacity(t *testing.T) {
+	a := &Agent{contextWindow: 1000, maxOutputTokens: 128}
+	if got := a.summaryTarget(); got != 128 {
+		t.Fatalf("summary target = %d, want 128", got)
 	}
 }
 

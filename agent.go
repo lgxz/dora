@@ -41,6 +41,9 @@ type Agent struct {
 	// without re-asserting each round. It falls back to
 	// DefaultContextWindowTokens when the model does not report a positive size.
 	contextWindow int
+	// maxOutputTokens is the model's hard output capacity. Zero means the model
+	// does not advertise one, so request-level limits are left unclamped.
+	maxOutputTokens int
 }
 
 // AgentConfig controls immutable Agent behavior and safeguards. A zero
@@ -85,13 +88,20 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 			contextWindow = v
 		}
 	}
+	maxOutputTokens := 0
+	if os, ok := model.(OutputSize); ok {
+		if v := os.MaxOutputTokens(); v > 0 {
+			maxOutputTokens = v
+		}
+	}
 	a := &Agent{
-		model:         model,
-		tools:         make(map[string]Tool, len(tools)),
-		specs:         make([]ToolSpec, 0, len(tools)),
-		maxRounds:     maxRounds,
-		systemPrompt:  cfg.SystemPrompt,
-		contextWindow: contextWindow,
+		model:           model,
+		tools:           make(map[string]Tool, len(tools)),
+		specs:           make([]ToolSpec, 0, len(tools)),
+		maxRounds:       maxRounds,
+		systemPrompt:    cfg.SystemPrompt,
+		contextWindow:   contextWindow,
+		maxOutputTokens: maxOutputTokens,
 	}
 
 	for _, tool := range tools {

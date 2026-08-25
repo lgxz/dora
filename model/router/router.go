@@ -81,6 +81,15 @@ func (r *Router) ContextSize() int {
 	return dora.DefaultContextWindowTokens
 }
 
+// MaxOutputTokens reports the selected text model's configured hard output
+// capacity. Zero means the profile does not advertise one.
+func (r *Router) MaxOutputTokens() int {
+	if r.textSel.profile.MaxOutputTokens != nil && *r.textSel.profile.MaxOutputTokens > 0 {
+		return *r.textSel.profile.MaxOutputTokens
+	}
+	return 0
+}
+
 // GenerateStream delegates to the cached text model when it supports streaming;
 // otherwise it falls back to Generate.
 func (r *Router) GenerateStream(ctx context.Context, req dora.Request, emit func(dora.ModelEvent)) (dora.Response, error) {

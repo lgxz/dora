@@ -557,6 +557,42 @@ func TestRequestBodyEmitsMaxOutputTokensAndTemperature(t *testing.T) {
 	}
 }
 
+func TestRequestOutputLimitOverridesDefaultAndRespectsHardLimit(t *testing.T) {
+	defaultLimit := 10000
+	hardLimit := 8192
+	client, err := New(Config{
+		BaseURL:         "https://example.test/v1",
+		Model:           "test-model",
+		MaxTokens:       &defaultLimit,
+		MaxOutputTokens: &hardLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultBody, err := client.requestBody(dora.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultBody.MaxOutputTokens == nil || *defaultBody.MaxOutputTokens != hardLimit {
+		t.Fatalf("default max_output_tokens = %v, want %d", defaultBody.MaxOutputTokens, hardLimit)
+	}
+	for _, test := range []struct {
+		requested int
+		want      int
+	}{{6000, 6000}, {12000, hardLimit}} {
+		body, err := client.requestBody(dora.Request{MaxOutputTokens: &test.requested})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body.MaxOutputTokens == nil || *body.MaxOutputTokens != test.want {
+			t.Fatalf("max_output_tokens = %v, want %d", body.MaxOutputTokens, test.want)
+		}
+	}
+	if got := client.MaxOutputTokens(); got != hardLimit {
+		t.Fatalf("MaxOutputTokens() = %d, want %d", got, hardLimit)
+	}
+}
+
 func TestRequestBodyEmitsExplicitZeroTemperature(t *testing.T) {
 	temperature := 0.0
 	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test-model", Temperature: &temperature})

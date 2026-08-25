@@ -42,6 +42,9 @@ type Config struct {
 	// is sent as max_output_tokens on the Responses API. An explicit 0 means
 	// "no explicit cap" and is sent as-is.
 	MaxTokens *int
+	// MaxOutputTokens is the model's hard output capacity. It clamps both the
+	// default MaxTokens value and request-level output limits when positive.
+	MaxOutputTokens *int
 	// Temperature controls sampling randomness in [0, 2]. Nil sends no value
 	// and leaves it to the provider default.
 	Temperature *float64
@@ -54,11 +57,12 @@ type Config struct {
 // live in the embedded *provider.Provider; this struct only holds the model
 // name and generation parameters.
 type Client struct {
-	provider    *provider.Provider
-	model       string
-	maxTokens   *int
-	temperature *float64
-	reasoning   *reasoningControl
+	provider        *provider.Provider
+	model           string
+	maxTokens       *int
+	maxOutputTokens *int
+	temperature     *float64
+	reasoning       *reasoningControl
 }
 
 // New creates an OpenAI Responses API model client.
@@ -80,12 +84,21 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("openai responses: model is required")
 	}
 	return &Client{
-		provider:    p,
-		model:       cfg.Model,
-		maxTokens:   cfg.MaxTokens,
-		temperature: cfg.Temperature,
-		reasoning:   cfg.Reasoning,
+		provider:        p,
+		model:           cfg.Model,
+		maxTokens:       cfg.MaxTokens,
+		maxOutputTokens: cfg.MaxOutputTokens,
+		temperature:     cfg.Temperature,
+		reasoning:       cfg.Reasoning,
 	}, nil
+}
+
+// MaxOutputTokens reports the configured hard model output capacity.
+func (c *Client) MaxOutputTokens() int {
+	if c.maxOutputTokens == nil {
+		return 0
+	}
+	return *c.maxOutputTokens
 }
 
 // Generate implements dora.Model. The response is received as a stream even
@@ -158,7 +171,7 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 		Stream:          true,
 		Store:           false,
 		Include:         []string{"reasoning.encrypted_content"},
-		MaxOutputTokens: c.maxTokens,
+		MaxOutputTokens: effectiveOutputLimit(request.MaxOutputTokens, c.maxTokens, c.maxOutputTokens),
 		Temperature:     c.temperature,
 		Reasoning:       c.reasoning,
 	}
@@ -203,6 +216,18 @@ func (c *Client) requestBody(request dora.Request) (responsesRequest, error) {
 		})
 	}
 	return body, nil
+}
+
+func effectiveOutputLimit(requested, fallback, hard *int) *int {
+	limit := fallback
+	if requested != nil {
+		limit = requested
+	}
+	if limit == nil || hard == nil || *hard <= 0 || *limit <= *hard {
+		return limit
+	}
+	clamped := *hard
+	return &clamped
 }
 
 func appendContinuationMessages(input *[]json.RawMessage, messages []dora.Message) error {
