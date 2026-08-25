@@ -366,6 +366,7 @@ Bash is enabled automatically on Linux and macOS and disabled automatically on o
 - a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 10; `0` moves it to the background immediately);
 - context cancellation does not terminate an adopted background process (it uses its own lifetime), and adopted processes also keep running after the Dora process exits;
 - the result returns the exit code, stdout, and stderr as JSON; a moved-to-background result returns a source-prefixed `job_id` such as `bash_0`;
+- stdout and stderr are each capped at 32 KiB per result (head+tail with a marker naming the original size) in the command result, in the background-adoption result, and in job tool polls, so a single oversized command cannot overflow the model request;
 - a non-zero command exit is a tool result the model can handle; infrastructure errors such as startup failures are returned as Go errors.
 
 Bash is not a security sandbox. Enabling it is equivalent to allowing the model to execute commands with the system privileges of the Dora process.

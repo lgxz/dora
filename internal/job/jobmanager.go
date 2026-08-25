@@ -303,7 +303,9 @@ func (j *Job) snapshot(drainCommandOutput bool) Snapshot {
 	kind := j.kind
 	j.mu.Unlock()
 	if drainCommandOutput && kind == KindCommand && out != nil {
-		snapshot.Stdout, snapshot.Stderr = out.Drain()
+		stdout, stderr := out.Drain()
+		snapshot.Stdout = CapOutput(stdout)
+		snapshot.Stderr = CapOutput(stderr)
 	}
 	return snapshot
 }

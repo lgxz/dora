@@ -132,8 +132,8 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 		procCancel()
 		stdout, stderr := out.Drain()
 		result := commandResult{
-			Stdout: stdout,
-			Stderr: stderr,
+			Stdout: job.CapOutput(stdout),
+			Stderr: job.CapOutput(stderr),
 		}
 		switch {
 		case runErr == nil, errors.Is(runErr, exec.ErrWaitDelay):
@@ -160,7 +160,7 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 		j := t.jobManager.AdoptCommand(t.name, cmd, procCancel, input.Command, out, done)
 		stdout, stderr := out.Drain()
 		return t.result(fmt.Sprintf(`{"job_id": %q, "status": "running", "stdout": %q, "stderr": %q, "message": "Command did not finish within %s. It is now running in the background. Use the job tool to check status."}`,
-			j.ID, stdout, stderr, waitDuration)), nil
+			j.ID, job.CapOutput(stdout), job.CapOutput(stderr), waitDuration)), nil
 	}
 }
 

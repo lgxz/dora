@@ -615,7 +615,10 @@ processes are also not terminated when Dora itself exits — they keep running
 after the session ends, so stop them explicitly with the job tool's kill action
 when needed. On Unix, kill terminates the command's process group; on Windows,
 it terminates the process tree. This covers ordinary descendants such as
-`timeout 240 python3 ...`. By default (omitted) Dora waits 10 seconds, and a
+`timeout 240 python3 ...`. Stdout and stderr are each capped at 32 KiB per
+result (head and tail kept, with a marker naming the original size) in command
+results, background-adoption results, and job polls; redirect larger output to
+a file to inspect it. By default (omitted) Dora waits 10 seconds, and a
 value of `0` moves the command to the background immediately:
 
 ```json

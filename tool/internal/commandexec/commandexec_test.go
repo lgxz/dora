@@ -276,6 +276,61 @@ func TestKillTerminatesCommandDescendants(t *testing.T) {
 	}
 }
 
+func TestExecuteCapsLargeOutput(t *testing.T) {
+	tool := newTestTool(t, Config{})
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"big-output"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, toolResult.Content)
+	if !strings.HasPrefix(result.Stdout, "HEAD-MARKER\n") {
+		t.Fatalf("head not preserved: %q", result.Stdout[:min(20, len(result.Stdout))])
+	}
+	if !strings.HasSuffix(result.Stdout, "TAIL-MARKER") {
+		t.Fatalf("tail not preserved: %q", result.Stdout[max(0, len(result.Stdout)-20):])
+	}
+	if !strings.Contains(result.Stdout, "bytes total") {
+		t.Fatal("stdout truncation marker missing")
+	}
+	if len(result.Stdout) > job.MaxResultBytes+256 {
+		t.Fatalf("stdout not capped: %d bytes", len(result.Stdout))
+	}
+	if !strings.Contains(result.Stderr, "bytes total") || len(result.Stderr) > job.MaxResultBytes+256 {
+		t.Fatalf("stderr not capped: %d bytes", len(result.Stderr))
+	}
+}
+
+func TestExecuteCapsOutputOnBackgroundAdoption(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"big-output-slow","wait_seconds":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+		Stdout string `json:"stdout"`
+	}
+	if err := json.Unmarshal([]byte(toolResult.Content), &bg); err != nil {
+		t.Fatalf("decode background result: %v (output=%s)", err, toolResult.Content)
+	}
+	if bg.JobID == "" || bg.Status != "running" {
+		t.Fatalf("expected job_id + running, got %#v", bg)
+	}
+	if !strings.HasPrefix(bg.Stdout, "HEAD-MARKER\n") || !strings.Contains(bg.Stdout, "bytes total") {
+		t.Fatalf("adoption stdout not capped with marker: %d bytes", len(bg.Stdout))
+	}
+	if len(bg.Stdout) > job.MaxResultBytes+256 {
+		t.Fatalf("adoption stdout not capped: %d bytes", len(bg.Stdout))
+	}
+	if _, err := jm.Kill(bg.JobID); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+}
+
 func TestExecuteRejectsInvalidInput(t *testing.T) {
 	tool := newTestTool(t, Config{})
 	for _, raw := range []string{
@@ -391,6 +446,20 @@ func TestCommandHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		fmt.Print("parent-done")
+	case "big-output":
+		// ~100KB of stdout plus a matching stderr, with identifiable ends.
+		fmt.Print("HEAD-MARKER\n")
+		for i := 0; i < 2000; i++ {
+			fmt.Printf("line-%05d padding padding padding\n", i)
+		}
+		fmt.Print("TAIL-MARKER")
+		fmt.Fprint(os.Stderr, strings.Repeat("e", 60_000))
+	case "big-output-slow":
+		// Emits oversized output quickly, then keeps running so the tool
+		// adopts it as a background job with buffered output.
+		fmt.Print("HEAD-MARKER\n")
+		fmt.Print(strings.Repeat("o", 60_000))
+		time.Sleep(2 * time.Second)
 	default:
 		os.Exit(2)
 	}
