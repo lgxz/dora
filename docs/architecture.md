@@ -72,14 +72,14 @@ Key constraints on dependency direction:
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
 | `session` | Defines saved-turn history contracts and query records | `Reader`, `Store` |
-| `session/sqlite` | Appends completed, maximum-round, and failed turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.CommitMaxRounds`, `Store.CommitFailed`, `Store.ListTurns`, `Store.GetRounds` |
+| `session/sqlite` | Appends completed, maximum-round, failed, and canceled turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.CommitMaxRounds`, `Store.CommitFailed`, `Store.CommitCanceled`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
 | `model/openai` | OpenAI-compatible Chat Completions SSE protocol adapter | `New`, `Client.GenerateStream` |
 | `model/openairesponses` | Responses API, SSE stream, and provider continuation adapter | `New`, `Client.GenerateStream` |
 | `model/registry` | Catalog registration/query (order = priority) and per-protocol adapter construction | `NewCatalog`, `Catalog.Providers`, `Construct` |
-| `model/router` | Constraint-based selection, `dora.Model` routing with caching; internal `selection` | `New`, `Router.Generate`, `Router.GenerateStream`, `Router.View`, `Router.SetThinking` |
+| `model/router` | Constraint-based selection, `dora.Model` routing with caching; internal `selection` | `New`, `Router.Generate`, `Router.GenerateStream`, `Router.View`, `Router.SetThinking`, `Router.TextSelection` |
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory with background transition and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
@@ -237,11 +237,11 @@ Current execution semantics:
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
 4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry, and validate `--workdir` as an existing directory before resolving it to an absolute path.
 5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
-6. Create the concrete model adapter based on the selected profile's effective API and model.
+6. Create the concrete model adapter based on the selected profile's effective API and model, then report the resolved conversation provider/profile on stderr unless `--quiet` is active.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
 9. Run the Agent with the resolved working directory, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
-10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. If execution stops at the maximum-round limit, append a `max_rounds` Turn before returning, declining, or continuing the event loop. For any other run error, append a `failed` Turn with its error and completed tool rounds before returning or continuing the event loop; partial streamed model output is not retained on the Turn and is not written.
+10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. If execution stops at the maximum-round limit, append a `max_rounds` Turn before returning, declining, or continuing the event loop. Context cancellation (including Ctrl+C) is appended as `canceled` using a detached five-second commit context; any other run error is appended as `failed`. Both store the error and completed tool rounds before returning or continuing the event loop; partial streamed model output is not retained on the Turn and is not written.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
@@ -318,9 +318,9 @@ automatic loading of prior messages.
 The database uses schema version 6 and two tables:
 
 - `turns`: one row per saved invocation, including `status` (`completed`,
-  `max_rounds`, or `failed`), optional error, plain-text `system`, `user`, final
-  `result`, round count, final-response `usage_json`, and commit time.
-  `max_rounds` and `failed` rows have an error and empty result/final usage;
+  `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
+  `user`, final `result`, round count, final-response `usage_json`, and commit
+  time. All non-completed rows have an error and empty result/final usage;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls and images are JSON columns because
   they are structured fields of a message. Assistant messages also store their
@@ -331,11 +331,12 @@ The database uses schema version 6 and two tables:
 
 `CommitTurn` inserts a completed turn, messages, and per-call usage in one
 transaction (no backend metadata). `CommitMaxRounds` stores all complete rounds
-plus the limit error, while `CommitFailed` stores all complete rounds plus the
-terminal run error. Neither incomplete-turn path stores partial streamed model
-output. Provider continuation is intentionally not stored. SQLite allocates the
-turn ID and foreign keys bind every message to its turn. Schema version 5 and
-older databases are rejected rather than migrated.
+plus the limit error, while `CommitFailed` and `CommitCanceled` store all
+complete rounds plus the terminal run error. None of the incomplete-turn paths
+stores partial streamed model output. Provider continuation is intentionally
+not stored. SQLite allocates the turn ID and foreign keys bind every message to
+its turn. Schema version 5 and older databases, and development v6 definitions
+without the `canceled` status, are rejected rather than migrated.
 
 `tool/history` is registered from the first turn against the active session.
 An empty database is a valid history source whose `list` result is empty.

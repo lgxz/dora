@@ -19,6 +19,7 @@ const (
 	TurnStatusCompleted TurnStatus = "completed"
 	TurnStatusMaxRounds TurnStatus = "max_rounds"
 	TurnStatusFailed    TurnStatus = "failed"
+	TurnStatusCanceled  TurnStatus = "canceled"
 )
 
 // ListOptions selects a page of turns. Offset zero starts at the newest turn.
@@ -35,7 +36,8 @@ type RoundOptions struct {
 
 // TurnSummary is the compact representation returned by history listings.
 // Usage is the final model call's optional provider-reported accounting and is
-// nil for turns stopped at the maximum-round limit or by an error.
+// nil for turns stopped at the maximum-round limit, by an error, or by
+// cancellation.
 type TurnSummary struct {
 	ID          int64       `json:"id"`
 	User        string      `json:"user"`
@@ -77,5 +79,6 @@ type Store interface {
 	CommitTurn(context.Context, *dora.Turn) (int64, error)
 	CommitMaxRounds(context.Context, *dora.Turn, error) (int64, error)
 	CommitFailed(context.Context, *dora.Turn, error) (int64, error)
+	CommitCanceled(context.Context, *dora.Turn, error) (int64, error)
 	Close() error
 }

@@ -95,6 +95,9 @@ policy:
 	if !strings.Contains(stderr.String(), "Thinking...") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
+	if !strings.Contains(stderr.String(), "Model openai/fast") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
 }
 
 func TestRunStreamsReasoningOnlyWithFlag(t *testing.T) {
@@ -1261,6 +1264,65 @@ model:
 	}
 	summary := page.Turns[0]
 	if summary.Status != session.TurnStatusFailed || !strings.Contains(summary.Error, "connection timed out") || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 0 {
+		t.Fatalf("saved turn = %#v", summary)
+	}
+}
+
+func TestRunSavesCanceledTurnWithCompletedRounds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls int
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"printf complete\"}"}}]}}]}`), nil
+		}
+		cancel()
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := writeTestConfig(t, configPath, `
+model:
+  provider: openai
+  name: test-model
+  base_url: https://example.test/v1
+tools:
+  bash:
+    enabled: true
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	err := Run(ctx, []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
+		Stdin:           strings.NewReader(""),
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		StdinIsTerminal: false,
+		HTTPClient:      httpClient,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+
+	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Turns) != 1 {
+		t.Fatalf("saved turns = %#v", page.Turns)
+	}
+	summary := page.Turns[0]
+	if summary.Status != session.TurnStatusCanceled || !strings.Contains(summary.Error, "context canceled") || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 1 {
 		t.Fatalf("saved turn = %#v", summary)
 	}
 }

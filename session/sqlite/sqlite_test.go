@@ -2,12 +2,14 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lgxz/dora"
@@ -218,6 +220,48 @@ func TestStoreCommitsFailedTurn(t *testing.T) {
 	}
 }
 
+func TestStoreCommitsCanceledTurn(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	turn := dora.NewTurn("keep working")
+	round := dora.Round{
+		Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}}},
+		Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "complete output"}},
+	}
+	if err := turn.AppendRound(round, "provider-state"); err != nil {
+		t.Fatal(err)
+	}
+	cause := fmt.Errorf("dora: generate response: %w", context.Canceled)
+	id, err := store.CommitCanceled(ctx, turn, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns.Turns) != 1 {
+		t.Fatalf("turns = %#v", turns.Turns)
+	}
+	summary := turns.Turns[0]
+	if summary.ID != id || summary.Status != session.TurnStatusCanceled || summary.Error != cause.Error() || summary.Result != "" || summary.Usage != nil || summary.RoundCount != 1 {
+		t.Fatalf("turn summary = %#v", summary)
+	}
+	if _, err := store.CommitCanceled(ctx, dora.NewTurn("other error"), errors.New("other")); err == nil {
+		t.Fatal("expected non-cancellation error to be rejected")
+	}
+	completed := completedTurn(t, "done", "answer", 0)
+	if _, err := store.CommitCanceled(ctx, completed, cause); err == nil {
+		t.Fatal("expected completed turn to be rejected")
+	}
+}
+
 func TestStoreReturnsNotFound(t *testing.T) {
 	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.sqlite"))
 	if err != nil {
@@ -312,6 +356,49 @@ func TestStoreRejectsVersionFiveWithoutMigration(t *testing.T) {
 	}
 	if _, err := Open(ctx, path); err == nil {
 		t.Fatal("expected unsupported schema error")
+	}
+}
+
+func TestStoreRejectsEarlierVersionSixDefinition(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE turns (
+    id INTEGER PRIMARY KEY,
+    system TEXT NOT NULL,
+    user TEXT NOT NULL,
+    result TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed')),
+    error TEXT,
+    round_count INTEGER NOT NULL,
+    usage_json TEXT,
+    committed_at TEXT NOT NULL
+);
+CREATE TABLE messages (
+    turn_id INTEGER NOT NULL,
+    round_index INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    reasoning TEXT,
+    tool_calls_json TEXT,
+    tool_call_id TEXT,
+    usage_json TEXT
+);
+PRAGMA user_version = 6;`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6 definition") {
+		t.Fatalf("error = %v, want unsupported version 6 definition", err)
 	}
 }
 

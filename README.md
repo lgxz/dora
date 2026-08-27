@@ -449,7 +449,10 @@ Progress colors use `--color=auto` by default: they are enabled when stderr is
 a terminal and `NO_COLOR` is unset. Use `--color=always` to preserve ANSI color
 when stderr is redirected, or `--color=never` to disable it. An explicit color
 mode overrides automatic terminal and environment detection; progress remains
-visible on stderr in every mode.
+visible on stderr in every mode. Before execution, progress identifies the
+resolved conversation model as `Model PROVIDER/PROFILE`; this is the effective
+selection after policy, automatic availability filtering, and `-m` overrides.
+`--quiet` suppresses this line with the rest of the progress output.
 
 Reasoning models stream their chain-of-thought before the final answer. Dora
 hides it by default because streaming it to the terminal slows runs on slow
@@ -497,18 +500,21 @@ plus all corresponding tool result messages and that model call's optional
 usage. Successfully completed turns are appended atomically. A turn
 stopped by the maximum-round limit is also saved with status `max_rounds`, its
 error, and all completed tool rounds; it has no final result or final-response
-usage. Any other failed turn is saved with status `failed`, its error, and only
-the tool rounds that completed before the failure; partial streamed model output
-is not saved. Confirming the interactive continuation prompt keeps using the
-same Turn and does not save an intermediate `max_rounds` record. Provider
-continuation is kept only while that turn runs.
+usage. Ctrl+C cancellation is saved with status `canceled`; Dora uses a separate
+short-lived commit context so canceling the run does not also cancel its session
+write. Any other failed turn is saved with status `failed`. Both retain their
+error and only the tool rounds that completed before termination; partial
+streamed model output is not saved. Confirming the interactive continuation
+prompt keeps using the same Turn and does not save an intermediate `max_rounds`
+record. Provider continuation is kept only while that turn runs.
 
 With `--session`, SQLite schema version 6 contains `turns` and `messages` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, reasoning captured on round assistant messages, and each model
 call's usage JSON. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 5 and earlier databases are rejected; start a new file). When
+(schema version 5 and earlier databases, plus development v6 files whose status
+constraint predates `canceled`, are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain

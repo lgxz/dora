@@ -76,6 +76,14 @@ func (r *Renderer) Session(path string) {
 	fmt.Fprintf(r.output, "%s Session \"%s\"\n", r.paint(blue, "⌁"), path)
 }
 
+// Model reports the resolved provider/profile used for conversation calls.
+func (r *Renderer) Model(provider, profile string) {
+	if r == nil || r.output == nil {
+		return
+	}
+	fmt.Fprintf(r.output, "%s Model %s/%s\n", r.paint(blue, "◆"), provider, profile)
+}
+
 // Observe implements dora.Observer.
 func (r *Renderer) Observe(update dora.Update) {
 	if r == nil || r.output == nil {

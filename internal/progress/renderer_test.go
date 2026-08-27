@@ -107,6 +107,15 @@ func TestRendererShowsSessionState(t *testing.T) {
 	}
 }
 
+func TestRendererShowsResolvedModel(t *testing.T) {
+	var output bytes.Buffer
+	renderer := New(&output, false, false, false)
+	renderer.Model("trust", "deepseek-v4-flash")
+	if output.String() != "◆ Model trust/deepseek-v4-flash\n" {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRendererCarriesUsageWithoutRendering(t *testing.T) {
 	// Usage is carried by UpdateMessageReceived but must not be rendered: the
 	// renderer never prints a token summary line, whether usage is present or

@@ -24,6 +24,12 @@ type Router struct {
 	imageSel selection
 }
 
+// ModelSelection identifies one resolved provider catalog entry.
+type ModelSelection struct {
+	Provider string
+	Profile  string
+}
+
 // New resolves and caches the text and image selections from the catalog, then
 // constructs (and caches) the text model. The image model is constructed
 // transiently on each View call.
@@ -64,6 +70,18 @@ func (r *Router) SetThinking(thinking *string) error {
 	}
 	r.textModel = model
 	return nil
+}
+
+// TextSelection returns the provider and profile selected for conversation
+// model calls after all policy constraints and CLI overrides are applied.
+func (r *Router) TextSelection() ModelSelection {
+	if r == nil {
+		return ModelSelection{}
+	}
+	return ModelSelection{
+		Provider: r.textSel.provider.Name,
+		Profile:  r.textSel.profile.Name,
+	}
 }
 
 // Generate delegates to the cached text model.

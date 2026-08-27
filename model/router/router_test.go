@@ -63,6 +63,9 @@ func TestNewCachesTextModel(t *testing.T) {
 	if constructed != 1 {
 		t.Fatalf("constructed = %d after generates, want 1", constructed)
 	}
+	if selection := r.TextSelection(); selection.Provider != "alpha" || selection.Profile != "text" {
+		t.Fatalf("text selection = %#v", selection)
+	}
 }
 
 func TestGenerateStreamPassthrough(t *testing.T) {

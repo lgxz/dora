@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lgxz/dora"
@@ -111,6 +112,21 @@ func (s *Store) CommitFailed(ctx context.Context, turn *dora.Turn, cause error) 
 		return 0, errors.New("failed turn requires an error")
 	}
 	return s.commitTurn(ctx, turn, session.TurnStatusFailed, "", cause.Error(), nil)
+}
+
+// CommitCanceled atomically appends an incomplete turn stopped by context
+// cancellation. Only complete assistant/tool rounds are stored.
+func (s *Store) CommitCanceled(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("sqlite session is not initialized")
+	}
+	if turn == nil || turn.Completed() {
+		return 0, errors.New("cannot commit a completed turn as canceled")
+	}
+	if !errors.Is(cause, context.Canceled) {
+		return 0, errors.New("canceled turn requires context.Canceled")
+	}
+	return s.commitTurn(ctx, turn, session.TurnStatusCanceled, "", cause.Error(), nil)
 }
 
 func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
@@ -334,6 +350,13 @@ func (s *Store) validateSchema(ctx context.Context) error {
 			return fmt.Errorf("validate sqlite session schema: %w", err)
 		}
 	}
+	var turnsDefinition string
+	if err := s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).Scan(&turnsDefinition); err != nil {
+		return fmt.Errorf("validate sqlite session schema: read turns definition: %w", err)
+	}
+	if !strings.Contains(turnsDefinition, "'canceled'") {
+		return fmt.Errorf("unsupported sqlite session schema version %d definition", schemaVersion)
+	}
 	return nil
 }
 
@@ -343,12 +366,12 @@ var schemaStatements = []string{
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
-		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed')),
+		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed', 'canceled')),
 		error TEXT,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
 		usage_json TEXT,
 		committed_at TEXT NOT NULL,
-		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed') AND error IS NOT NULL)),
+		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed', 'canceled') AND error IS NOT NULL)),
 		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
     )`,
 	`CREATE TABLE messages (

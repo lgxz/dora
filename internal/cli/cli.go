@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -22,6 +23,7 @@ import (
 )
 
 const maxStdinBytes = 16 << 20
+const sessionCommitTimeout = 5 * time.Second
 
 type updater interface {
 	Update(context.Context) (update.Result, error)
@@ -112,6 +114,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
+	if observer != nil {
+		selection := model.TextSelection()
+		observer.Model(selection.Provider, selection.Profile)
+	}
 	// Command jobs are external processes and may outlive Dora; Task jobs are
 	// in-process and are lost on exit. Silenced by --quiet.
 	defer func() {
@@ -155,7 +161,15 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 		if err != nil {
 			if outcome.maxRoundsErr == nil && sessionStore != nil {
-				if _, commitErr := sessionStore.CommitFailed(ctx, turn, err); commitErr != nil {
+				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), sessionCommitTimeout)
+				var commitErr error
+				if errors.Is(err, context.Canceled) {
+					_, commitErr = sessionStore.CommitCanceled(commitCtx, turn, err)
+				} else {
+					_, commitErr = sessionStore.CommitFailed(commitCtx, turn, err)
+				}
+				cancelCommit()
+				if commitErr != nil {
 					return commitErr
 				}
 			}

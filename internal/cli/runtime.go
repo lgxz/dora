@@ -119,7 +119,7 @@ func openSession(ctx context.Context, path string) (*sqlitesession.Store, error)
 	return store, nil
 }
 
-func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) dora.Observer {
+func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) *progress.Renderer {
 	if quiet {
 		return nil
 	}
