@@ -20,10 +20,10 @@ for interacting with the dora CLI.
 
 ## Benchmark Results
 
-dora is evaluated on [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench-2.1)
-(89 tasks) using the `deepseek-v4-flash` model. The table below tracks the
-mean pass rate across evaluation runs as dora evolves:
+dora is evaluated on [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench-2.1)(89 tasks). 
+The table below tracks the mean pass rate across evaluation runs as dora evolves:
 
+### deepseek-v4-flash (thinging disabled)
 | Run | Date | Mean | Passed | Notes |
 |-----|------|------|--------|-------|
 | 1 | 2026-08-12 | 0.573 | 51/89 | Baseline |
@@ -32,6 +32,14 @@ mean pass rate across evaluation runs as dora evolves:
 | 4 | 2026-08-14 | 0.607 | 54/89 | Background job support |
 | 5 | 2026-08-14 | 0.618 | 55/89 | System prompt |
 | 6 | 2026-08-14 | 0.685 | 61/89 | read/write/edit tools |
+
+### deepseek-v4-pro (thinging: high)
+
+| Run | Date | Mean | Notes |
+|-----|------|------|--------|
+| 1 | 2026-08-28 | 0.787 |  |
+
+https://hub.harborframework.com/jobs/747f9a67-ed3a-498b-a70e-6786a70eb8a5
 
 ## Scope
 
