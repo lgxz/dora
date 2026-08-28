@@ -59,9 +59,9 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 	}
 	if opts.thinking != "" {
 		switch opts.thinking {
-		case "off", "minimal", "low", "medium", "high":
+		case "off", "minimal", "low", "medium", "high", "xhigh", "max":
 		default:
-			return config.Config{}, nil, errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high"`)
+			return config.Config{}, nil, errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high", "xhigh", "max"`)
 		}
 		value := opts.thinking
 		if err := r.SetThinking(&value); err != nil {

@@ -386,6 +386,21 @@ providers:
 	}
 }
 
+func TestLoadAcceptsExtendedThinkingValues(t *testing.T) {
+	for _, value := range []string{"xhigh", "max"} {
+		t.Run(value, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, "providers:\n  - name: deepseek\n    profiles: [{name: model, thinking: "+value+"}]\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			thinking := cfg.Providers[0].Profiles[0].Thinking
+			if thinking == nil || *thinking != value {
+				t.Fatalf("thinking = %v, want %q", thinking, value)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsDuplicateProviderAndModelNames(t *testing.T) {
 	t.Run("provider", func(t *testing.T) {
 		_, err := Load(writeConfig(t, `

@@ -342,25 +342,25 @@ complete Turn remains unchanged for persistence, and a failed summary never
 falls back to deleting or locally truncating history.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
-of `off`, `minimal`, `low`, `medium`, or `high`. It has no default: when
+of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. It has no default: when
 omitted, no value is sent and the provider uses its own reasoning default.
 Support varies by provider, and unsupported values are silently ignored rather
 than causing an error:
 
-- **openai**: on the Responses API all of `off`→`none`, `minimal`, `low`,
-  `medium`, and `high` are sent; on Chat Completions `minimal`–`high` are sent
+- **openai**: on the Responses API all values are sent (`off` becomes `none`);
+  on Chat Completions `minimal`–`max` are sent
   as `reasoning_effort`, but `off` is not supported (gpt-5's floor is
   `minimal`) and is ignored.
-- **deepseek**: `low`/`medium`/`high` are sent on both APIs, `minimal` is not
+- **deepseek**: `low` through `max` are sent on both APIs, `minimal` is not
   supported and is ignored, and `off` is sent as `thinking.type: disabled` on
   Chat Completions or `reasoning.effort: none` on Responses.
 - **trust**: treated best-effort like OpenAI on both APIs.
-- **openrouter**: `minimal`–`high` are sent as `reasoning_effort` on Chat
+- **openrouter**: `minimal`–`max` are sent as `reasoning_effort` on Chat
   Completions, and `off` is sent as `reasoning_effort: none`.
 
 Because a setting may simply be dropped, treat `thinking` as a hint rather
 than a guarantee. For one invocation, `--thinking` overrides the selected
-model's setting with one of `off`, `minimal`, `low`, `medium`, or `high`:
+model's setting with one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`:
 
 ```sh
 ./dora --thinking high "Solve a hard problem"

@@ -37,7 +37,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.SetOutput(stderr)
 	flags.StringVar(&opts.configPath, "config", "", "path to YAML configuration")
 	flags.StringVar(&opts.model, "model", "", "override the configured model as PROVIDER/PROFILE (profile may be empty)")
-	flags.StringVar(&opts.thinking, "thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high)")
+	flags.StringVar(&opts.thinking, "thinking", "", "override the configured model thinking mode (off|minimal|low|medium|high|xhigh|max)")
 	flags.Func("max-rounds", "override the maximum model-tool rounds per segment", func(value string) error {
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {

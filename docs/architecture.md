@@ -292,9 +292,9 @@ effective request limit to the correct key:
 meaning "no explicit cap."
 
 Thinking-mode reasoning effort follows the same pattern. The CLI maps a single
-`config.Model.Thinking` value (`off | minimal | low | medium | high`, nil by
+`config.Model.Thinking` value (`off | minimal | low | medium | high | xhigh | max`, nil by
 default) to each protocol's control: Chat Completions emits `reasoning_effort`
-for `minimal`–`high` and DeepSeek's `thinking.type: disabled` for `off`;
+for `minimal`–`max` and DeepSeek's `thinking.type: disabled` for `off`;
 Responses emits a nested `reasoning` object with `effort: none` for `off` and
 the effort value otherwise. The mapping is provider-aware and drops values a
 provider does not support (for example DeepSeek ignores `minimal`; OpenAI Chat

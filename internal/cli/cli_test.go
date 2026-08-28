@@ -659,16 +659,16 @@ func TestRunIgnoresDeepSeekChatThinkingMinimal(t *testing.T) {
 	}
 }
 
-func TestRunThinkingFlagOverridesChatConfig(t *testing.T) {
-	// --thinking low overrides an openai chat config with no config thinking,
-	// so the outgoing body gets reasoning_effort: low and no nested reasoning.
+func TestRunThinkingFlagOverridesChatConfigWithMax(t *testing.T) {
+	// --thinking max overrides an openai chat config with no config thinking,
+	// so the outgoing body gets reasoning_effort: max and no nested reasoning.
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["reasoning_effort"] != "low" {
-			t.Fatalf("reasoning_effort = %#v, want \"low\"", body["reasoning_effort"])
+		if body["reasoning_effort"] != "max" {
+			t.Fatalf("reasoning_effort = %#v, want \"max\"", body["reasoning_effort"])
 		}
 		if _, exists := body["reasoning"]; exists {
 			t.Fatalf("unexpected reasoning in %#v", body)
@@ -686,7 +686,7 @@ model:
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := Run(context.Background(), []string{"--thinking", "low", "--config", configPath, "hello"}, IO{
+	if err := Run(context.Background(), []string{"--thinking", "max", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          &stderr,
@@ -695,7 +695,7 @@ model:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "thinking=low") {
+	if !strings.Contains(stderr.String(), "thinking=max") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
@@ -762,7 +762,7 @@ model:
 	if err == nil {
 		t.Fatal("expected an error for invalid --thinking value")
 	}
-	if !strings.Contains(err.Error(), `--thinking must be one of "off", "minimal", "low", "medium", "high"`) {
+	if !strings.Contains(err.Error(), `--thinking must be one of "off", "minimal", "low", "medium", "high", "xhigh", "max"`) {
 		t.Fatalf("error = %q, want the allowed set", err.Error())
 	}
 }

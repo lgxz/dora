@@ -360,9 +360,9 @@ func (cfg *Config) resolveProviders() error {
 			}
 			if m.Thinking != nil {
 				switch *m.Thinking {
-				case "off", "minimal", "low", "medium", "high":
+				case "off", "minimal", "low", "medium", "high", "xhigh", "max":
 				default:
-					return fmt.Errorf(`providers[%d].profiles[%d].thinking must be one of "off", "minimal", "low", "medium", "high"`, i, j)
+					return fmt.Errorf(`providers[%d].profiles[%d].thinking must be one of "off", "minimal", "low", "medium", "high", "xhigh", "max"`, i, j)
 				}
 			}
 			for _, capability := range m.Capabilities {
