@@ -63,8 +63,15 @@ func TestNewCachesTextModel(t *testing.T) {
 	if constructed != 1 {
 		t.Fatalf("constructed = %d after generates, want 1", constructed)
 	}
-	if selection := r.TextSelection(); selection.Provider != "alpha" || selection.Profile != "text" {
+	if selection := r.TextSelection(); selection.Provider != "alpha" || selection.Profile != "text" || selection.Thinking != "default" {
 		t.Fatalf("text selection = %#v", selection)
+	}
+	thinking := "high"
+	if err := r.SetThinking(&thinking); err != nil {
+		t.Fatal(err)
+	}
+	if selection := r.TextSelection(); selection.Thinking != "high" {
+		t.Fatalf("text selection after override = %#v", selection)
 	}
 }
 

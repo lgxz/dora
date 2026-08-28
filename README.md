@@ -450,9 +450,11 @@ a terminal and `NO_COLOR` is unset. Use `--color=always` to preserve ANSI color
 when stderr is redirected, or `--color=never` to disable it. An explicit color
 mode overrides automatic terminal and environment detection; progress remains
 visible on stderr in every mode. Before execution, progress identifies the
-resolved conversation model as `Model PROVIDER/PROFILE`; this is the effective
-selection after policy, automatic availability filtering, and `-m` overrides.
-`--quiet` suppresses this line with the rest of the progress output.
+resolved conversation model as `Model PROVIDER/PROFILE · thinking=VALUE`; these
+are the effective settings after policy, automatic availability filtering, and
+CLI overrides. `thinking=default` means no thinking value is explicitly sent
+to the provider. `--quiet` suppresses this line with the rest of the progress
+output.
 
 Reasoning models stream their chain-of-thought before the final answer. Dora
 hides it by default because streaming it to the terminal slows runs on slow

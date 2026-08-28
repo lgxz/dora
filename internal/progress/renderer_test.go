@@ -110,8 +110,8 @@ func TestRendererShowsSessionState(t *testing.T) {
 func TestRendererShowsResolvedModel(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false, false)
-	renderer.Model("trust", "deepseek-v4-flash")
-	if output.String() != "◆ Model trust/deepseek-v4-flash\n" {
+	renderer.Model("trust", "deepseek-v4-flash", "high")
+	if output.String() != "◆ Model trust/deepseek-v4-flash · thinking=high\n" {
 		t.Fatalf("output = %q", output.String())
 	}
 }

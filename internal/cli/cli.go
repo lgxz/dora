@@ -116,7 +116,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
 	if observer != nil {
 		selection := model.TextSelection()
-		observer.Model(selection.Provider, selection.Profile)
+		observer.Model(selection.Provider, selection.Profile, selection.Thinking)
 	}
 	// Command jobs are external processes and may outlive Dora; Task jobs are
 	// in-process and are lost on exit. Silenced by --quiet.

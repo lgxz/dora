@@ -237,7 +237,7 @@ Current execution semantics:
 3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
 4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry, and validate `--workdir` as an existing directory before resolving it to an absolute path.
 5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
-6. Create the concrete model adapter based on the selected profile's effective API and model, then report the resolved conversation provider/profile on stderr unless `--quiet` is active.
+6. Create the concrete model adapter based on the selected profile's effective API and model, then report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
 9. Run the Agent with the resolved working directory, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.

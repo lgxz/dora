@@ -28,6 +28,7 @@ type Router struct {
 type ModelSelection struct {
 	Provider string
 	Profile  string
+	Thinking string
 }
 
 // New resolves and caches the text and image selections from the catalog, then
@@ -78,9 +79,14 @@ func (r *Router) TextSelection() ModelSelection {
 	if r == nil {
 		return ModelSelection{}
 	}
+	thinking := "default"
+	if r.textSel.profile.Thinking != nil {
+		thinking = *r.textSel.profile.Thinking
+	}
 	return ModelSelection{
 		Provider: r.textSel.provider.Name,
 		Profile:  r.textSel.profile.Name,
+		Thinking: thinking,
 	}
 }
 

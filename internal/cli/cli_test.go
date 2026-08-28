@@ -685,14 +685,18 @@ model:
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"--quiet", "--thinking", "low", "--config", configPath, "hello"}, IO{
+	var stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"--thinking", "low", "--config", configPath, "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
-		Stderr:          io.Discard,
+		Stderr:          &stderr,
 		StdinIsTerminal: true,
 		HTTPClient:      httpClient,
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "thinking=low") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
