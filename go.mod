@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/hashicorp/memberlist v0.6.0
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7

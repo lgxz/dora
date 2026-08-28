@@ -400,6 +400,13 @@ func providerAPIKeyEnvironment(name string) string {
 	return result.String()
 }
 
+// APIKeyEnvironment returns the conventional API key environment variable for
+// a provider name. It is shared by interactive configuration and config
+// resolution so both surfaces always derive the same key.
+func APIKeyEnvironment(name string) string {
+	return providerAPIKeyEnvironment(name)
+}
+
 func validateAPI(api, field string) error {
 	switch api {
 	case "chat_completions", "responses":

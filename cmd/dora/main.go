@@ -59,6 +59,10 @@ func main() {
 		TerminalProgress: stderrInfo.Mode()&os.ModeCharDevice != 0,
 		ColorProgress: stderrInfo.Mode()&os.ModeCharDevice != 0 &&
 			os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
+		ReadSecret: func() (string, error) {
+			value, err := term.ReadPassword(int(os.Stdin.Fd()))
+			return string(value), err
+		},
 	})
 	if err != nil {
 		report(err)

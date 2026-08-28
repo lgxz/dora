@@ -252,6 +252,31 @@ func (m *Manager) Kill(id string) (Snapshot, error) {
 	return job.snapshot(false), nil
 }
 
+// CancelAll requests cancellation of every running job. It does not wait for
+// cooperative Tasks to return; callers may observe them as cancelling until
+// their goroutines finish.
+func (m *Manager) CancelAll() {
+	m.mu.Lock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
+	m.mu.Unlock()
+	for _, job := range jobs {
+		job.mu.Lock()
+		var cancel context.CancelFunc
+		if job.status == StatusRunning {
+			job.killed = true
+			job.status = StatusCancelling
+			cancel = job.cancel
+		}
+		job.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+}
+
 // List returns concurrency-safe snapshots of all tracked jobs, ordered by ID.
 func (m *Manager) List() []Snapshot {
 	m.mu.Lock()

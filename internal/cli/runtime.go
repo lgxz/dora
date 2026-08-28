@@ -19,13 +19,25 @@ import (
 )
 
 func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *router.Router, error) {
+	cfg, err := loadConfig(opts)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	r, err := buildRuntimeRouter(opts, cfg, httpClient)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	return cfg, r, nil
+}
+
+func loadConfig(opts options) (config.Config, error) {
 	configPath := opts.configPath
 	configExplicit := configPath != ""
 	if configPath == "" {
 		var err error
 		configPath, err = paths.ConfigFile()
 		if err != nil {
-			return config.Config{}, nil, err
+			return config.Config{}, err
 		}
 	}
 	cfg, err := config.Load(configPath)
@@ -33,17 +45,36 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 		cfg, err = config.Default()
 	}
 	if err != nil {
-		return config.Config{}, nil, err
+		return config.Config{}, err
 	}
+	if opts.model != "" {
+		if _, _, err := parseModelSpec(opts.model); err != nil {
+			return config.Config{}, fmt.Errorf("invalid -m %q (expected PROVIDER or PROVIDER/PROFILE): %w", opts.model, err)
+		}
+	}
+	if opts.thinking != "" {
+		switch opts.thinking {
+		case "off", "minimal", "low", "medium", "high", "xhigh", "max":
+		default:
+			return config.Config{}, errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high", "xhigh", "max"`)
+		}
+	}
+	if opts.maxRoundsSet {
+		cfg.Agent.MaxRounds = opts.maxRounds
+	}
+	return cfg, nil
+}
+
+func buildRuntimeRouter(opts options, cfg config.Config, httpClient *http.Client) (*router.Router, error) {
 	cat, err := registry.NewCatalog(registryFromConfig(cfg, httpClient))
 	if err != nil {
-		return config.Config{}, nil, err
+		return nil, err
 	}
 	textConstraints := buildTextConstraints(cfg)
 	if opts.model != "" {
 		provider, profile, err := parseModelSpec(opts.model)
 		if err != nil {
-			return config.Config{}, nil, fmt.Errorf("invalid -m %q (expected PROVIDER or PROVIDER/PROFILE): %w", opts.model, err)
+			return nil, fmt.Errorf("invalid -m %q (expected PROVIDER or PROVIDER/PROFILE): %w", opts.model, err)
 		}
 		textConstraints.Provider = provider
 		textConstraints.Profile = profile
@@ -55,23 +86,15 @@ func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *r
 	}
 	r, err := router.New(cat, textConstraints, imageConstraints)
 	if err != nil {
-		return config.Config{}, nil, err
+		return nil, err
 	}
 	if opts.thinking != "" {
-		switch opts.thinking {
-		case "off", "minimal", "low", "medium", "high", "xhigh", "max":
-		default:
-			return config.Config{}, nil, errors.New(`--thinking must be one of "off", "minimal", "low", "medium", "high", "xhigh", "max"`)
-		}
 		value := opts.thinking
 		if err := r.SetThinking(&value); err != nil {
-			return config.Config{}, nil, err
+			return nil, err
 		}
 	}
-	if opts.maxRoundsSet {
-		cfg.Agent.MaxRounds = opts.maxRounds
-	}
-	return cfg, r, nil
+	return r, nil
 }
 
 // buildTextConstraints constructs the text model constraints from the

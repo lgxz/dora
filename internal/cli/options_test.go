@@ -38,6 +38,26 @@ func TestParseOptionsWorkdir(t *testing.T) {
 	}
 }
 
+func TestParseOptionsACP(t *testing.T) {
+	opts, err := parseOptions([]string{"--acp", "--no-skills"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.acp || !opts.noSkills || len(opts.promptArgs) != 0 {
+		t.Fatalf("options = %#v", opts)
+	}
+}
+
+func TestParseOptionsSetup(t *testing.T) {
+	opts, err := parseOptions([]string{"--setup", "--config", "config.yaml"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.setup || opts.configPath != "config.yaml" {
+		t.Fatalf("options = %#v", opts)
+	}
+}
+
 func TestParseOptionsColor(t *testing.T) {
 	tests := []struct {
 		name      string

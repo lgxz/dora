@@ -215,6 +215,27 @@ func TestKillTaskCancelsItsContext(t *testing.T) {
 	}
 }
 
+func TestCancelAllCancelsRunningJobs(t *testing.T) {
+	m := New()
+	started := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		m.StartTask("task", "wait", func(ctx context.Context) (string, error) {
+			started <- struct{}{}
+			<-ctx.Done()
+			return "", ctx.Err()
+		})
+	}
+	<-started
+	<-started
+	m.CancelAll()
+	for _, snapshot := range m.List() {
+		done, ok := m.Poll(snapshot.ID, time.Second)
+		if !ok || done.Status != StatusKilled {
+			t.Fatalf("job = %#v, ok = %v", done, ok)
+		}
+	}
+}
+
 func TestStartTaskContextKeepsValuesWithoutParentCancellation(t *testing.T) {
 	type key struct{}
 	parent, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "value"))

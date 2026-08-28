@@ -20,11 +20,13 @@ type options struct {
 	showVersion  bool
 	update       bool
 	forceUpdate  bool
+	setup        bool
 	noSkills     bool
 	quiet        bool
 	color        string
 	reasoning    bool
 	events       bool
+	acp          bool
 	sessionPath  string
 	workdir      string
 	promptArgs   []string
@@ -50,6 +52,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.showVersion, "version", false, "print version information")
 	flags.BoolVar(&opts.update, "update", false, "update a standalone installation")
 	flags.BoolVar(&opts.forceUpdate, "force", false, "force update, bypassing the standalone-install marker and version checks")
+	flags.BoolVar(&opts.setup, "setup", false, "interactively configure a model provider and API key")
 	flags.BoolVar(&opts.noSkills, "no-skills", false, "disable all skills")
 	flags.BoolVar(&opts.quiet, "quiet", false, "hide run progress, only print the final result to stdout.")
 	flags.Func("color", "progress color mode: auto, always, or never (default auto)", func(value string) error {
@@ -63,6 +66,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	})
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
+	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdin/stdout")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query saved turns")
 	flags.StringVar(&opts.workdir, "workdir", "", "working directory used to resolve relative tool paths")
 	flags.Usage = func() {
@@ -83,6 +87,15 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 }
 
 func handleImmediate(ctx context.Context, opts options, streams IO) (bool, error) {
+	if opts.setup {
+		if opts.showVersion || opts.update {
+			return true, errors.New("--setup cannot be combined with --version or --update")
+		}
+		if len(opts.promptArgs) != 0 {
+			return true, errors.New("--setup does not accept a prompt")
+		}
+		return true, runSetup(opts, streams)
+	}
 	if opts.showVersion {
 		version := streams.Version
 		if version == "" {

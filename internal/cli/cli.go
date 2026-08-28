@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/app"
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/events"
 	"github.com/lgxz/dora/internal/job"
@@ -23,7 +23,6 @@ import (
 )
 
 const maxStdinBytes = 16 << 20
-const sessionCommitTimeout = 5 * time.Second
 
 type updater interface {
 	Update(context.Context) (update.Result, error)
@@ -45,6 +44,9 @@ type IO struct {
 	ColorProgress    bool
 	HTTPClient       *http.Client
 	Updater          updater
+	// ReadSecret reads one secret without echo when stdin is an interactive
+	// terminal. Tests and non-terminal callers may leave it nil.
+	ReadSecret func() (string, error)
 }
 
 // Run executes the dora command.
@@ -59,7 +61,19 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if handled, err := handleImmediate(ctx, opts, streams); handled {
 		return err
 	}
+	if opts.acp {
+		if err := validateACPOptions(opts); err != nil {
+			return err
+		}
+	}
 
+	if opts.acp {
+		cfg, err := loadConfig(opts)
+		if err != nil {
+			return err
+		}
+		return runACP(ctx, opts, cfg, streams)
+	}
 	cfg, model, err := loadRuntimeConfig(opts, streams.HTTPClient)
 	if err != nil {
 		return err
@@ -96,10 +110,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if err != nil {
 		return err
 	}
-	defer sessionStore.Close()
 	jobManager := job.New()
 	extraTools, err := buildEventTools(source)
 	if err != nil {
+		_ = sessionStore.Close()
 		return err
 	}
 	agent, err := buildAgent(cfg, agentDependencies{
@@ -111,8 +125,15 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		systemPrompt: systemPrompt(cfg.Agent),
 	})
 	if err != nil {
+		_ = sessionStore.Close()
 		return err
 	}
+	appSession, err := app.NewSession(agent, sessionStore, jobManager, workdir)
+	if err != nil {
+		_ = sessionStore.Close()
+		return err
+	}
+	defer appSession.Close()
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
 	if observer != nil {
 		selection := model.TextSelection()
@@ -121,7 +142,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	// Command jobs are external processes and may outlive Dora; Task jobs are
 	// in-process and are lost on exit. Silenced by --quiet.
 	defer func() {
-		commands, tasks := jobManager.ActiveCounts()
+		commands, tasks := appSession.ActiveCounts()
 		if commands > 0 {
 			info(observer, "background jobs are still running; they keep running after dora exits")
 		}
@@ -150,28 +171,17 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		if observer != nil {
 			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
 		}
-		turn := dora.NewTurn(prompt)
-		outcome, err := runTurn(ctx, agent, turn, observer, streams, dora.RunOptions{
-			WorkingDirectory: workdir,
-		})
-		if outcome.maxRoundsErr != nil && sessionStore != nil {
-			if _, commitErr := sessionStore.CommitMaxRounds(ctx, turn, outcome.maxRoundsErr); commitErr != nil {
-				return commitErr
+		promptOptions := app.PromptOptions{Observer: observer}
+		if streams.StdinIsTerminal && streams.TerminalProgress {
+			input := bufio.NewReader(streams.Stdin)
+			promptOptions.Continue = func(_ context.Context, _ *dora.Turn, _ error) (bool, error) {
+				return confirmContinue(input, streams.Stderr)
 			}
 		}
+		result, err := appSession.Prompt(ctx, prompt, promptOptions)
 		if err != nil {
-			if outcome.maxRoundsErr == nil && sessionStore != nil {
-				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), sessionCommitTimeout)
-				var commitErr error
-				if errors.Is(err, context.Canceled) {
-					_, commitErr = sessionStore.CommitCanceled(commitCtx, turn, err)
-				} else {
-					_, commitErr = sessionStore.CommitFailed(commitCtx, turn, err)
-				}
-				cancelCommit()
-				if commitErr != nil {
-					return commitErr
-				}
+			if app.IsPersistenceError(err) {
+				return err
 			}
 			if serverMode {
 				info(observer, "run turn: %v", err)
@@ -179,16 +189,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 			return err
 		}
-		if !serverMode && !outcome.completed {
+		if !serverMode && !result.Completed {
 			return nil
 		}
-		if outcome.completed && sessionStore != nil {
-			if _, err := sessionStore.CommitTurn(ctx, turn); err != nil {
-				return err
-			}
-		}
-		result, _ := turn.Result()
-		if err := writeAnswer(streams, result); err != nil {
+		if err := writeAnswer(streams, result.Content); err != nil {
 			return err
 		}
 

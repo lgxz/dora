@@ -67,7 +67,9 @@ Key constraints on dependency direction:
 | --- | --- | --- |
 | `dora` | Domain abstractions for the agent loop, messages, models, tools, and observers | `New`, `NewWithConfig`, `Agent.Run*`, `Model`, `Tool`, `Observer` |
 | `cmd/dora` | Process startup, signal handling, terminal capability detection, final error output | `main` |
-| `internal/cli` | Argument parsing, dependency assembly, turn execution, and terminal turn commit | `Run(context.Context, []string, IO)` |
+| `internal/cli` | Argument parsing, dependency assembly, terminal presentation, and frontend selection | `Run(context.Context, []string, IO)` |
+| `internal/app` | Frontend-neutral prompt lifecycle, cancellation, terminal-state persistence, and per-session job ownership | `NewSession`, `Session.Prompt`, `Session.Cancel`, `Session.Close`, `Session.Shutdown` |
+| `internal/acp` | ACP v1 stdio transport, capability handling, session routing, and Observer-to-protocol conversion | `Serve` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
@@ -230,22 +232,62 @@ Current execution semantics:
 
 ## CLI Run Flow
 
-`internal/cli.Run` is responsible for the complete lifecycle of one command:
+`internal/cli.Run` is the composition root and selects either the terminal/event
+frontend or ACP:
 
-1. Parse arguments; `--version` and `-update` complete and exit before reading configuration or the prompt.
-2. For a normal Agent run, compose the user prompt from command arguments and standard input.
-3. Resolve the default or explicit configuration path; when the default file does not exist, use the built-in DeepSeek configuration, and when it does exist, strictly load the YAML. An explicitly specified configuration file that does not exist still reports an error.
-4. Apply one-shot overrides such as `--max-rounds` and `--thinking` to the selected catalog entry, and validate `--workdir` as an existing directory before resolving it to an absolute path.
+1. Parse arguments; `--version`, `-update`, and `--setup` complete and exit before reading runtime configuration or the prompt. Setup updates only the selected YAML file's `env` and `policy.text`, validates the complete result, and preserves other fields and comments.
+2. Resolve and load the default or explicit configuration and validate one-shot model/thinking/round overrides.
+3. In `--acp` mode, attempt to construct the selected model router and start the protocol frontend; absence of a selectable model is retained as an unauthenticated state rather than a startup failure. No CLI prompt, event source, or shared CLI session is created. Normal CLI mode requires the router immediately.
+4. For a normal Agent run, validate `--workdir`, construct the event source, and compose the user prompt from command arguments and standard input.
 5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
-6. Create the concrete model adapter based on the selected profile's effective API and model, then report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
+6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
-8. Add the default-enabled task tool, construct an immutable `dora.Agent` with its system prompt, and create a fresh `dora.Turn` from the user input.
-9. Run the Agent with the resolved working directory, reusing only that Turn if the user confirms continuation after `ErrMaxRounds`.
-10. On success, atomically append the completed Turn to SQLite and write its final text to stdout. If execution stops at the maximum-round limit, append a `max_rounds` Turn before returning, declining, or continuing the event loop. Context cancellation (including Ctrl+C) is appended as `canceled` using a detached five-second commit context; any other run error is appended as `failed`. Both store the error and completed tool rounds before returning or continuing the event loop; partial streamed model output is not retained on the Turn and is not written.
+8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. On success it appends `completed`; maximum rounds append `max_rounds`; context cancellation appends `canceled` using a detached five-second commit context; other errors append `failed`.
+10. The terminal frontend writes completed text to stdout or continues its event loop.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
 `cli.IO` injects the standard streams, build version, terminal capabilities, HTTP client, and test updater, allowing the CLI to be tested without depending on process-global state.
+
+The setup flow selects a built-in provider and optional profile. It reads the
+API key without terminal echo, writes the configuration through a validated
+temporary file, and installs it with owner-only permissions on Unix. Existing
+environment variables keep their normal precedence over config-local values.
+
+## ACP Frontend
+
+`internal/acp` uses the pinned `github.com/coder/acp-go-sdk` v1 transport and
+types. `Serve` owns one protocol connection and a concurrency-safe map from ACP
+session IDs to `app.Session` instances. `session/new` requires an absolute,
+existing `cwd` and constructs an isolated in-memory SQLite store, JobManager,
+tool set, and Agent. The configured model router is immutable after startup and
+is shared across those Agents. When no text model is selectable, initialization
+still succeeds so clients can discover terminal setup; session creation returns
+ACP `Authentication required` until setup completes and the client reconnects.
+
+ACP prompt text and resource links are converted into one Dora user string.
+Images, audio, embedded resources, MCP servers, and additional directories are
+not advertised or accepted. Each prompt calls `app.Session.Prompt`; the
+application layer prevents overlapping prompts within one session while
+allowing different sessions to run concurrently.
+
+An asynchronous ordered Observer adapter maps content/reasoning deltas to
+`agent_message_chunk`/`agent_thought_chunk`, tool start and finish events to
+`tool_call`/`tool_call_update`, and flushes those notifications before the
+prompt response. Transport failures are retained while the adapter continues
+draining its bounded queue so a disconnected client cannot deadlock the Agent.
+Normal completion, cancellation, and `ErrMaxRounds` map to `end_turn`,
+`cancelled`, and `max_turn_requests`. `session/cancel` cancels the active prompt;
+advertised `session/close` additionally cancels background jobs and closes the
+ephemeral history store. Disconnect shuts down every remaining ACP session.
+
+During initialization, clients advertising terminal authentication receive a
+`dora-setup` auth method with `--setup` arguments. The Registry validator's
+legacy `_meta.terminal-auth` marker is accepted alongside the standardized
+`clientCapabilities.auth.terminal` field. This configures provider credentials
+out of band; Dora does not implement protocol-driven `authenticate` or
+`logout`.
 
 `internal/update` only updates binaries marked by the standalone installer writing a marker in the same directory. It fetches the latest stable Release from GitHub, selects the archive for the running platform, verifies the SHA-256 using `checksums.txt`, and stages and runs the new version's `--version` in the same directory. After successful verification, it switches the binary via a same-directory rename; on installation failure it attempts a rollback and uses an exclusive marker to reject concurrent updates. Development builds, manual copies, and package-manager installations are not modified.
 
@@ -466,5 +508,9 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - Session history is append-only at the turn level; individual turns are committed once after completion or terminal failure.
 - Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, and persisted to session history, but are not rendered.
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
-- The CLI is the composition root; as providers and tools grow, a factory/registry could be extracted, but at the current scale keeping an explicit switch is simpler.
-- There is currently no event bus, interactive REPL, or background daemon.
+- The CLI remains the configuration and tool composition root; `internal/app`
+  owns only frontend-neutral execution and persistence, not provider discovery.
+- ACP sessions are process-local and ephemeral. Persistent list/resume/load,
+  client-delegated filesystem/terminal operations, permissions, and MCP server
+  attachment are not implemented.
+- There is currently no interactive REPL or general event bus.

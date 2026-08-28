@@ -161,6 +161,20 @@ selection. The environment override for a policy field is
 `DORA_POLICY_IMAGE_PROFILE`); environment values take precedence over the
 config file.
 
+For an interactive first-time setup, run:
+
+```sh
+dora --setup
+```
+
+The setup flow selects one of Dora's built-in providers, stores its API key
+under the config-local `env` mapping, and sets `policy.text.provider`. Selecting
+a concrete model profile is optional; pressing Enter leaves profile selection
+automatic. Existing configuration fields and comments are preserved. The
+configuration is written to `~/.dora/config.yaml` (or the path supplied with
+`--config`) with owner-only file permissions on Unix. Process environment
+variables continue to take precedence over stored values.
+
 macOS / Linux, temporary (current terminal only):
 
 ```sh
@@ -524,6 +538,45 @@ commands, tool output, and token usage, so treat persistent files as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
+
+### Agent Client Protocol
+
+Run Dora as an ACP v1 agent over stdin/stdout:
+
+```sh
+dora --acp
+```
+
+An ACP client launches that command and exchanges newline-delimited JSON-RPC
+on its standard streams. Configuration, model selection, `--thinking`,
+`--max-rounds`, and `--no-skills` work as in the CLI. Protocol output owns
+stdout; diagnostics remain on stderr.
+
+Each `session/new` creates an isolated Agent, job manager, and in-memory SQLite
+history store. The absolute `cwd` supplied by the client becomes that session's
+tool working directory. Repeated `session/prompt` calls create independent Dora
+Turns whose earlier results remain available through the history tool. Sessions
+can run concurrently, while a single session rejects overlapping prompts.
+
+The initial ACP surface supports initialization, session creation, text and
+resource-link prompts, streamed answer and thought chunks, tool-call lifecycle
+updates, cancellation, and session close. Reaching Dora's maximum round count
+returns the ACP `max_turn_requests` stop reason. Closing a session cancels its
+active prompt and background jobs and discards its in-memory history.
+
+Clients that advertise terminal authentication receive a `Configure Dora`
+method which launches `dora --setup`. Authentication remains local: the setup
+flow configures the selected model provider and the ACP connection never
+receives the API key. Dora can complete `initialize` without a configured
+model; `session/new` returns `Authentication required` until setup is complete
+and the client reconnects.
+
+This first version does not support protocol-driven authentication/logout,
+persistent session listing/resume/load, prompt images/audio/embedded resources,
+modes, config options, client filesystem/terminal delegation, or MCP servers
+supplied by the client. Non-empty `mcpServers` and `additionalDirectories` are rejected.
+`--acp` cannot be combined with a prompt, `--session`, `--workdir`, or
+`--events`; ACP supplies its own prompts, sessions, and working directories.
 
 ### Skills
 
