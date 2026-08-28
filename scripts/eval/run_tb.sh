@@ -9,7 +9,8 @@
 #      再通过 `--ae KEY=VALUE` 注入容器内 dora 进程，绝不硬编码 key。
 #   3. 无需 session / DORA_POLICY_* —— dora 在容器内保留进度输出运行
 #      （dora -m <model_spec>），输出只写入任务日志，不管理 session 数据库、
-#      不注入策略变量。
+#      不注入策略变量。Harbor Job 配置由 dora_tb.yaml 提供，使 Hub 将 Agent
+#      显示为 aipymini，同时仍通过 dora_tb:DoraAgent 加载适配器。
 #
 # 可通过环境变量覆盖的默认值：
 #   DORA_BINARY  本地 Linux dora 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
@@ -72,13 +73,14 @@ for optional_key_var in TRUST_API_KEY DEEPSEEK_API_KEY OPENROUTER_API_KEY; do
 done
 
 # 打印即将执行的完整 harbor run 命令，便于核对。
-echo "> harbor run -d \"$DORA_DATASET\" -a dora_tb:DoraAgent --ak model=\"$DORA_MODEL\" ${agent_env_args[*]} -o \"$DORA_JOBS_DIR\" $*"
+echo "> harbor run --config \"$SCRIPT_DIR/dora_tb.yaml\" -d \"$DORA_DATASET\" -m \"$DORA_MODEL\" --ak model=\"$DORA_MODEL\" ${agent_env_args[*]} -o \"$DORA_JOBS_DIR\" $*"
 
 # 执行 Harbor Terminal-Bench 评估。
 # shellcheck disable=SC2086
 harbor run \
+  --config "$SCRIPT_DIR/dora_tb.yaml" \
   -d "$DORA_DATASET" \
-  -a dora_tb:DoraAgent \
+  -m "$DORA_MODEL" \
   --ak model="$DORA_MODEL" \
   "${agent_env_args[@]}" \
   -o "$DORA_JOBS_DIR" \

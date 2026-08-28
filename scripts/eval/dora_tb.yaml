@@ -1,0 +1,3 @@
+agents:
+  - name: aipymini
+    import_path: dora_tb:DoraAgent

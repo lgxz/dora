@@ -142,7 +142,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     @staticmethod
     @override
     def name() -> str:
-        """Static agent name, used by Harbor via ``import_path``."""
+        """Static agent name recorded in Harbor's result metadata."""
         return "aipymini"
 
     @override
