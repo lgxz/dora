@@ -12,8 +12,8 @@
 #   DORA_JOBS_DIR 结果输出目录，默认 $PWD/jobs
 #
 # 其余 Harbor 参数透传；Agent 和配置入口由本脚本管理，不可另行覆盖。
-# 以 dora_tb.yaml 为基础，在临时目录生成本次 Job 配置；命令行模型覆盖
-# agents[].model_name，不依赖 Harbor 的 -m 参数合并。可用 --print-config 核对。
+# 直接生成仅含 Agent 名称、加载路径和模型的临时 YAML，不需要静态配置文件，
+# 也不依赖 Harbor 的 -m 参数合并。其他设置通过 -n 等 Harbor 参数传入。
 
 set -euo pipefail
 
@@ -108,10 +108,9 @@ agent_env_args=(
   "--ae" "${API_KEY_VAR}=${!API_KEY_VAR}"
 )
 
-# Harbor 负责解析基础 YAML；Python 标准库只处理 JSON，不额外依赖 PyYAML。
 # 临时目录仅当前用户可访问，退出（包括失败和中断）时清理。
 job_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/dora-tb.XXXXXX")"
-job_config_path="$job_config_dir/job.json"
+job_config_path="$job_config_dir/job.yaml"
 cleanup_job_config() {
   rm -f "$job_config_path"
   rmdir "$job_config_dir"
@@ -120,26 +119,16 @@ trap cleanup_job_config EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+# YAML 单引号字符串通过双写单引号转义；模型已禁止空白和换行。
+yaml_model="$(printf '%s' "$model_spec" | sed "s/'/''/g")"
 (
   umask 077
-  harbor run --config "$SCRIPT_DIR/dora_tb.yaml" --print-config > "$job_config_path"
+  printf '%s\n' \
+    'agents:' \
+    '  - name: aipymini' \
+    '    import_path: dora_tb:DoraAgent' \
+    "    model_name: '$yaml_model'" > "$job_config_path"
 )
-python3 - "$job_config_path" "$model_spec" <<'PY'
-import json
-import sys
-
-path, model = sys.argv[1:]
-with open(path, encoding="utf-8") as source:
-    config = json.load(source)
-agents = config.get("agents", [])
-if len(agents) != 1 or agents[0].get("import_path") != "dora_tb:DoraAgent":
-    raise SystemExit("Expected exactly one dora_tb:DoraAgent in the base job config")
-agents[0]["name"] = "aipymini"
-agents[0]["model_name"] = model
-with open(path, "w", encoding="utf-8") as output:
-    json.dump(config, output, ensure_ascii=False, indent=2)
-    output.write("\n")
-PY
 
 # 不打印 --ae 或额外参数中的潜在密钥。
 echo "> harbor run --config \"$job_config_path\" (agent=aipymini, model=$model_spec)" >&2

@@ -18,35 +18,24 @@ class RunTBTests(unittest.TestCase):
         self.temp_root.mkdir()
         self.capture = self.root / "capture.json"
         self.script = Path(__file__).with_name("run_tb.sh")
-        self.base_path = self.script.with_name("dora_tb.yaml")
-        self.base_contents = self.base_path.read_bytes()
         binary_dir = self.root / "bin"
         binary_dir.mkdir()
         harbor = binary_dir / "harbor"
         harbor.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, sys\n"
+            "import json, os, sys, yaml\n"
             "from pathlib import Path\n"
             "args = sys.argv[1:]\n"
             "config_path = Path(args[args.index('--config') + 1])\n"
-            "if config_path.suffix == '.yaml':\n"
-            "    assert args[-1] == '--print-config'\n"
-            "    if os.environ.get('TB_TEST_FAILURE') == 'parse':\n"
-            "        sys.exit(19)\n"
-            "    print(json.dumps({\n"
-            "        'n_attempts': 2, 'n_concurrent_trials': 3,\n"
-            "        'agents': [{'name': 'legacy-name',\n"
-            "                    'import_path': 'dora_tb:DoraAgent',\n"
-            "                    'model_name': 'trust/base-model',\n"
-            "                    'kwargs': {'quiet': True}}]}))\n"
-            "else:\n"
-            "    capture = {\n"
-            "        'args': args, 'path': str(config_path),\n"
-            "        'mode': config_path.stat().st_mode & 0o777,\n"
-            "        'config': json.loads(config_path.read_text())}\n"
-            "    Path(os.environ['TB_TEST_CAPTURE']).write_text(json.dumps(capture))\n"
-            "    if os.environ.get('TB_TEST_FAILURE') == 'run':\n"
-            "        sys.exit(23)\n"
+            "capture_path = Path(os.environ['TB_TEST_CAPTURE'])\n"
+            "assert not capture_path.exists(), 'Harbor must be called only once'\n"
+            "capture = {\n"
+            "    'args': args, 'path': str(config_path),\n"
+            "    'mode': config_path.stat().st_mode & 0o777,\n"
+            "    'config': yaml.safe_load(config_path.read_text())}\n"
+            "capture_path.write_text(json.dumps(capture))\n"
+            "if os.environ.get('TB_TEST_FAILURE') == 'run':\n"
+            "    sys.exit(23)\n"
         )
         harbor.chmod(0o700)
         self.env = {
@@ -72,33 +61,30 @@ class RunTBTests(unittest.TestCase):
             text=True,
             timeout=15,
         )
-        self.assertEqual(self.base_path.read_bytes(), self.base_contents)
         self.assertEqual(list(self.temp_root.iterdir()), [])
         self.assertNotIn(self.env["OPENROUTER_API_KEY"], result.stdout + result.stderr)
         return result
 
-    def test_overrides_only_model_and_cleans_up(self):
+    def test_generates_minimal_yaml_and_cleans_up(self):
         result = self.run_wrapper()
         self.assertEqual(result.returncode, 0, result.stderr)
         capture = json.loads(self.capture.read_text())
         config = capture["config"]
-        self.assertEqual(config["n_attempts"], 2)
-        self.assertEqual(config["n_concurrent_trials"], 3)
-        self.assertEqual(config["agents"], [{
+        self.assertEqual(config, {"agents": [{
             "name": "aipymini",
             "import_path": "dora_tb:DoraAgent",
             "model_name": "openrouter/auto",
-            "kwargs": {"quiet": True},
-        }])
+        }]})
         self.assertNotIn("-m", capture["args"])
         self.assertNotIn("--ak", capture["args"])
         self.assertEqual(capture["args"][-2:], ["-n", "3"])
         self.assertIn("OPENROUTER_API_KEY=test-key-not-for-logs", capture["args"])
         self.assertEqual(capture["mode"], 0o600)
+        self.assertEqual(Path(capture["path"]).suffix, ".yaml")
         self.assertFalse(Path(capture["path"]).exists())
         self.assertNotIn("test-key-not-for-logs", json.dumps(config))
 
-    def test_model_is_json_encoded(self):
+    def test_model_is_yaml_quoted(self):
         model = "openrouter/team's-\"profile\""
         result = self.run_wrapper(["--model", model])
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -152,10 +138,15 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(self.run_wrapper().returncode, 23)
         self.assertTrue(self.capture.exists())
 
-    def test_parse_failure_cleans_up_without_starting_run(self):
-        self.env["TB_TEST_FAILURE"] = "parse"
-        self.assertEqual(self.run_wrapper().returncode, 19)
-        self.assertFalse(self.capture.exists())
+    def test_script_runs_without_adjacent_config(self):
+        isolated_script = self.root / "run_tb.sh"
+        isolated_script.write_text(self.script.read_text())
+        self.script = isolated_script
+        self.assertEqual(list(self.script.parent.glob("*.yaml")), [])
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = json.loads(self.capture.read_text())["config"]
+        self.assertEqual(config["agents"][0]["model_name"], "openrouter/auto")
 
 
 if __name__ == "__main__":

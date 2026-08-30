@@ -10,7 +10,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-import yaml
 from harbor.agents.factory import AgentFactory
 from harbor.models.trial.config import AgentConfig
 
@@ -62,8 +61,11 @@ class DoraModelSelectionTests(unittest.TestCase):
                     self.agent(model_name=model_name, model="openrouter/auto")
 
     def test_job_config_needs_no_model_kwarg(self):
-        path = Path(__file__).with_name("dora_tb.yaml")
-        config = AgentConfig.model_validate(yaml.safe_load(path.read_text())["agents"][0])
+        config = AgentConfig(
+            name="aipymini",
+            import_path="dora_tb:DoraAgent",
+            model_name="trust/hy4-preview",
+        )
         self.assertNotIn("model", config.kwargs)
         agent = AgentFactory.create_agent_from_config(config, logs_dir=self.logs_dir)
         flags = shlex.split(agent.build_cli_flags())

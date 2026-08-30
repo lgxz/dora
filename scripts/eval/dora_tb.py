@@ -38,16 +38,12 @@ The module must be importable by the Harbor Python process. Either place
 
     harbor run --dataset terminal-bench@2.1 --agent dora_tb:DoraAgent -m openrouter/auto
 
-For a named Agent in Hub, use ``--config scripts/eval/dora_tb.yaml`` instead
-of ``--agent`` and set ``agents[].model_name`` in that file. Harbor versions
-that merge ``-m`` into config-defined agents may override it via ``-m``;
-check ``--print-config`` to confirm the resolved ``model_name``.
-
-``run_tb.sh`` avoids that version-dependent merge: it resolves the base YAML,
-sets ``model_name`` from its required ``-m PROVIDER/PROFILE`` argument in a
-private temporary JSON config,
-and removes that temporary config when the command exits. Other base job
-settings are retained. No ``-m`` or ``--ak model`` is passed to Harbor.
+For the ``aipymini`` Agent name in Hub, use ``run_tb.sh``. It directly writes a minimal
+private temporary YAML config containing the Agent name, import path, and
+``model_name`` from its required ``-m PROVIDER/PROFILE`` argument. The temporary
+config is removed on exit. No static configuration file is needed; pass other
+job settings through Harbor flags such as ``-n``. No ``-m`` or ``--ak model`` is
+passed to Harbor.
 For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.
 
 The local Linux dora binary path is given via the host ``DORA_BINARY``
