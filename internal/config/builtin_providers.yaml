@@ -33,11 +33,20 @@ providers:
       - name: qwen3.7-plus
         context_window: 1000000
         capabilities: [image_input, text]
+      - name: qwen3.8-flash
+        context_window: 1000000
+        max_output_tokens: 128000
+        capabilities: [image_input, text]
       - name: glm-5.3-flash
         context_window: 1000000
         max_output_tokens: 128000
         capabilities: [image_input, text]
-      - name: glm-5.2
+      - name: hy4-preview
+        context_window: 1000000
+        max_output_tokens: 128000
+        capabilities: [text]
+      - name: kimi-k3
+        model: kimi/kimi-k3
         context_window: 1000000
         max_output_tokens: 128000
         capabilities: [text]
