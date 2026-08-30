@@ -1,3 +1,12 @@
+n_attempts: 1
+n_concurrent_trials: 2
+
 agents:
   - name: aipymini
     import_path: dora_tb:DoraAgent
+    # Used directly by harbor run --config; run_tb.sh overrides this value
+    # with its required -m/--model argument in a temporary copy.
+    # The resolved model_name drives both Dora and Harbor model metadata.
+    model_name: trust/hy4-preview
+    kwargs:
+      dora_binary: ~/.local/bin/dora

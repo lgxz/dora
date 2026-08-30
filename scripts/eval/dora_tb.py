@@ -27,22 +27,34 @@ Confirmed design decisions (agreed with the user)
    Inside the container dora runs with progress enabled
    (``dora -m <model_spec>``). The adapter sets no ``DORA_POLICY_*``, does
    not manage the session database, and does not ship skills. The model is
-   selected through dora's ``-m PROVIDER/PROFILE`` flag (e.g.
-   ``-m openrouter/auto``).
+   selected from Harbor's ``model_name`` and passed to dora's
+   ``--model PROVIDER/PROFILE`` flag. The same value supplies Hub metadata.
+   The legacy ``kwargs.model`` / ``--ak model`` entry point is not supported.
 
 How to run
 ----------
 The module must be importable by the Harbor Python process. Either place
 ``scripts/eval`` on ``PYTHONPATH`` or ``pip install -e .`` the project, then::
 
-    harbor run --dataset terminal-bench@2.1 --agent dora_tb:DoraAgent
+    harbor run --dataset terminal-bench@2.1 --agent dora_tb:DoraAgent -m openrouter/auto
 
-The local Linux dora binary path is given via ``--ae DORA_BINARY=/path/to/dora-linux``
-(or as the constructor kwarg ``dora_binary``). Model / API keys go through
-``extra_env`` (``--ae``)::
+For a named Agent in Hub, use ``--config scripts/eval/dora_tb.yaml`` instead
+of ``--agent`` and set ``agents[].model_name`` in that file. Harbor versions
+that merge ``-m`` into config-defined agents may override it via ``-m``;
+check ``--print-config`` to confirm the resolved ``model_name``.
 
-    --ae DORA_BINARY=/path/to/dora-linux \\
-    --ae model=openrouter/auto \\
+``run_tb.sh`` avoids that version-dependent merge: it resolves the base YAML,
+sets ``model_name`` from its required ``-m PROVIDER/PROFILE`` argument in a
+private temporary JSON config,
+and removes that temporary config when the command exits. Other base job
+settings are retained. No ``-m`` or ``--ak model`` is passed to Harbor.
+For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.
+
+The local Linux dora binary path is given via the host ``DORA_BINARY``
+environment variable (or the constructor kwarg ``dora_binary``). API keys go
+through ``extra_env`` (``--ae``)::
+
+    --ak dora_binary=/path/to/dora-linux \\
     --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 
 Everything below intentionally only imports the API reference types inside
@@ -94,16 +106,9 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     # Whether config files are supported — keep the library default (False).
     SUPPORTS_CONFIG: bool = False
 
-    # CLI flags forwarded to the dora binary. kwarg ``model`` maps to ``--model``
-    # (PROVIDER/PROFILE, e.g. "openrouter/auto"); kwarg ``quiet`` maps
-    # to ``--quiet`` (hide run progress, default False).
+    # Model selection comes exclusively from Harbor's model_name.
+    # Only presentation flags are configured through agent kwargs.
     CLI_FLAGS: list[CliFlag] = [
-        CliFlag(
-            kwarg="model",
-            cli="--model",
-            type="str",
-            default=None,
-        ),
         CliFlag(
             kwarg="quiet",
             cli="--quiet",
@@ -138,6 +143,25 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         "python3-pip",
         "python3-venv",
     )
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if "model" in kwargs:
+            raise ValueError(
+                "kwargs.model / --ak model is not supported; use Harbor's "
+                "model_name (or -m) instead."
+            )
+        super().__init__(*args, **kwargs)
+        if not self.model_name or not self.model_name.strip():
+            raise ValueError(
+                "model_name is required; set agents[].model_name in the Harbor "
+                "job config or pass Harbor -m."
+            )
+
+    @override
+    def build_cli_flags(self) -> str:
+        model_flag = shlex.join(["--model", self.model_name])
+        other_flags = super().build_cli_flags()
+        return f"{model_flag} {other_flags}" if other_flags else model_flag
 
     @staticmethod
     @override
@@ -180,7 +204,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 "``DORA_BINARY`` (e.g. ``--ae DORA_BINARY=/path/to/dora-linux``) "
                 "or the ``dora_binary`` kwarg."
             )
-        local = Path(path_str)
+        local = Path(path_str).expanduser()
         if not local.is_file():
             raise RuntimeError(f"DORA_BINARY does not point to a file: {local}")
         return local
@@ -260,7 +284,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 f"{_HARBOR_IMPORT_ERROR}."
             ) from _HARBOR_IMPORT_ERROR
 
-        # Build CLI flags (e.g. "-m openrouter/auto").
+        # Use the same model_name as Harbor's result metadata.
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 
