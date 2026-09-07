@@ -68,9 +68,9 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	case "kill":
 		snapshot, err := t.manager.Kill(input.JobID)
 		if err != nil {
-			return t.result(fmt.Sprintf(`{"error": %q}`, err.Error())), nil
+			return t.result(map[string]string{"error": err.Error()})
 		}
-		return t.result(fmt.Sprintf(`{"job_id": %q, "status": %q}`, snapshot.ID, snapshot.Status)), nil
+		return t.result(map[string]string{"job_id": snapshot.ID, "status": string(snapshot.Status)})
 
 	case "list":
 		jobs := t.manager.List()
@@ -82,8 +82,9 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		for _, j := range jobs {
 			infos = append(infos, jobInfo{ID: j.ID, Status: string(j.Status)})
 		}
-		data, _ := json.Marshal(infos)
-		return t.result(fmt.Sprintf(`{"jobs": %s}`, data)), nil
+		return t.result(struct {
+			Jobs []jobInfo `json:"jobs"`
+		}{Jobs: infos})
 
 	case "poll":
 		waitSeconds := defaultPollSeconds
@@ -92,7 +93,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		}
 		snapshot, ok := t.manager.Poll(input.JobID, time.Duration(waitSeconds)*time.Second)
 		if !ok {
-			return t.result(`{"error": "job not found"}`), nil
+			return t.result(map[string]string{"error": "job not found"})
 		}
 		if snapshot.Kind == job.KindTask {
 			type taskResult struct {
@@ -101,24 +102,35 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 				Result string `json:"result,omitempty"`
 				Error  string `json:"error,omitempty"`
 			}
-			data, _ := json.Marshal(taskResult{
+			return t.result(taskResult{
 				JobID:  snapshot.ID,
 				Status: string(snapshot.Status),
 				Result: snapshot.Result,
 				Error:  snapshot.Error,
 			})
-			return t.result(string(data)), nil
 		}
-		return t.result(fmt.Sprintf(`{"job_id": %q, "status": %q, "exit_code": %d, "stdout": %q, "stderr": %q}`,
-			snapshot.ID, snapshot.Status, snapshot.ExitCode, snapshot.Stdout, snapshot.Stderr)), nil
+		return t.result(struct {
+			JobID    string `json:"job_id"`
+			Status   string `json:"status"`
+			ExitCode int    `json:"exit_code"`
+			Stdout   string `json:"stdout"`
+			Stderr   string `json:"stderr"`
+		}{
+			JobID: snapshot.ID, Status: string(snapshot.Status), ExitCode: snapshot.ExitCode,
+			Stdout: snapshot.Stdout, Stderr: snapshot.Stderr,
+		})
 
 	default:
 		return dora.ToolResult{}, fmt.Errorf("job: unknown action %q", input.Action)
 	}
 }
 
-func (t *Tool) result(content string) dora.ToolResult {
-	return dora.ToolResult{Content: content}
+func (t *Tool) result(value any) (dora.ToolResult, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return dora.ToolResult{}, fmt.Errorf("job: encode result: %w", err)
+	}
+	return dora.ToolResult{Content: string(data)}, nil
 }
 
 type input struct {

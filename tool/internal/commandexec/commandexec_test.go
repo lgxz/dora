@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora/internal/job"
+	jobtool "github.com/lgxz/dora/tool/job"
 )
 
 func TestExecuteReturnsCommandOutput(t *testing.T) {
@@ -422,6 +423,14 @@ func TestCommandHelper(t *testing.T) {
 		os.Exit(0)
 	}
 	switch command {
+	case "escaped-output", "escaped-output-slow":
+		fmt.Print(escapedOutput)
+		fmt.Fprint(os.Stderr, escapedOutput)
+		if command == "escaped-output-slow" {
+			time.Sleep(2 * time.Second)
+			fmt.Print(escapedOutput)
+			fmt.Fprint(os.Stderr, escapedOutput)
+		}
 	case "hello":
 		fmt.Print("hello")
 	case "fail":
@@ -464,4 +473,66 @@ func TestCommandHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+// Include Go-only escapes, JSON escapes, Unicode, and HTML-sensitive characters.
+const escapedOutput = "\x1b[31mred\x1b[0m\x00\a\v\n\t\r\b\f\"\\中文<&>"
+
+func TestCommandOutputJSONEscaping(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprint("background=", background), func(t *testing.T) {
+			jm := job.New()
+			tool := newTestTool(t, Config{JobManager: jm})
+			command := "escaped-output"
+			wait := 5
+			if background {
+				command = "escaped-output-slow"
+				wait = 1
+			}
+			raw, err := json.Marshal(map[string]any{"command": command, "wait_seconds": wait})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := tool.Execute(context.Background(), raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				JobID    string `json:"job_id"`
+				Status   string `json:"status"`
+				ExitCode int    `json:"exit_code"`
+				Stdout   string `json:"stdout"`
+				Stderr   string `json:"stderr"`
+			}
+			if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
+				t.Fatalf("decode result: %v", err)
+			}
+			if background {
+				t.Cleanup(func() { _, _ = jm.Kill("test-command_0") })
+				if decoded.JobID != "test-command_0" || decoded.Status != "running" {
+					t.Fatalf("background result = %#v", decoded)
+				}
+			}
+			if decoded.Stdout != escapedOutput || decoded.Stderr != escapedOutput {
+				t.Fatalf("result = %#v", decoded)
+			}
+			if !background {
+				return
+			}
+			raw, err = json.Marshal(map[string]any{"action": "poll", "job_id": decoded.JobID, "wait_seconds": 5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err = jobtool.New(jm).Execute(context.Background(), raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
+				t.Fatalf("decode poll: %v", err)
+			}
+			if decoded.Status != "done" || decoded.ExitCode != 0 || decoded.Stdout != escapedOutput || decoded.Stderr != escapedOutput {
+				t.Fatalf("poll result = %#v", decoded)
+			}
+		})
+	}
 }

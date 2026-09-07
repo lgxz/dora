@@ -12,7 +12,10 @@ import (
 
 func TestResultReturnsContent(t *testing.T) {
 	tool := New(job.New())
-	result := tool.result(`{"stdout":"hello"}`)
+	result, err := tool.result(map[string]string{"stdout": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.Content != `{"stdout":"hello"}` {
 		t.Fatalf("content = %q", result.Content)
 	}
@@ -88,7 +91,11 @@ func TestKillReturnsCurrentState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `"status": "cancelling"`) {
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["status"] != "cancelling" {
 		t.Fatalf("kill result = %q", result.Content)
 	}
 	close(release)
@@ -106,7 +113,11 @@ func TestKillCompletedJobReturnsTerminalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `"status": "done"`) {
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["status"] != "done" {
 		t.Fatalf("kill result = %q", result.Content)
 	}
 }
