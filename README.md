@@ -409,8 +409,19 @@ configuration file:
 ```
 
 `-m` only affects the text conversation model; the image and skill models are
-unaffected. Unknown provider or profile names, or a provider with no usable API
-key, result in `router: no model satisfies the constraints`.
+unaffected. If the name does not match a profile under that provider, it is used
+as a model ID without prior registration. Only the first `/` separates the
+provider, so `-m openrouter/vendor/model-name` sends `vendor/model-name`.
+The transient text profile uses the provider's connection and API settings,
+`max_tokens: 32768`, and `context_window: 1048576`; it does not inherit another
+profile's parameters. `--thinking` still applies.
+
+Existing profiles always take precedence, including their capability restrictions.
+Unknown providers, missing API keys, and incompatible existing profiles still
+result in `router: no model satisfies the constraints`. Unknown model IDs
+(including misspelled profile names) are left for the provider to reject.
+This fallback applies only to `-m`/`--model`; policy fields and their environment
+overrides continue to require configured profiles.
 
 Dora runs up to 256 model-tool rounds per segment by default. Keep the safeguard
 but adjust it for unusually long tool workflows when needed:

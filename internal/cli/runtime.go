@@ -66,10 +66,7 @@ func loadConfig(opts options) (config.Config, error) {
 }
 
 func buildRuntimeRouter(opts options, cfg config.Config, httpClient *http.Client) (*router.Router, error) {
-	cat, err := registry.NewCatalog(registryFromConfig(cfg, httpClient))
-	if err != nil {
-		return nil, err
-	}
+	catalogConfig := registryFromConfig(cfg, httpClient)
 	textConstraints := buildTextConstraints(cfg)
 	if opts.model != "" {
 		provider, profile, err := parseModelSpec(opts.model)
@@ -78,6 +75,11 @@ func buildRuntimeRouter(opts options, cfg config.Config, httpClient *http.Client
 		}
 		textConstraints.Provider = provider
 		textConstraints.Profile = profile
+		addModelIDFallback(&catalogConfig, provider, profile)
+	}
+	cat, err := registry.NewCatalog(catalogConfig)
+	if err != nil {
+		return nil, err
 	}
 	imageConstraints := dora.Constraints{
 		Provider: cfg.Policy.Image.Provider,
@@ -97,6 +99,33 @@ func buildRuntimeRouter(opts options, cfg config.Config, httpClient *http.Client
 	return r, nil
 }
 
+// addModelIDFallback adds a transient text profile only for an explicit CLI
+// name absent from the selected provider. Existing profiles remain authoritative,
+// including their capability restrictions. Policy selection never calls this.
+func addModelIDFallback(cfg *registry.Config, provider, name string) {
+	if name == "" {
+		return
+	}
+	for i := range cfg.Providers {
+		p := &cfg.Providers[i]
+		if p.Name != provider {
+			continue
+		}
+		for _, profile := range p.Profiles {
+			if profile.Name == name {
+				return
+			}
+		}
+		defaults := config.DefaultProfile(name)
+		p.Profiles = append(p.Profiles, registry.Profile{
+			Name: name, Model: name,
+			MaxTokens: defaults.MaxTokens, ContextWindow: defaults.ContextWindow,
+			Capabilities: []dora.Capability{dora.CapabilityText},
+		})
+		return
+	}
+}
+
 // buildTextConstraints constructs the text model constraints from the
 // configured policy. The -m flag may later override the provider and profile
 // on the returned value.
@@ -109,9 +138,9 @@ func buildTextConstraints(cfg config.Config) dora.Constraints {
 }
 
 // parseModelSpec splits a PROVIDER/PROFILE model override into its provider and
-// profile components. Supported forms are "provider/profile", "provider/" and
+// profile or model ID components. Supported forms are "provider/profile", "provider/" and
 // "provider" (the latter two select the provider's default profile). Everything
-// else returns an error.
+// after the first slash is preserved verbatim as the profile or model ID.
 func parseModelSpec(s string) (provider, profile string, err error) {
 	if s == "" {
 		return "", "", errors.New("empty model spec")
@@ -124,9 +153,6 @@ func parseModelSpec(s string) (provider, profile string, err error) {
 	profile = s[slash+1:]
 	if provider == "" {
 		return "", "", errors.New("missing provider")
-	}
-	if strings.Contains(profile, "/") {
-		return "", "", errors.New("model spec must contain at most one '/'")
 	}
 	return provider, profile, nil
 }

@@ -2309,7 +2309,7 @@ func TestRunRejectsInvalidModelFlag(t *testing.T) {
 	if err := writeTestConfig(t, configPath, "model:\n  provider: deepseek\n"); err != nil {
 		t.Fatal(err)
 	}
-	for _, spec := range []string{"/deepseek-v4-flash", "a/b/c", "a//b"} {
+	for _, spec := range []string{"/deepseek-v4-flash", "/"} {
 		err := Run(context.Background(), []string{"--quiet", "--model", spec, "--config", configPath, "hello"}, IO{
 			Stdin:           strings.NewReader(""),
 			Stdout:          io.Discard,

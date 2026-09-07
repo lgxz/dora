@@ -91,6 +91,15 @@ type ProfileSpec struct {
 	Capabilities []dora.Capability `yaml:"capabilities,omitempty"`
 }
 
+// DefaultProfile returns the generic defaults for an unregistered model ID.
+func DefaultProfile(name string) ProfileSpec {
+	return ProfileSpec{
+		Name: name, Model: name,
+		MaxTokens:     intPtr(defaultMaxTokens),
+		ContextWindow: intPtr(defaultModelContextWindow),
+	}
+}
+
 // Tools configures optional capabilities exposed to the model.
 type Tools struct {
 	Bash       Bash       `yaml:"bash,omitempty"`

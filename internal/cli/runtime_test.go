@@ -1,6 +1,11 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/lgxz/dora/model/router"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -50,10 +55,10 @@ func TestParseModelSpec(t *testing.T) {
 		{name: "trailing slash", in: "trust/", provider: "trust", profile: ""},
 		{name: "provider only", in: "trust", provider: "trust", profile: ""},
 		{name: "empty", in: "", wantError: true},
-		{name: "double slash", in: "a//b", wantError: true},
+		{name: "double slash", in: "a//b", provider: "a", profile: "/b"},
 		{name: "empty provider", in: "/profile", wantError: true},
 		{name: "empty provider trailing", in: "/", wantError: true},
-		{name: "multiple slashes", in: "a/b/c", wantError: true},
+		{name: "multiple slashes", in: "a/b/c", provider: "a", profile: "b/c"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,5 +98,75 @@ func TestDefaultSystemPromptContent(t *testing.T) {
 	// silently disable the system prompt.
 	if strings.TrimSpace(defaultSystemPrompt) == "" {
 		t.Fatal("defaultSystemPrompt is empty")
+	}
+}
+
+func TestModelIDFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, spec, policy, key, wantModel, thinking string
+		wantError                                    bool
+	}{
+		{name: "raw model", spec: "test/vendor/new-model", key: "key", wantModel: "vendor/new-model"},
+		{name: "thinking override", spec: "test/new", key: "key", wantModel: "new", thinking: "high"},
+		{name: "profile wins", spec: "test/known", key: "key", wantModel: "configured-model"},
+		{name: "provider only", spec: "test", key: "key", wantModel: "configured-model"},
+		{name: "trailing slash", spec: "test/", key: "key", wantModel: "configured-model"},
+		{name: "capability mismatch", spec: "test/vision", key: "key", wantError: true},
+		{name: "missing key", spec: "test/new", wantError: true},
+		{name: "unknown provider", spec: "missing/new", key: "key", wantError: true},
+		{name: "strict policy", policy: "new", key: "key", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := 42
+			cfg := config.Config{
+				Providers: []config.Provider{{Name: "test", BaseURL: "https://example.com/v1", API: "chat_completions", APIKey: tc.key,
+					Profiles: []config.ProfileSpec{
+						{Name: "known", Model: "configured-model", MaxTokens: &budget, Capabilities: []dora.Capability{dora.CapabilityText}},
+						{Name: "vision", Model: "vision-model", Capabilities: []dora.Capability{dora.CapabilityImageInput}},
+					}}},
+				Policy: config.PolicySettings{Text: config.Policy{Provider: "test", Profile: tc.policy}},
+			}
+			calls := 0
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["model"] != tc.wantModel {
+					t.Fatalf("model = %v, want %s", body["model"], tc.wantModel)
+				}
+				wantBudget := float64(32768)
+				if tc.wantModel == "configured-model" {
+					wantBudget = 42
+				}
+				if body["max_tokens"] != wantBudget {
+					t.Fatalf("max_tokens = %v", body["max_tokens"])
+				}
+				if tc.thinking != "" && body["reasoning_effort"] != tc.thinking {
+					t.Fatalf("thinking = %v", body["reasoning_effort"])
+				}
+				return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`), nil
+			})}
+			r, err := buildRuntimeRouter(options{model: tc.spec, thinking: tc.thinking}, cfg, client)
+			if tc.wantError {
+				if !errors.Is(err, router.ErrNotFound) {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Generate(context.Background(), dora.Request{Messages: []dora.Message{{Role: dora.RoleUser, Content: "hello"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("calls = %d", calls)
+			}
+			if len(cfg.Providers[0].Profiles) != 2 {
+				t.Fatal("fallback mutated config")
+			}
+		})
 	}
 }

@@ -470,6 +470,14 @@ lifecycle; they remain cancellable through the job tool.
 
 Model selection is driven by per-capability policy, keyed by capability name: `policy.text` and `policy.image`, each an optional `{provider, profile}`; absence means `auto` (the router selects the first catalog entry satisfying the capability). The corresponding environment overrides are `DORA_POLICY_<CAPABILITY>_<FIELD>`, for example `DORA_POLICY_TEXT_PROVIDER` and `DORA_POLICY_IMAGE_PROFILE`. `text` maps to the `text` capability and `image` maps to `image_input`. Selection is pure order-plus-constraints: provider order then model order within a provider wins; `text` must be declared explicitly. The command tools' `enabled` is a three-state configuration: when absent, the CLI applies the platform policy; an explicit `true` or `false` fully overrides it. When the default configuration path does not exist, the CLI uses the built-in catalog directly; an explicit `--config` does not silently fall back.
 
+For `--model`/`-m` only, the CLI splits at the first slash and matches the
+remaining name against the selected provider's profiles. If absent, it appends
+a transient text-only profile to the runtime catalog using that name as the
+model ID and generic configuration defaults. Existing profiles retain their
+parameters and capability restrictions. The provider must still exist and have
+an API key. The configuration is not mutated; policy and environment selection
+remain strict. The registry and router selection rules are unchanged.
+
 `internal/paths` uses a unified `~/.dora` layout on all operating systems:
 
 | Content | Default path |
