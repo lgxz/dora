@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"runtime"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
@@ -40,11 +39,11 @@ func New(cfg Config) (*Tool, error) {
 	}
 
 	core, err := commandexec.New(commandexec.Config{
-		Name:           "bash",
-		Description:    fmt.Sprintf("Execute Bash command on %s/%s.", runtime.GOOS, runtime.GOARCH),
-		Binary:         binary,
-		CommandArgs:    commandArgs,
-		JobManager:     cfg.JobManager,
+		Name:        "bash",
+		Description: "Execute Bash command.",
+		Binary:      binary,
+		CommandArgs: commandArgs,
+		JobManager:  cfg.JobManager,
 	})
 	if err != nil {
 		return nil, err
@@ -67,7 +66,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 }
 
 func commandArgs(command string) []string {
-	return []string{"-lc", command}
+	return []string{"-c", command}
 }
 
 var _ dora.Tool = (*Tool)(nil)

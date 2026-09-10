@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -199,13 +201,13 @@ func info(observer dora.Observer, format string, args ...any) {
 //go:embed prompts/default_system.md
 var defaultSystemPrompt string
 
-// systemPrompt returns the immutable Agent system prompt: the configured
-// agent.system_prompt when set (fully replacing the built-in default) or the
-// built-in default otherwise.
-func systemPrompt(agent config.Agent) string {
+// systemPrompt appends an environment snapshot to the configured or default
+// instructions. The local start date stays fixed for the Agent's lifetime.
+func systemPrompt(agent config.Agent, startedAt time.Time) string {
 	base := strings.TrimSpace(agent.SystemPrompt)
 	if base == "" {
 		base = defaultSystemPrompt
 	}
-	return base
+	return strings.TrimSpace(base) + fmt.Sprintf("\n\n<runtime_environment>\nOS: %s\nArchitecture: %s\nAgent start date (local): %s\n</runtime_environment>",
+		runtime.GOOS, runtime.GOARCH, startedAt.Format(time.DateOnly))
 }

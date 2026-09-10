@@ -293,7 +293,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinDeepSeek(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "deepseek-v4-flash" {
+		if body["model"] != "deepseek-flash" {
 			t.Fatalf("body = %#v", body)
 		}
 		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"default deepseek answer"}}]}`), nil
@@ -328,7 +328,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinTrust(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "deepseek-v4-flash" {
+		if body["model"] != "deepseek-flash" {
 			t.Fatalf("model = %#v", body["model"])
 		}
 		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"trust answer"}}]}`), nil
@@ -387,7 +387,7 @@ func TestRunConfigEnvironmentAutoSelectsBuiltinOpenRouter(t *testing.T) {
 	}
 }
 
-func TestRunSelectsBuiltinOpenRouterOxAlpha(t *testing.T) {
+func TestRunSelectsBuiltinOpenRouterAuto(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "openrouter-secret")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte("env: {}\n"), 0o600); err != nil {
@@ -401,14 +401,14 @@ func TestRunSelectsBuiltinOpenRouterOxAlpha(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "stealth/ox-alpha" {
+		if body["model"] != "openrouter/auto" {
 			t.Fatalf("model = %#v", body["model"])
 		}
-		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"ox answer"}}]}`), nil
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"auto answer"}}]}`), nil
 	})}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "--model", "openrouter/ox-alpha", "hello"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--config", configPath, "--model", "openrouter/auto", "hello"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          &stdout,
 		Stderr:          io.Discard,
@@ -417,7 +417,7 @@ func TestRunSelectsBuiltinOpenRouterOxAlpha(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "ox answer\n" {
+	if stdout.String() != "auto answer\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -863,6 +863,7 @@ func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
 	t.Setenv("DORA_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	var calls int
+	var parentSystem string
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		var body map[string]any
@@ -880,6 +881,7 @@ func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
 		}
 		switch calls {
 		case 1:
+			parentSystem = messages[0].(map[string]any)["content"].(string)
 			if !hasTask || len(messages) != 2 || messages[1].(map[string]any)["content"] != "parent request" {
 				t.Fatalf("parent request tools/messages = %#v / %#v", tools, messages)
 			}
@@ -889,7 +891,7 @@ func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
 				t.Fatalf("subagent request tools/messages = %#v / %#v", tools, messages)
 			}
 			system := messages[0].(map[string]any)["content"].(string)
-			if system != defaultSystemPrompt {
+			if system != parentSystem || !strings.Contains(system, "<runtime_environment>") {
 				t.Fatalf("subagent system prompt = %q, want Agent system prompt", system)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"child result"}}]}`), nil

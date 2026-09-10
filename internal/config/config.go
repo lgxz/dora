@@ -51,7 +51,8 @@ type PolicySettings struct {
 type Agent struct {
 	MaxRounds int `yaml:"max_rounds,omitempty"`
 	// SystemPrompt replaces the CLI's built-in default system prompt. Empty
-	// uses the built-in default.
+	// uses the built-in default. The CLI appends runtime environment metadata
+	// to either choice.
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 

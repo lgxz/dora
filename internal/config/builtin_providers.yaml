@@ -2,37 +2,26 @@ providers:
   - name: deepseek
     base_url: https://api.deepseek.com
     profiles:
-      - name: deepseek-v4-flash
+      - name: deepseek-flash
         context_window: 1000000
         max_output_tokens: 384000
-        capabilities: [text]
+        capabilities: [text, image_input]
         thinking: high
         preserve_thinking: true
       - name: deepseek-v4-pro
         context_window: 1000000
         max_output_tokens: 384000
-        capabilities: [text]
+        capabilities: [text, image_input]
         thinking: high
         preserve_thinking: true
-      - name: deepseek-v4-flash-vision
-        model: deepseek-v4-flash-vision-exp
-        context_window: 48000000
-        capabilities: [image_input, text]
 
   - name: trust
     base_url: https://api.trustoken.cn/v1
     profiles:
-      - name: deepseek-v4-flash
+      - name: deepseek-flash
         context_window: 1000000
         max_output_tokens: 384000
-        capabilities: [text]
-      - name: deepseek-v4-pro
-        context_window: 1000000
-        max_output_tokens: 384000
-        capabilities: [text]
-      - name: qwen3.7-plus
-        context_window: 1000000
-        capabilities: [image_input, text]
+        capabilities: [text, image_input]
       - name: qwen3.8-flash
         context_window: 1000000
         max_output_tokens: 128000
@@ -41,10 +30,6 @@ providers:
         context_window: 1000000
         max_output_tokens: 128000
         capabilities: [image_input, text]
-      - name: hy4-preview
-        context_window: 1000000
-        max_output_tokens: 128000
-        capabilities: [text]
       - name: kimi-k3
         model: kimi/kimi-k3
         context_window: 1000000
@@ -57,11 +42,5 @@ providers:
       - name: auto
         model: openrouter/auto
         context_window: 2000000
-        capabilities: [image_input, text]
-        preserve_thinking: true
-      - name: ox-alpha
-        model: stealth/ox-alpha
-        context_window: 1048576
-        max_output_tokens: 128000
         capabilities: [image_input, text]
         preserve_thinking: true

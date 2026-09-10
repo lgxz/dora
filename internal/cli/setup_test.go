@@ -88,7 +88,7 @@ agent:
 	if cfg.Agent.MaxRounds != 42 {
 		t.Fatalf("max rounds = %d", cfg.Agent.MaxRounds)
 	}
-	if cfg.Policy.Text.Provider != "trust" || cfg.Policy.Text.Profile != "qwen3.7-plus" {
+	if cfg.Policy.Text.Provider != "trust" || cfg.Policy.Text.Profile != "glm-5.3-flash" {
 		t.Fatalf("text policy = %#v", cfg.Policy.Text)
 	}
 	if got := providerAPIKey(t, cfg, "deepseek"); got != "old-key" {

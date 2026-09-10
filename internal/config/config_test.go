@@ -23,7 +23,7 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	if p.BaseURL != "https://api.deepseek.com" || p.APIKey != "secret" {
 		t.Fatalf("deepseek = %#v", p)
 	}
-	m := modelByName(t, p, "deepseek-v4-flash")
+	m := modelByName(t, p, "deepseek-flash")
 	if m.MaxTokens == nil || *m.MaxTokens != 32768 ||
 		m.MaxOutputTokens == nil || *m.MaxOutputTokens != 384000 ||
 		m.ContextWindow == nil || *m.ContextWindow != 1000000 {
@@ -43,11 +43,6 @@ func TestDefaultBuildsBuiltinCatalogWithProviderKey(t *testing.T) {
 	if auto.Model != "openrouter/auto" || auto.ContextWindow == nil || *auto.ContextWindow != 2000000 ||
 		auto.PreserveThinking == nil || !*auto.PreserveThinking {
 		t.Fatalf("openrouter auto profile = %#v", auto)
-	}
-	oxAlpha := modelByName(t, openrouter, "ox-alpha")
-	if oxAlpha.Model != "stealth/ox-alpha" || oxAlpha.ContextWindow == nil || *oxAlpha.ContextWindow != 1048576 ||
-		oxAlpha.PreserveThinking == nil || !*oxAlpha.PreserveThinking {
-		t.Fatalf("openrouter ox-alpha profile = %#v", oxAlpha)
 	}
 }
 

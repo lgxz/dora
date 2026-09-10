@@ -6,8 +6,10 @@ import (
 	"errors"
 	"github.com/lgxz/dora/model/router"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -79,16 +81,24 @@ func TestParseModelSpec(t *testing.T) {
 	}
 }
 
-func TestSystemPromptUsesDefault(t *testing.T) {
-	if got := systemPrompt(config.Agent{}); got != defaultSystemPrompt {
-		t.Fatalf("systemPrompt(Agent{}) = %q, want the built-in default prompt", got)
-	}
-}
-
-func TestSystemPromptConfigOverridesDefault(t *testing.T) {
-	agent := config.Agent{SystemPrompt: "  You are a pirate.  "}
-	if got := systemPrompt(agent); got != "You are a pirate." {
-		t.Fatalf("systemPrompt(%+v) = %q, want the configured prompt verbatim", agent, got)
+func TestSystemPromptAppendsEnvironment(t *testing.T) {
+	// The local date differs from UTC to catch accidental UTC conversion.
+	startedAt := time.Date(2026, 9, 10, 0, 30, 0, 0, time.FixedZone("local", 2*60*60))
+	suffix := "\n\n<runtime_environment>\nOS: " + runtime.GOOS +
+		"\nArchitecture: " + runtime.GOARCH +
+		"\nAgent start date (local): 2026-09-10\n</runtime_environment>"
+	for _, tc := range []struct {
+		name, configured, base string
+	}{
+		{"default", "", strings.TrimSpace(defaultSystemPrompt)},
+		{"whitespace", " \n ", strings.TrimSpace(defaultSystemPrompt)},
+		{"custom", "  You are a pirate.  ", "You are a pirate."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := systemPrompt(config.Agent{SystemPrompt: tc.configured}, startedAt); got != tc.base+suffix {
+				t.Fatalf("system prompt = %q, want %q", got, tc.base+suffix)
+			}
+		})
 	}
 }
 

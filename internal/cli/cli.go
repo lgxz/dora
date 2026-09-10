@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/app"
@@ -122,7 +123,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		history:      sessionStore,
 		noSkills:     opts.noSkills,
 		extraTools:   extraTools,
-		systemPrompt: systemPrompt(cfg.Agent),
+		systemPrompt: systemPrompt(cfg.Agent, time.Now()),
 	})
 	if err != nil {
 		_ = sessionStore.Close()

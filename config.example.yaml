@@ -78,6 +78,7 @@ policy:
 agent:
   max_rounds: 256
   # Empty uses the built-in default. A non-empty value fully replaces it.
+  # Both receive OS, architecture, and the Agent's local start date as a suffix.
   # system_prompt: You are a terminal-based AI agent.
 
 # Dora automatically discovers skills at ~/.dora/skills (or DORA_HOME/skills)

@@ -455,6 +455,12 @@ agent:
     Always prefer the deploy scripts under /opt/acme.
 ```
 
+Dora appends a `runtime_environment` block to both default and custom prompts,
+containing OS, architecture, and the Agent's local start date (without time).
+This snapshot stays fixed for the Agent's lifetime, including child tasks.
+In event mode it is captured at startup; in ACP it is captured when the session
+is created. Long-running Agents do not refresh the date across midnight.
+
 Run a one-shot prompt or combine an instruction with piped input:
 
 ```sh
@@ -687,7 +693,7 @@ enabled with `enabled: true` must exist on `PATH`, otherwise Dora reports an
 error. Discovery currently checks executable presence only; it does not launch
 the shell to probe its runtime environment.
 
-The Bash tool runs `bash -lc` in the directory selected by `--workdir`, or in
+The Bash tool runs `bash -c` in the directory selected by `--workdir`, or in
 Dora's process working directory when the option is omitted. The model can use
 `cd` inside a command when it needs another directory. The tool returns exit
 code, stdout, and stderr to the model as JSON. This tool grants the model the

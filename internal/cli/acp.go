@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"time"
 
 	acpserver "github.com/lgxz/dora/internal/acp"
 	"github.com/lgxz/dora/internal/app"
@@ -41,7 +42,7 @@ func runACP(ctx context.Context, opts options, cfg config.Config, streams IO) er
 				jobs:         jobs,
 				history:      store,
 				noSkills:     opts.noSkills,
-				systemPrompt: systemPrompt(cfg.Agent),
+				systemPrompt: systemPrompt(cfg.Agent, time.Now()),
 			})
 			if err != nil {
 				_ = store.Close()

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -53,14 +52,14 @@ func TestSpecIdentifiesBash(t *testing.T) {
 	}
 	spec := tool.Spec()
 	if spec.Name != "bash" ||
-		!strings.Contains(spec.Description, "Execute Bash command on "+runtime.GOOS+"/"+runtime.GOARCH) ||
+		!strings.HasPrefix(spec.Description, "Execute Bash command.") ||
 		!json.Valid(spec.InputSchema) || !strings.Contains(string(spec.InputSchema), "wait_seconds") {
 		t.Fatalf("spec = %#v", spec)
 	}
 }
 
-func TestCommandArgsUseLoginShell(t *testing.T) {
-	want := []string{"-lc", "printf hello"}
+func TestCommandArgsUseNonLoginShell(t *testing.T) {
+	want := []string{"-c", "printf hello"}
 	if got := commandArgs("printf hello"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %#v, want %#v", got, want)
 	}
