@@ -37,13 +37,15 @@ func TestRendererShowsDoraProgress(t *testing.T) {
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
 
 	for _, want := range []string{
-		"Thinking...",
 		"我先看看当前目录",
 		"pwd",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q does not contain %q", output.String(), want)
 		}
+	}
+	if strings.Contains(output.String(), "Thinking...") {
+		t.Fatalf("non-terminal output contains Thinking placeholder: %q", output.String())
 	}
 }
 
@@ -183,15 +185,17 @@ func TestRendererUpdatesThinkingWithReceivedBytesInTerminal(t *testing.T) {
 	}
 }
 
-func TestRendererDoesNotRepeatThinkingStatusWithoutTerminal(t *testing.T) {
-	var output bytes.Buffer
-	renderer := New(&output, false, false, false)
-	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
-	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "hidden"})
-	renderer.Observe(dora.Update{Kind: dora.UpdateContentDelta, Delta: "answer"})
+func TestRendererOmitsThinkingStatusWithoutTerminal(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		var output bytes.Buffer
+		renderer := New(&output, false, color, false)
+		renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
+		renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "hidden"})
+		renderer.Observe(dora.Update{Kind: dora.UpdateContentDelta, Delta: "answer"})
 
-	if got := output.String(); got != "Thinking...\n" {
-		t.Fatalf("output = %q, want one stable non-terminal status line", got)
+		if got := output.String(); got != "" {
+			t.Fatalf("color = %v, output = %q, want no non-terminal thinking status", color, got)
+		}
 	}
 }
 
@@ -235,7 +239,7 @@ func TestRendererStreamsReasoningWithoutTerminal(t *testing.T) {
 	if strings.Contains(rendered, "\x1b[") {
 		t.Fatalf("output = %q, want no escape sequences", rendered)
 	}
-	if !strings.Contains(rendered, "Thinking...") || !strings.Contains(rendered, "○ 考虑中\n") {
+	if strings.Contains(rendered, "Thinking...") || !strings.Contains(rendered, "○ 考虑中\n") {
 		t.Fatalf("output = %q", rendered)
 	}
 }
@@ -329,7 +333,7 @@ func TestRendererFlushesPendingReasoningWhenRoundAborts(t *testing.T) {
 	// message; the next round's placeholder must not swallow the buffer.
 	renderer.Observe(dora.Update{Kind: dora.UpdateReasoningDelta, Delta: "中断的推理"})
 	renderer.Observe(dora.Update{Kind: dora.UpdateThinking})
-	if rendered := output.String(); !strings.Contains(rendered, "○ 中断的推理\nThinking...") {
+	if rendered := output.String(); rendered != "○ 中断的推理\n" {
 		t.Fatalf("output = %q", rendered)
 	}
 }

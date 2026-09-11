@@ -119,19 +119,19 @@ func (r *Renderer) renderThinking() {
 	r.modelStarted = time.Now()
 	r.modelBytes = 0
 	r.modelStatusAt = time.Time{}
-	if r.terminal || r.color {
-		fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
-	} else {
-		fmt.Fprintln(r.output, "Thinking...")
+	r.waiting = false
+	if !r.terminal {
+		return
 	}
+	fmt.Fprintf(r.output, "%s Thinking...\n", r.paint(blue, "●"))
 	r.waiting = true
 }
 
 // receiveModelDelta counts exact UTF-8 bytes received from content and
 // reasoning streams. In terminal mode it periodically repaints the Thinking
-// placeholder with elapsed time and bytes received. Non-terminal output stays
-// stable, and visible reasoning suppresses the status repaint because the
-// streamed reasoning itself already shows progress.
+// placeholder with elapsed time and bytes received. Non-terminal output omits
+// the placeholder, and visible reasoning suppresses the status repaint because
+// the streamed reasoning itself already shows progress.
 func (r *Renderer) receiveModelDelta(delta string, showStatus bool) {
 	r.modelBytes += len(delta)
 	if !showStatus || !r.terminal || !r.waiting || r.modelStarted.IsZero() {
@@ -149,11 +149,11 @@ func (r *Renderer) receiveModelDelta(delta string, showStatus bool) {
 }
 
 // renderReasoning streams the model's chain-of-thought in dim style. The
-// "Thinking..." placeholder is replaced by the first delta of a round; the
-// reasoning text itself is never erased afterwards. Deltas are buffered and
-// written one complete line at a time (with a size cap for lines without
-// newlines), because terminal writes run on the Agent's goroutine and
-// per-token writes slow the model stream on slow terminals.
+// In terminal mode the "Thinking..." placeholder is replaced by the first
+// delta of a round; the reasoning text itself is never erased afterwards.
+// Deltas are buffered and written one complete line at a time (with a size cap
+// for lines without newlines), because terminal writes run on the Agent's
+// goroutine and per-token writes slow the model stream on slow terminals.
 func (r *Renderer) renderReasoning(delta string) {
 	if r.terminal && r.waiting {
 		r.waiting = false

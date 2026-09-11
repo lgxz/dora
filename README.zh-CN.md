@@ -300,9 +300,9 @@ git diff | ./dora "Review this change"
 ./dora "Write release notes" > release-notes.md
 ```
 
-进度颜色默认使用 `--color=auto`：当 stderr 是终端且未设置 `NO_COLOR` 时启用。使用 `--color=always` 可在 stderr 被重定向时仍保留 ANSI 颜色，使用 `--color=never` 可将其关闭。显式颜色模式会覆盖自动终端和环境检测；所有模式下进度仍显示在 stderr 上。
+进度颜色默认使用 `--color=auto`：当 stderr 是终端且未设置 `NO_COLOR` 时启用。使用 `--color=always` 可在 stderr 被重定向时仍保留 ANSI 颜色，使用 `--color=never` 可将其关闭。显式颜色模式会覆盖自动终端和环境检测；所有模式下进度仍显示在 stderr 上。瞬时的 `Thinking...` 占位符仅在 stderr 是终端时显示；重定向的进度会省略它，只保留模型、工具、信息和错误等实质内容。
 
-推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，替代 "Thinking..." 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
+推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，在终端中替代 `Thinking...` 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
 
 使用 `--workdir` 可以指定工具解析相对路径时使用的基准目录：
 

@@ -36,7 +36,14 @@ func TestBuildObserverColorMode(t *testing.T) {
 				TerminalProgress: test.terminal,
 				ColorProgress:    test.autoColor,
 			}, false, false, test.mode, "")
-			observer.Observe(dora.Update{Kind: dora.UpdateThinking})
+			observer.Observe(dora.Update{
+				Kind: dora.UpdateMessageReceived,
+				Message: dora.Message{
+					Role:      dora.RoleAssistant,
+					Content:   "working",
+					ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "skill"}},
+				},
+			})
 			gotANSIColor := strings.Contains(stderr.String(), "\x1b[")
 			if gotANSIColor != test.wantANSIColor {
 				t.Fatalf("stderr = %q, ANSI color = %v, want %v", stderr.String(), gotANSIColor, test.wantANSIColor)

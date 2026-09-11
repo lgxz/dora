@@ -80,11 +80,12 @@ policy:
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	err := Run(context.Background(), []string{"--config", configPath, "hello"}, IO{
-		Stdin:           strings.NewReader(""),
-		Stdout:          &stdout,
-		Stderr:          &stderr,
-		StdinIsTerminal: true,
-		HTTPClient:      httpClient,
+		Stdin:            strings.NewReader(""),
+		Stdout:           &stdout,
+		Stderr:           &stderr,
+		StdinIsTerminal:  true,
+		TerminalProgress: true,
+		HTTPClient:       httpClient,
 	})
 	if err != nil {
 		t.Fatal(err)
