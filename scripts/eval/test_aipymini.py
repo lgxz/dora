@@ -88,7 +88,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         agent.exec_as_agent.assert_awaited_once()
         command = agent.exec_as_agent.call_args.kwargs["command"]
         self.assertNotIn("dora", command.lower())
-        aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" 2>&1", 1)[0])
+        aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" > ", 1)[0])
         self.assertEqual(aipymini_argv, [BINARY_PATH, "--model", agent.model_name])
 
 

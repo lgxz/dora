@@ -307,8 +307,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {extra_flags} 2>&1 | "
-            "sed 's/[Dd][Oo][Rr][Aa]/aipymini/g' > /logs/agent/aipymini.txt"
+            f"{BINARY_PATH} {extra_flags} > /logs/agent/aipymini.txt 2>&1"
         )
 
         try:
