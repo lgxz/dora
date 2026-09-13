@@ -11,7 +11,7 @@ from pathlib import Path
 
 class RunTBTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory(prefix="dora-tb-wrapper-test-")
+        directory = tempfile.TemporaryDirectory(prefix="aipymini-tb-wrapper-test-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.temp_root = self.root / "temp"
@@ -23,7 +23,7 @@ class RunTBTests(unittest.TestCase):
         harbor = binary_dir / "harbor"
         harbor.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, sys, yaml\n"
+            "import aipymini, json, os, sys, yaml\n"
             "from pathlib import Path\n"
             "args = sys.argv[1:]\n"
             "config_path = Path(args[args.index('--config') + 1])\n"
@@ -31,6 +31,8 @@ class RunTBTests(unittest.TestCase):
             "assert not capture_path.exists(), 'Harbor must be called only once'\n"
             "capture = {\n"
             "    'args': args, 'path': str(config_path),\n"
+            "    'adapter_path': aipymini.__file__,\n"
+            "    'binary_path': os.environ['AIPYMINI_BINARY'],\n"
             "    'mode': config_path.stat().st_mode & 0o777,\n"
             "    'config': yaml.safe_load(config_path.read_text())}\n"
             "capture_path.write_text(json.dumps(capture))\n"
@@ -42,10 +44,8 @@ class RunTBTests(unittest.TestCase):
             **os.environ,
             "PATH": f"{binary_dir}{os.pathsep}{os.environ['PATH']}",
             "TMPDIR": str(self.temp_root),
-            "DORA_BINARY": sys.executable,
-            # The obsolete environment variable must never select a model.
-            "DORA_MODEL": "obsolete/ignored-model",
-            "DORA_JOBS_DIR": str(self.root / "jobs"),
+            "AIPYMINI_BINARY": sys.executable,
+            "AIPYMINI_JOBS_DIR": str(self.root / "jobs"),
             "OPENROUTER_API_KEY": "test-key-not-for-logs",
             "TB_TEST_CAPTURE": str(self.capture),
             "TB_TEST_FAILURE": "",
@@ -72,7 +72,7 @@ class RunTBTests(unittest.TestCase):
         config = capture["config"]
         self.assertEqual(config, {"agents": [{
             "name": "aipymini",
-            "import_path": "dora_tb:DoraAgent",
+            "import_path": "aipymini:AIPyMiniAgent",
             "model_name": "openrouter/auto",
         }]})
         self.assertNotIn("-m", capture["args"])
@@ -82,6 +82,11 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(capture["mode"], 0o600)
         self.assertEqual(Path(capture["path"]).suffix, ".yaml")
         self.assertFalse(Path(capture["path"]).exists())
+        self.assertEqual(Path(capture["adapter_path"]).name, "aipymini.py")
+        self.assertEqual(Path(capture["binary_path"]).name, "aipymini")
+        self.assertFalse(Path(capture["adapter_path"]).exists())
+        self.assertFalse(Path(capture["binary_path"]).exists())
+        self.assertNotIn("dora", json.dumps(capture).lower())
         self.assertNotIn("test-key-not-for-logs", json.dumps(config))
 
     def test_model_is_yaml_quoted(self):
@@ -141,6 +146,8 @@ class RunTBTests(unittest.TestCase):
     def test_script_runs_without_adjacent_config(self):
         isolated_script = self.root / "run_tb.sh"
         isolated_script.write_text(self.script.read_text())
+        isolated_adapter = self.root / "aipymini.py"
+        isolated_adapter.write_text(self.script.with_name("aipymini.py").read_text())
         self.script = isolated_script
         self.assertEqual(list(self.script.parent.glob("*.yaml")), [])
         result = self.run_wrapper()

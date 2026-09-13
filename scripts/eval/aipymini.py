@@ -1,4 +1,4 @@
-"""dora — Harbor Terminal-Bench agent adapter.
+"""aipymini — Harbor Terminal-Bench agent adapter.
 
 This module adapts **dora** (the terminal LLM agent written in Go, see
 `/Users/lgx/Src/dora`) so it can be driven by the Harbor evaluation
@@ -6,7 +6,7 @@ framework (`harbor run --dataset terminal-bench@2.1`).
 
 Class
 -----
-* :class:`DoraAgent` — a :class:`harbor.agents.installed.base.BaseInstalledAgent`
+* :class:`AIPyMiniAgent` — a :class:`harbor.agents.installed.base.BaseInstalledAgent`
   subclass that uploads a prebuilt **local Linux** dora binary into the sandbox
   and runs it against each task instruction.
 
@@ -14,7 +14,7 @@ Confirmed design decisions (agreed with the user)
 -------------------------------------------------
 1. **Binary ships by upload, not download.**
    ``install()`` uploads the locally compiled ``GOOS=linux`` dora binary into
-   the sandbox at ``/installed-agent/dora`` via ``environment.upload_file``,
+   the sandbox at ``/installed-agent/aipymini`` via ``environment.upload_file``,
    then makes it executable. No network download / no npm / no online install.
 2. **API keys are injected through environment variables.**
    dora reads its keys from environment variables (e.g. ``TRUST_API_KEY``,
@@ -36,7 +36,7 @@ How to run
 The module must be importable by the Harbor Python process. Either place
 ``scripts/eval`` on ``PYTHONPATH`` or ``pip install -e .`` the project, then::
 
-    harbor run --dataset terminal-bench@2.1 --agent dora_tb:DoraAgent -m openrouter/auto
+    harbor run --dataset terminal-bench@2.1 --agent aipymini:AIPyMiniAgent -m openrouter/auto
 
 For the ``aipymini`` Agent name in Hub, use ``run_tb.sh``. It directly writes a minimal
 private temporary YAML config containing the Agent name, import path, and
@@ -46,11 +46,11 @@ job settings through Harbor flags such as ``-n``. No ``-m`` or ``--ak model`` is
 passed to Harbor.
 For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.
 
-The local Linux dora binary path is given via the host ``DORA_BINARY``
-environment variable (or the constructor kwarg ``dora_binary``). API keys go
+The local Linux binary path is given via the host ``AIPYMINI_BINARY``
+environment variable (or the constructor kwarg ``aipymini_binary``). API keys go
 through ``extra_env`` (``--ae``)::
 
-    --ak dora_binary=/path/to/dora-linux \\
+    --ak aipymini_binary=/path/to/aipymini-linux \\
     --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 
 Everything below intentionally only imports the API reference types inside
@@ -88,13 +88,13 @@ else:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-BINARY_PATH = "/installed-agent/dora"
+BINARY_PATH = "/installed-agent/aipymini"
 
-class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
+class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     """Harbor :class:`BaseInstalledAgent` adapter for the Go ``dora`` CLI agent.
 
     The adapter uploads a prebuilt local Linux dora binary into the sandbox
-    (``/installed-agent/dora``) and runs it against the task instruction that
+    (``/installed-agent/aipymini``) and runs it against the task instruction that
     is piped to stdin as a shell command, mirroring the ``claude_code``
     adapter's execution pattern.
     """
@@ -171,50 +171,49 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
     @override
     def parse_version(self, stdout: str) -> str:
-        """Extract the version from dora --version output.
+        """Extract the version from the underlying CLI's --version output.
 
-        dora --version prints: 'dora <version> (commit <commit>, built <date>)'.
-        We return the full string so the commit/date are preserved in the
-        agent_info, but strip the leading 'dora ' prefix.
+        Return the version, commit, and build date while omitting the executable
+        name from the Hub metadata.
         """
         text = stdout.strip()
-        if text.startswith("dora "):
-            return text[len("dora "):]
+        executable, separator, version = text.partition(" ")
+        if separator and executable:
+            return version
         return text or "unknown"
 
     # -- configurable binaries -------------------------------------------------
 
     def _resolve_local_binary(self) -> Path:
-        """Resolve the local Linux dora binary path to upload.
+        """Resolve the local Linux aipymini binary path to upload.
 
         Order of precedence:
-          1. ``dora_binary`` kwarg passed to the constructor.
-          2. the ``DORA_BINARY`` environment variable (``--ae DORA_BINARY=...``).
+          1. ``aipymini_binary`` kwarg passed to the constructor.
+          2. the ``AIPYMINI_BINARY`` environment variable.
 
         Raises a clear error when neither is provided.
         """
-        path_str: str | None = getattr(self, "_flag_kwargs", {}).get("dora_binary") or os.environ.get("DORA_BINARY")
+        path_str: str | None = getattr(self, "_flag_kwargs", {}).get("aipymini_binary") or os.environ.get("AIPYMINI_BINARY")
         if not path_str:
             raise RuntimeError(
-                "No dora binary configured. Provide the local Linux build via "
-                "``DORA_BINARY`` (e.g. ``--ae DORA_BINARY=/path/to/dora-linux``) "
-                "or the ``dora_binary`` kwarg."
+                "No aipymini binary configured. Provide the local Linux build via "
+                "``AIPYMINI_BINARY`` or the ``aipymini_binary`` kwarg."
             )
         local = Path(path_str).expanduser()
         if not local.is_file():
-            raise RuntimeError(f"DORA_BINARY does not point to a file: {local}")
+            raise RuntimeError(f"AIPYMINI_BINARY does not point to a file: {local}")
         return local
 
     # -- installation ----------------------------------------------------------
 
     async def install(self, environment: BaseEnvironment) -> None:  # type: ignore[override]
-        """Install the dora binary into the sandbox.
+        """Install the aipymini binary into the sandbox.
 
         Steps:
           1. Ensure the minimal system dependencies are present.
           2. Resolve and upload the local Linux dora binary to
-             ``/installed-agent/dora`` and make it executable.
-          3. Verify it runs via ``dora --version`` and log the output.
+             ``/installed-agent/aipymini`` and make it executable.
+          3. Verify it runs via ``aipymini --version`` and log the output.
         """
         if _HARBOR_IMPORT_ERROR is not None:
             raise RuntimeError(
@@ -264,11 +263,11 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     # -- execution -------------------------------------------------------------
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:  # type: ignore[override]
-        """Run dora against one task instruction inside the sandbox.
+        """Run aipymini against one task instruction inside the sandbox.
 
         The instruction is written into a random shell environment variable and
-        piped to dora's stdin (following the ``claude_code`` pattern), the
-        merged output is redirected to ``/logs/agent/dora.txt`` without being
+        piped to aipymini's stdin (following the ``claude_code`` pattern), the
+        merged output is redirected to ``/logs/agent/aipymini.txt`` without being
         forwarded to Harbor's console. Passing the
         instruction via stdin (rather than as a command-line positional
         argument) avoids Go's ``flag`` parser treating an instruction that
@@ -298,7 +297,7 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         # argv with Go's flag package, which would reject an instruction that
         # starts with '-' (e.g. a Markdown list item). A random var name avoids
         # leaking/conflicting; unset keeps the value out of the process env.
-        instruction_shell_var = "dora_instruction_" + uuid.uuid4().hex
+        instruction_shell_var = "aipymini_instruction_" + uuid.uuid4().hex
         instruction_env_var = instruction_shell_var.upper()
         run_env[instruction_env_var] = instruction
 
@@ -308,17 +307,18 @@ class DoraAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {extra_flags} > /logs/agent/dora.txt 2>&1"
+            f"{BINARY_PATH} {extra_flags} 2>&1 | "
+            "sed 's/[Dd][Oo][Rr][Aa]/aipymini/g' > /logs/agent/aipymini.txt"
         )
 
         try:
             result = await self.exec_as_agent(environment, command=command, env=run_env)
             # NOTE: token/cost accounting is intentionally left empty for now.
-            # It could be parsed out of /logs/agent/dora.txt later; the agent
+            # It could be parsed out of /logs/agent/aipymini.txt later; the agent
             # context tolerates all-None fields (AgentContext.is_empty()).
             _ = result
         except Exception as exc:  # NonZeroAgentExitCodeError and friends
-            # The full transcript lives in /logs/agent/dora.txt for post-hoc
+            # The full transcript lives in /logs/agent/aipymini.txt for post-hoc
             # inspection regardless of exit status.
-            self.logger.warning("dora run exited with an error: %s", exc)
+            self.logger.warning("aipymini run exited with an error: %s", exc)
             raise

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# run_tb.sh — Harbor Terminal-Bench 评测启动入口（配合 scripts/eval/dora_tb.py 使用）。
+# run_tb.sh — Harbor Terminal-Bench 评测启动入口（配合 scripts/eval/aipymini.py 使用）。
 #
 # 用法：run_tb.sh -m PROVIDER/PROFILE [Harbor 参数...]
 # 示例：run_tb.sh -m trust/hy4-preview -n 2
 # -m/--model 必填，由本脚本消费，不透传给 Harbor。
 #
 # 可通过环境变量覆盖的默认值：
-#   DORA_BINARY  本地 Linux dora 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
-#   DORA_DATASET Harbor 数据集，默认 terminal-bench@2.1
-#   DORA_JOBS_DIR 结果输出目录，默认 $PWD/jobs
+#   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
+#   AIPYMINI_DATASET Harbor 数据集，默认 terminal-bench@2.1
+#   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/aipymini-jobs
 #
 # 其余 Harbor 参数透传；Agent 和配置入口由本脚本管理，不可另行覆盖。
 # 直接生成仅含 Agent 名称、加载路径和模型的临时 YAML，不需要静态配置文件，
@@ -20,7 +20,7 @@ set -euo pipefail
 usage() {
   echo "用法：$0 -m PROVIDER/PROFILE [Harbor 参数...]"
   echo "示例：$0 -m trust/hy4-preview -n 2"
-  echo "-m/--model 必填；模型同时用于 Dora 选模和 Hub 元数据。"
+  echo "-m/--model 必填；模型同时用于 aipymini 选模和 Hub 元数据。"
 }
 
 model_spec=""
@@ -71,19 +71,15 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 把 scripts/eval 目录加入 PYTHONPATH，供 harbor 进程 import dora_tb 模块。
-export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-
 # 可覆盖的默认值。
-: "${DORA_BINARY:="$SCRIPT_DIR/../../dist/dora-linux-arm64"}"
-: "${DORA_DATASET:=terminal-bench/terminal-bench-2-1}"
-: "${DORA_JOBS_DIR:="$PWD/jobs"}"
-export DORA_BINARY
+: "${AIPYMINI_BINARY:="$SCRIPT_DIR/../../dist/dora-linux-arm64"}"
+: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench}"
+: "${AIPYMINI_JOBS_DIR:="$HOME/aipymini-jobs"}"
 
 # 确认本地 Linux 构建产物存在且可执行。
-if [ ! -x "$DORA_BINARY" ]; then
-  echo "错误：DORA_BINARY 不是可执行文件或不存在：$DORA_BINARY" >&2
-  echo "请先用 make release-linux GOARCH=<任务镜像架构> CGO_ENABLED=0 构建静态 Linux 产物，或设置 DORA_BINARY 覆盖路径。" >&2
+if [ ! -x "$AIPYMINI_BINARY" ]; then
+  echo "错误：AIPYMINI_BINARY 不是可执行文件或不存在：$AIPYMINI_BINARY" >&2
+  echo "请先用 make release-linux GOARCH=<任务镜像架构> CGO_ENABLED=0 构建静态 Linux 产物，或设置 AIPYMINI_BINARY 覆盖路径。" >&2
   exit 1
 fi
 
@@ -93,7 +89,7 @@ if ! command -v harbor >/dev/null 2>&1; then
   exit 1
 fi
 
-# 与 Dora 一致：provider 名称大写、非字母数字字符替换为下划线。
+# 与 aipymini 一致：provider 名称大写、非字母数字字符替换为下划线。
 model_provider="${model_spec%%/*}"
 API_KEY_VAR="$(python3 -c 'import sys; print("".join(c.upper() if c.isascii() and c.isalnum() else "_" for c in sys.argv[1]) + "_API_KEY")' "$model_provider")"
 
@@ -103,22 +99,34 @@ if [ -z "${!API_KEY_VAR:-}" ]; then
   exit 1
 fi
 
-# 通过 --ae 注入会传给容器内 dora 的环境变量。至少模型对应 provider 的 key 必须存在。
+# 通过 --ae 注入会传给容器内 aipymini 的环境变量。至少模型对应 provider 的 key 必须存在。
 agent_env_args=(
   "--ae" "${API_KEY_VAR}=${!API_KEY_VAR}"
 )
 
 # 临时目录仅当前用户可访问，退出（包括失败和中断）时清理。
-job_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/dora-tb.XXXXXX")"
+job_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/aipymini-tb.XXXXXX")"
 job_config_path="$job_config_dir/job.yaml"
+aipymini_adapter_path="$job_config_dir/aipymini.py"
+aipymini_binary_path="$job_config_dir/aipymini"
 cleanup_job_config() {
-  rm -f "$job_config_path"
+  rm -f "$job_config_path" "$aipymini_adapter_path" "$aipymini_binary_path"
   rmdir "$job_config_dir"
 }
 trap cleanup_job_config EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+
+# Harbor 会把命令和异常 traceback 写入结果。使用中性临时路径，避免本地
+# 仓库名、适配器来源路径和构建产物文件名泄漏到上传结果。
+cp "$SCRIPT_DIR/aipymini.py" "$aipymini_adapter_path"
+cp "$AIPYMINI_BINARY" "$aipymini_binary_path"
+chmod 700 "$aipymini_binary_path"
+export AIPYMINI_BINARY="$aipymini_binary_path"
+export PYTHONPATH="$job_config_dir${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+
 # YAML 单引号字符串通过双写单引号转义；模型已禁止空白和换行。
 yaml_model="$(printf '%s' "$model_spec" | sed "s/'/''/g")"
 (
@@ -126,7 +134,7 @@ yaml_model="$(printf '%s' "$model_spec" | sed "s/'/''/g")"
   printf '%s\n' \
     'agents:' \
     '  - name: aipymini' \
-    '    import_path: dora_tb:DoraAgent' \
+    '    import_path: aipymini:AIPyMiniAgent' \
     "    model_name: '$yaml_model'" > "$job_config_path"
 )
 
@@ -137,7 +145,7 @@ echo "> harbor run --config \"$job_config_path\" (agent=aipymini, model=$model_s
 # shellcheck disable=SC2086
 harbor run \
   --config "$job_config_path" \
-  -d "$DORA_DATASET" \
+  -d "$AIPYMINI_DATASET" \
   "${agent_env_args[@]}" \
-  -o "$DORA_JOBS_DIR" \
+  -o "$AIPYMINI_JOBS_DIR" \
   ${harbor_args[@]+"${harbor_args[@]}"}
