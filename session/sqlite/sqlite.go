@@ -17,7 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -392,9 +392,11 @@ var schemaStatements = []string{
 }
 
 type toolCallRecord struct {
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Bytes are base64-encoded by encoding/json, preserving even malformed JSON
+	// and invalid UTF-8 without validation or normalization.
+	Input []byte `json:"input_bytes"`
 }
 
 func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, position int, message dora.Message, usage *dora.Usage) error {
@@ -442,10 +444,7 @@ func encodeToolCalls(calls []dora.ToolCall) (string, error) {
 	}
 	records := make([]toolCallRecord, len(calls))
 	for i, call := range calls {
-		if !json.Valid(call.Input) {
-			return "", fmt.Errorf("tool call %d has invalid JSON input", i)
-		}
-		records[i] = toolCallRecord{ID: call.ID, Name: call.Name, Input: append(json.RawMessage(nil), call.Input...)}
+		records[i] = toolCallRecord{ID: call.ID, Name: call.Name, Input: append([]byte(nil), call.Input...)}
 	}
 	encoded, err := json.Marshal(records)
 	return string(encoded), err

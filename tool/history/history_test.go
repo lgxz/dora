@@ -1,13 +1,16 @@
 package history
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/session"
+	"github.com/lgxz/dora/session/sqlite"
 )
 
 type readerStub struct {
@@ -111,4 +114,69 @@ func (reader *bigReaderStub) GetRounds(_ context.Context, _ int64, _ session.Rou
 			Assistant: dora.Message{Role: dora.RoleAssistant, Content: reader.content},
 		}},
 	}, nil
+}
+
+func TestHistoryGetsStoredMalformedArguments(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	inputs := [][]byte{[]byte(`{"command":`), []byte(" \n{\"x\": 1}\t"), nil, []byte("\xff")}
+	turn := dora.NewTurn("test")
+	for _, raw := range inputs {
+		if err := turn.AppendRound(dora.Round{
+			Assistant: dora.Message{Role: dora.RoleAssistant, Reasoning: "checking", ToolCalls: []dora.ToolCall{{ID: "call", Name: "echo", Input: raw}}},
+			Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: "call", Content: "invalid arguments"}},
+			Usage:     &dora.Usage{TotalTokens: 42},
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CommitFailed(ctx, turn, errors.New("stopped")); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(ctx, json.RawMessage(`{"action":"get","turn_id":1,"limit":4}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page historyRoundPage
+	if err := json.Unmarshal([]byte(result.Content), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 4 || page.Offset != 0 || page.Limit != 4 || len(page.Rounds) != 4 {
+		t.Fatalf("page = %#v", page)
+	}
+	for i, round := range page.Rounds {
+		if len(round.Assistant.ToolCalls) != 1 {
+			t.Fatalf("calls = %#v", round.Assistant.ToolCalls)
+		}
+		call := round.Assistant.ToolCalls[0]
+		got := []byte(call.Input)
+		if call.InputBytes != nil {
+			got = call.InputBytes
+		}
+		if !bytes.Equal(got, inputs[i]) {
+			t.Fatalf("input = %q, want %q", got, inputs[i])
+		}
+		if call.ID != "call" || call.Name != "echo" || round.Assistant.Reasoning != "checking" || round.Usage.TotalTokens != 42 || round.Tools[0].Content != "invalid arguments" {
+			t.Fatalf("round = %#v", round)
+		}
+	}
+	result, err = tool.Execute(ctx, json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listing session.TurnPage
+	if err := json.Unmarshal([]byte(result.Content), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if listing.Total != 1 || listing.Turns[0].Status != session.TurnStatusFailed {
+		t.Fatalf("listing = %#v", listing)
+	}
 }

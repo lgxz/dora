@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -397,8 +398,8 @@ PRAGMA user_version = 6;`)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6 definition") {
-		t.Fatalf("error = %v, want unsupported version 6 definition", err)
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6") {
+		t.Fatalf("error = %v, want unsupported version 6", err)
 	}
 }
 
@@ -462,5 +463,82 @@ func completeTurnWithResponse(t *testing.T, turn *dora.Turn, response dora.Respo
 	}
 	if err := agent.Run(context.Background(), turn); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStorePreservesArgumentBytesAcrossReopen(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "canceled", "max_rounds"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "history.sqlite")
+			store, err := Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { store.Close() }()
+			inputs := [][]byte{[]byte(`{"command":`), []byte(" \n{\"x\": 1}\t"), nil, []byte("\x00\xff"), []byte(`{"文本":"你好"}`)}
+			turn := dora.NewTurn("test")
+			for i, raw := range inputs {
+				id := strconv.Itoa(i)
+				if err := turn.AppendRound(dora.Round{
+					Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: id, Name: "echo", Input: raw}}},
+					Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: id, Content: "tool result"}},
+				}, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var id int64
+			switch status {
+			case "completed":
+				completeTurnWithSystem(t, turn, "done")
+				id, err = store.CommitTurn(ctx, turn)
+			case "failed":
+				id, err = store.CommitFailed(ctx, turn, errors.New("failed"))
+			case "canceled":
+				id, err = store.CommitCanceled(ctx, turn, context.Canceled)
+			case "max_rounds":
+				id, err = store.CommitMaxRounds(ctx, turn, dora.ErrMaxRounds)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: len(inputs)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Rounds) != len(inputs) {
+				t.Fatalf("round count = %d", len(page.Rounds))
+			}
+			for i, raw := range inputs {
+				if got := page.Rounds[i].Assistant.ToolCalls[0].Input; !bytes.Equal(got, raw) {
+					t.Fatalf("round %d: got %q, want %q", i, got, raw)
+				}
+			}
+		})
+	}
+}
+
+func TestStoreRejectsVersionSixWithoutMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 6`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6") {
+		t.Fatalf("expected version rejection, got %v", err)
 	}
 }

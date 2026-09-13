@@ -552,13 +552,12 @@ streamed model output is not saved. Confirming the interactive continuation
 prompt keeps using the same Turn and does not save an intermediate `max_rounds`
 record. Provider continuation is kept only while that turn runs.
 
-With `--session`, SQLite schema version 6 contains `turns` and `messages` tables and records the
+With `--session`, SQLite schema version 7 contains `turns` and `messages` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, reasoning captured on round assistant messages, and each model
 call's usage JSON. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 5 and earlier databases, plus development v6 files whose status
-constraint predates `canceled`, are rejected; start a new file). When
+(schema version 6 and earlier databases are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain
@@ -566,6 +565,12 @@ commands, tool output, and token usage, so treat persistent files as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
+
+Session storage preserves tool argument bytes exactly, including malformed JSON.
+`history get` returns each tool call's `input` as a string containing the original
+argument text, for both valid and invalid JSON. For invalid UTF-8 it also includes
+base64 `input_bytes` so the original bytes remain available. History output still
+uses the existing size limit; narrow the page if the result is truncated.
 
 ### Agent Client Protocol
 

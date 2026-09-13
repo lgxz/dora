@@ -357,15 +357,16 @@ persistent SQLite file, while omitting it creates an in-memory SQLite database
 for the process lifetime. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 6 and two tables:
+The database uses schema version 7 and two tables:
 
 - `turns`: one row per saved invocation, including `status` (`completed`,
   `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
   `user`, final `result`, round count, final-response `usage_json`, and commit
   time. All non-completed rows have an error and empty result/final usage;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
-  `round_index`, and `position`. Tool calls and images are JSON columns because
-  they are structured fields of a message. Assistant messages also store their
+  `round_index`, and `position`. Tool calls use a JSON column; each call stores its arguments as base64
+  `input_bytes` rather than embedded JSON, preserving all original bytes, including
+  invalid JSON and invalid UTF-8. Assistant messages also store their
   captured `reasoning`. Assistant rows also store that model call's optional
   `usage_json`; tool rows never carry usage. Like the provider continuation,
   the final response's reasoning is displayed live but intentionally not
@@ -377,8 +378,13 @@ plus the limit error, while `CommitFailed` and `CommitCanceled` store all
 complete rounds plus the terminal run error. None of the incomplete-turn paths
 stores partial streamed model output. Provider continuation is intentionally
 not stored. SQLite allocates the turn ID and foreign keys bind every message to
-its turn. Schema version 5 and older databases, and development v6 definitions
-without the `canceled` status, are rejected rather than migrated.
+its turn. Schema version 6 and older databases are rejected rather than migrated.
+
+History's `get` output uses a dedicated presentation representation: tool-call
+`input` is always the original argument text as a JSON string. Invalid UTF-8 also
+gets base64 `input_bytes` for lossless inspection. This avoids marshaling invalid
+`json.RawMessage` values; the kernel and `session.Reader` retain original bytes.
+The existing history output size cap still applies.
 
 `tool/history` is registered from the first turn against the active session.
 An empty database is a valid history source whose `list` result is empty.
