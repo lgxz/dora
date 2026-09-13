@@ -525,6 +525,21 @@ paths are unchanged. Configuration and `--session` paths continue to be
 resolved from the process working directory. `--workdir` selects a path
 reference, not a filesystem sandbox or an additional permission boundary.
 
+### Model request retries
+
+Transient model failures, including a connection reset after partial text or
+reasoning has arrived, retry the current model request up to six total attempts.
+The five waits use 2, 4, 8, 16, and 30 seconds plus up to 50% random jitter;
+a provider-supplied retry delay takes precedence. Rate-limit failures retain
+their separate five-attempt policy and provider-directed delay.
+
+Retry progress reports the next attempt, delay, and error on stderr unless
+`--quiet` is set. Cancellation interrupts the wait. Failed attempts never
+commit partial responses or execute their tool calls, and retries reuse the
+current request without replaying completed tool rounds. Already displayed
+text or reasoning cannot be retracted and may appear again after a retry.
+Only the successful complete response enters turn history.
+
 ### Sessions
 
 Pass a SQLite file to retain turns across CLI invocations:

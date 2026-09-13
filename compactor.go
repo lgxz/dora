@@ -167,7 +167,7 @@ func (a *Agent) generateContextSummary(ctx context.Context, history []Message, t
 		response, err := a.generateWithRetry(ctx, Request{
 			Messages:        messages,
 			MaxOutputTokens: &targetTokens,
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			return result, fmt.Errorf("generate summary: %w", err)
 		}

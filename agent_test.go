@@ -914,7 +914,7 @@ func TestRunRetriesRetryableError(t *testing.T) {
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
 		if calls < 3 {
-			return Response{}, &RetryableError{Err: errors.New("transient")}
+			return Response{}, &RetryableError{RetryAfter: time.Nanosecond, Err: errors.New("transient")}
 		}
 		return Response{Content: "recovered"}, nil
 	})
@@ -935,7 +935,7 @@ func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
 	var calls int
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
-		return Response{}, &RetryableError{Err: errors.New("persistent")}
+		return Response{}, &RetryableError{RetryAfter: time.Nanosecond, Err: errors.New("persistent")}
 	})
 	agent, err := New(model)
 	if err != nil {
@@ -966,23 +966,75 @@ func TestRunDoesNotRetryNonRetryableError(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotRetryAfterPartialStream(t *testing.T) {
-	var calls int
-	model := streamingModelFunc(func(_ context.Context, _ Request, emit func(ModelEvent)) (Response, error) {
+func TestRunRetriesAfterPartialStream(t *testing.T) {
+	for _, kind := range []ModelEventKind{ModelEventContentDelta, ModelEventReasoningDelta} {
+		t.Run(string(kind), func(t *testing.T) {
+			var calls, executions, retries int
+			var original Request
+			model := streamingModelFunc(func(_ context.Context, request Request, emit func(ModelEvent)) (Response, error) {
+				calls++
+				if calls == 1 {
+					original = request
+					emit(ModelEvent{Kind: kind, Delta: "partial"})
+					return Response{Content: "partial", ToolCalls: []ToolCall{{ID: "failed", Name: "test"}}}, &RetryableError{Err: errors.New("connection reset"), RetryAfter: time.Nanosecond}
+				}
+				if !reflect.DeepEqual(request, original) {
+					t.Fatalf("retry changed request: %#v", request)
+				}
+				return Response{Content: "recovered"}, nil
+			})
+			agent, err := New(model, stubTool{spec: ToolSpec{Name: "test"}, execute: func(context.Context, json.RawMessage) (string, error) {
+				executions++
+				return "", nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runAgentObserved(agent, context.Background(), nil, ObserverFunc(func(update Update) {
+				if update.Kind == UpdateInfo && strings.Contains(update.Info, "Retrying model request 2/6") && strings.Contains(update.Info, "connection reset") {
+					retries++
+				}
+			}))
+			if err != nil || result.Content != "recovered" || calls != 2 || executions != 0 || retries != 1 {
+				t.Fatalf("result=%#v error=%v calls=%d executions=%d retries=%d", result, err, calls, executions, retries)
+			}
+			for _, message := range result.Messages {
+				if strings.Contains(message.Content, "partial") || len(message.ToolCalls) != 0 {
+					t.Fatalf("failed response persisted: %#v", message)
+				}
+			}
+		})
+	}
+}
+
+func TestRunCancelDuringRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	agent, err := New(modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
-		emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "partial"})
-		return Response{}, &RetryableError{Err: errors.New("stream failed after content")}
-	})
-	agent, err := New(model)
+		return Response{}, &RetryableError{Err: errors.New("reset")}
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runAgent(agent, context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "stream failed after content") {
-		t.Fatalf("error = %v", err)
+	_, err = runAgentObserved(agent, ctx, nil, ObserverFunc(func(update Update) {
+		if update.Kind == UpdateInfo {
+			cancel()
+		}
+	}))
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("error=%v calls=%d", err, calls)
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1 (no retry after partial content)", calls)
+}
+
+func TestRetryBackoffGenericSchedule(t *testing.T) {
+	for attempt, seconds := range []int{2, 4, 8, 16, 30} {
+		base := time.Duration(seconds) * time.Second
+		delay := retryBackoff(attempt, 0, RetryableGeneric)
+		if delay < base || delay >= base+base/2 {
+			t.Fatalf("attempt=%d delay=%s", attempt, delay)
+		}
 	}
 }
 
@@ -1013,7 +1065,7 @@ func TestRunRetriesRateLimitUpToMaxRateLimitAttempts(t *testing.T) {
 	var calls int
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
-		return Response{}, &RetryableError{Err: errors.New("rate limited"), Kind: RetryableRateLimit}
+		return Response{}, &RetryableError{RetryAfter: time.Nanosecond, Err: errors.New("rate limited"), Kind: RetryableRateLimit}
 	})
 	agent, err := New(model)
 	if err != nil {

@@ -1253,8 +1253,8 @@ model:
 	if err == nil || !strings.Contains(err.Error(), "connection timed out") {
 		t.Fatalf("error = %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1 after partial output", calls)
+	if calls != 6 {
+		t.Fatalf("calls = %d, want 6 attempts after partial output", calls)
 	}
 
 	store, err := sqlitesession.Open(context.Background(), sessionPath)
