@@ -297,7 +297,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         # argv with Go's flag package, which would reject an instruction that
         # starts with '-' (e.g. a Markdown list item). A random var name avoids
         # leaking/conflicting; unset keeps the value out of the process env.
-        instruction_shell_var = "aipymini_instruction_" + uuid.uuid4().hex
+        instruction_shell_var = "instruction_" + uuid.uuid4().hex
         instruction_env_var = instruction_shell_var.upper()
         run_env[instruction_env_var] = instruction
 
@@ -307,7 +307,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {extra_flags} > /logs/agent/aipymini.txt 2>&1"
+            f"{BINARY_PATH} {extra_flags} > /logs/agent/run.txt 2>&1"
         )
 
         try:
