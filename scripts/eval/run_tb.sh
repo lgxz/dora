@@ -73,7 +73,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 可覆盖的默认值。
 : "${AIPYMINI_BINARY:="$SCRIPT_DIR/../../dist/dora-linux-arm64"}"
-: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench}"
+: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
 
 # 确认本地 Linux 构建产物存在且可执行。
