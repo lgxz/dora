@@ -54,7 +54,7 @@ func TestRunCallsConfiguredModel(t *testing.T) {
 		if body["model"] != "test-model" {
 			t.Fatalf("model = %#v", body["model"])
 		}
-		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"hello from model"}}]}`), nil
+		return fakeChatResponse(`{"choices":[{"index":0,"delta":{"content":"hello from model"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":3}}}`), nil
 	})}
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -76,10 +76,11 @@ policy:
 	if err := writeTestConfig(t, configPath, configContents); err != nil {
 		t.Fatal(err)
 	}
+	metricsPath := filepath.Join(t.TempDir(), "metrics.json")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--config", configPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--config", configPath, "--metrics-file", metricsPath, "hello"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           &stdout,
 		Stderr:           &stderr,
@@ -98,6 +99,20 @@ policy:
 	}
 	if !strings.Contains(stderr.String(), "Model openai/fast") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+	metricsContents, err := os.ReadFile(metricsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage dora.Usage
+	if err := json.Unmarshal(metricsContents, &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.TotalTokens != 15 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if usage.InputDetails == nil || usage.InputDetails.CachedTokens == nil || *usage.InputDetails.CachedTokens != 3 {
+		t.Fatalf("input details = %#v", usage.InputDetails)
 	}
 }
 

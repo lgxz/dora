@@ -38,6 +38,16 @@ func TestParseOptionsWorkdir(t *testing.T) {
 	}
 }
 
+func TestParseOptionsMetricsFile(t *testing.T) {
+	opts, err := parseOptions([]string{"--metrics-file", "metrics.json", "hello"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.metricsPath != "metrics.json" || len(opts.promptArgs) != 1 || opts.promptArgs[0] != "hello" {
+		t.Fatalf("options = %#v", opts)
+	}
+}
+
 func TestParseOptionsACP(t *testing.T) {
 	opts, err := parseOptions([]string{"--acp", "--no-skills"}, &strings.Builder{})
 	if err != nil {

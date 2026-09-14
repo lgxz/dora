@@ -4,6 +4,7 @@ Use the Python environment containing Harbor. No containers or model calls run.
 """
 
 import asyncio
+import json
 import shlex
 import tempfile
 import unittest
@@ -11,9 +12,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 from harbor.agents.factory import AgentFactory
+from harbor.models.agent.context import AgentContext
 from harbor.models.trial.config import AgentConfig
 
-from aipymini import AIPyMiniAgent, BINARY_PATH
+from aipymini import AIPyMiniAgent, BINARY_PATH, METRICS_PATH
 
 
 class AIPyMiniModelSelectionTests(unittest.TestCase):
@@ -89,7 +91,41 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         command = agent.exec_as_agent.call_args.kwargs["command"]
         self.assertNotIn("dora", command.lower())
         aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" > ", 1)[0])
-        self.assertEqual(aipymini_argv, [BINARY_PATH, "--model", agent.model_name])
+        self.assertEqual(
+            aipymini_argv,
+            [BINARY_PATH, "--metrics-file", METRICS_PATH, "--model", agent.model_name],
+        )
+        self.assertIn("> /logs/agent/run.txt 2>&1", command)
+
+    def test_populates_harbor_context_from_metrics(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        metrics_path = self.logs_dir / Path(METRICS_PATH).name
+        metrics_path.write_text(
+            json.dumps({
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "total_tokens": 150,
+                "input_details": {"cached_tokens": 25},
+            })
+        )
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        self.assertEqual(context.n_input_tokens, 120)
+        self.assertEqual(context.n_output_tokens, 30)
+        self.assertEqual(context.n_cache_tokens, 25)
+        self.assertIsNone(context.cost_usd)
+
+    def test_missing_or_null_metrics_leave_context_empty(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        context = AgentContext()
+        agent.populate_context_post_run(context)
+        self.assertTrue(context.is_empty())
+
+        (self.logs_dir / Path(METRICS_PATH).name).write_text("null")
+        agent.populate_context_post_run(context)
+        self.assertTrue(context.is_empty())
 
 
 if __name__ == "__main__":

@@ -143,6 +143,14 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(self.run_wrapper().returncode, 23)
         self.assertTrue(self.capture.exists())
 
+    def test_default_jobs_directory_is_under_home(self):
+        self.env.pop("AIPYMINI_JOBS_DIR")
+        self.env["HOME"] = str(self.root / "home")
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(self.capture.read_text())["args"]
+        self.assertEqual(args[args.index("-o") + 1], str(Path(self.env["HOME"]) / "jobs"))
+
     def test_script_runs_without_adjacent_config(self):
         isolated_script = self.root / "run_tb.sh"
         isolated_script.write_text(self.script.read_text())

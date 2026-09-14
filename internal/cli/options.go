@@ -28,6 +28,7 @@ type options struct {
 	events       bool
 	acp          bool
 	sessionPath  string
+	metricsPath  string
 	workdir      string
 	promptArgs   []string
 	usage        func()
@@ -68,6 +69,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdin/stdout")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query saved turns")
+	flags.StringVar(&opts.metricsPath, "metrics-file", "", "write aggregate model usage as JSON")
 	flags.StringVar(&opts.workdir, "workdir", "", "working directory used to resolve relative tool paths")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Dora - A tiny, extensible, and efficient LLM agent.\n\n")

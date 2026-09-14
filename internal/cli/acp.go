@@ -64,6 +64,8 @@ func validateACPOptions(opts options) error {
 		return errors.New("--acp does not accept a prompt")
 	case opts.sessionPath != "":
 		return errors.New("--acp does not accept --session; ACP sessions manage their own history")
+	case opts.metricsPath != "":
+		return errors.New("--acp does not accept --metrics-file; ACP may run multiple prompts")
 	case opts.workdir != "":
 		return errors.New("--acp does not accept --workdir; the ACP client supplies cwd per session")
 	case opts.events:

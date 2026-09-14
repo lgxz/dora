@@ -9,7 +9,7 @@
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
 #   AIPYMINI_DATASET Harbor 数据集，默认 terminal-bench@2.1
-#   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/aipymini-jobs
+#   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
 #
 # 其余 Harbor 参数透传；Agent 和配置入口由本脚本管理，不可另行覆盖。
 # 直接生成仅含 Agent 名称、加载路径和模型的临时 YAML，不需要静态配置文件，

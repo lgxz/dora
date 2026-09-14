@@ -61,6 +61,7 @@ class is actually used).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -89,6 +90,17 @@ else:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 BINARY_PATH = "/installed-agent/aipymini"
+METRICS_PATH = "/logs/agent/metrics.json"
+
+
+def _optional_token_count(metrics: dict[str, Any], key: str) -> int | None:
+    value = metrics.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{key} must be a non-negative integer or null")
+    return value
+
 
 class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     """Harbor :class:`BaseInstalledAgent` adapter for the Go ``dora`` CLI agent.
@@ -267,7 +279,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
         The instruction is written into a random shell environment variable and
         piped to aipymini's stdin (following the ``claude_code`` pattern), the
-        merged output is redirected to ``/logs/agent/aipymini.txt`` without being
+        merged output is redirected to ``/logs/agent/run.txt`` without being
         forwarded to Harbor's console. Passing the
         instruction via stdin (rather than as a command-line positional
         argument) avoids Go's ``flag`` parser treating an instruction that
@@ -307,17 +319,52 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {extra_flags} > /logs/agent/run.txt 2>&1"
+            f"{BINARY_PATH} --metrics-file {shlex.quote(METRICS_PATH)} "
+            f"{extra_flags}> /logs/agent/run.txt 2>&1"
         )
 
         try:
-            result = await self.exec_as_agent(environment, command=command, env=run_env)
-            # NOTE: token/cost accounting is intentionally left empty for now.
-            # It could be parsed out of /logs/agent/aipymini.txt later; the agent
-            # context tolerates all-None fields (AgentContext.is_empty()).
-            _ = result
+            await self.exec_as_agent(environment, command=command, env=run_env)
         except Exception as exc:  # NonZeroAgentExitCodeError and friends
-            # The full transcript lives in /logs/agent/aipymini.txt for post-hoc
+            # The full transcript lives in /logs/agent/run.txt for post-hoc
             # inspection regardless of exit status.
             self.logger.warning("aipymini run exited with an error: %s", exc)
             raise
+
+    @override
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        """Populate Harbor's token fields from aipymini's aggregate usage file."""
+        metrics_path = self.logs_dir / Path(METRICS_PATH).name
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            self.logger.warning("aipymini did not produce %s", metrics_path.name)
+            return
+        except (OSError, json.JSONDecodeError) as exc:
+            self.logger.warning("could not read aipymini token metrics: %s", exc)
+            return
+
+        # JSON null means the provider did not report usage. Do not estimate it.
+        if metrics is None:
+            return
+        if not isinstance(metrics, dict):
+            self.logger.warning("aipymini token metrics must be a JSON object or null")
+            return
+
+        try:
+            input_tokens = _optional_token_count(metrics, "input_tokens")
+            output_tokens = _optional_token_count(metrics, "output_tokens")
+            input_details = metrics.get("input_details")
+            if input_details is None:
+                cache_tokens = None
+            elif isinstance(input_details, dict):
+                cache_tokens = _optional_token_count(input_details, "cached_tokens")
+            else:
+                raise ValueError("input_details must be an object or null")
+        except ValueError as exc:
+            self.logger.warning("invalid aipymini token metrics: %s", exc)
+            return
+
+        context.n_input_tokens = input_tokens
+        context.n_output_tokens = output_tokens
+        context.n_cache_tokens = cache_tokens

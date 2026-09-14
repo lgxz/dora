@@ -511,6 +511,15 @@ terminal renderer does not print usage. Per-round usage and the final response
 usage are saved in the active SQLite session and returned by the history tool;
 without `--session`, that database is in memory and disappears when Dora exits.
 
+For a one-shot machine-readable total, pass `--metrics-file PATH`. Dora writes
+one JSON value after the turn, summing every completed model call (tool rounds
+and the final response) in the existing `Usage` shape. The file contains
+`input_tokens`, `output_tokens`, `total_tokens`, and any reported token-detail
+categories; it contains JSON `null` when the provider reports no usage. Dora
+does not estimate missing usage. The parent directory must already exist, and
+the file is created with `0600` permissions. This option is not supported in
+ACP or event-daemon mode because those modes can run multiple prompts.
+
 Use `--workdir` to choose the base directory for relative paths used by tools:
 
 ```sh
@@ -623,8 +632,9 @@ This first version does not support protocol-driven authentication/logout,
 persistent session listing/resume/load, prompt images/audio/embedded resources,
 modes, config options, client filesystem/terminal delegation, or MCP servers
 supplied by the client. Non-empty `mcpServers` and `additionalDirectories` are rejected.
-`--acp` cannot be combined with a prompt, `--session`, `--workdir`, or
-`--events`; ACP supplies its own prompts, sessions, and working directories.
+`--acp` cannot be combined with a prompt, `--session`, `--metrics-file`,
+`--workdir`, or `--events`; ACP supplies its own prompts, sessions, and working
+directories.
 
 ### Skills
 

@@ -21,6 +21,7 @@ func TestRunACPRejectsConflictingCLIState(t *testing.T) {
 	}{
 		{name: "prompt", opts: options{promptArgs: []string{"hello"}}, want: "does not accept a prompt"},
 		{name: "session", opts: options{sessionPath: "turns.sqlite"}, want: "does not accept --session"},
+		{name: "metrics", opts: options{metricsPath: "metrics.json"}, want: "does not accept --metrics-file"},
 		{name: "workdir", opts: options{workdir: "/tmp"}, want: "does not accept --workdir"},
 		{name: "events", opts: options{events: true}, want: "cannot be combined with --events"},
 	}
