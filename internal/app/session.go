@@ -18,7 +18,7 @@ const commitTimeout = 5 * time.Second
 
 // ErrSessionBusy reports an attempt to start a second prompt while one is
 // already running in the same application session.
-var ErrSessionBusy = errors.New("dora: session already has an active prompt")
+var ErrSessionBusy = errors.New("session already has an active prompt")
 
 // PersistenceError reports that a terminal Turn could not be committed. A
 // long-running frontend should stop rather than discard that Turn and continue.
@@ -72,13 +72,13 @@ type Session struct {
 // dependencies. Each frontend session should receive its own Store and Jobs.
 func NewSession(agent *dora.Agent, store session.Store, jobs *job.Manager, workingDirectory string) (*Session, error) {
 	if agent == nil {
-		return nil, errors.New("dora: application session agent is nil")
+		return nil, errors.New("application session agent is nil")
 	}
 	if store == nil {
-		return nil, errors.New("dora: application session store is nil")
+		return nil, errors.New("application session store is nil")
 	}
 	if jobs == nil {
-		return nil, errors.New("dora: application session job manager is nil")
+		return nil, errors.New("application session job manager is nil")
 	}
 	return &Session{
 		agent:            agent,
@@ -93,7 +93,7 @@ func NewSession(agent *dora.Agent, store session.Store, jobs *job.Manager, worki
 // the model request automatically.
 func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptions) (PromptResult, error) {
 	if s == nil {
-		return PromptResult{}, errors.New("dora: application session is nil")
+		return PromptResult{}, errors.New("application session is nil")
 	}
 	runCtx, finish, err := s.beginPrompt(ctx)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Session) beginPrompt(parent context.Context) (context.Context, func(), 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, nil, errors.New("dora: application session is closed")
+		return nil, nil, errors.New("application session is closed")
 	}
 	if s.active != nil {
 		return nil, nil, ErrSessionBusy

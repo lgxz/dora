@@ -148,10 +148,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	defer func() {
 		commands, tasks := appSession.ActiveCounts()
 		if commands > 0 {
-			info(observer, "background jobs are still running; they keep running after dora exits")
+			info(observer, "background jobs are still running; they keep running after exit")
 		}
 		if tasks > 0 {
-			info(observer, "background tasks are still running; they stop and lose their results when dora exits")
+			info(observer, "background tasks are still running; they stop and lose their results after exit")
 		}
 	}()
 
@@ -273,7 +273,7 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 
 func confirmContinue(input *bufio.Reader, output io.Writer) (bool, error) {
 	for {
-		if _, err := fmt.Fprint(output, "dora: maximum rounds reached; continue? [y/N] "); err != nil {
+		if _, err := fmt.Fprint(output, "maximum rounds reached; continue? [y/N] "); err != nil {
 			return false, err
 		}
 		answer, err := input.ReadString('\n')

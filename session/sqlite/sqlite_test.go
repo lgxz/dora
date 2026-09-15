@@ -237,7 +237,7 @@ func TestStoreCommitsCanceledTurn(t *testing.T) {
 	if err := turn.AppendRound(round, "provider-state"); err != nil {
 		t.Fatal(err)
 	}
-	cause := fmt.Errorf("dora: generate response: %w", context.Canceled)
+	cause := fmt.Errorf("generate response: %w", context.Canceled)
 	id, err := store.CommitCanceled(ctx, turn, cause)
 	if err != nil {
 		t.Fatal(err)

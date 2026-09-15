@@ -183,15 +183,8 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
     @override
     def parse_version(self, stdout: str) -> str:
-        """Extract the version from the underlying CLI's --version output.
-
-        Return the version, commit, and build date while omitting the executable
-        name from the Hub metadata.
-        """
+        """Return the version, commit, and build date emitted by the CLI."""
         text = stdout.strip()
-        executable, separator, version = text.partition(" ")
-        if separator and executable:
-            return version
         return text or "unknown"
 
     # -- configurable binaries -------------------------------------------------

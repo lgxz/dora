@@ -36,11 +36,11 @@ func NewTurn(user string) *Turn {
 
 func (t *Turn) bindSystem(system string) error {
 	if t == nil {
-		return errors.New("dora: turn is nil")
+		return errors.New("turn is nil")
 	}
 	if t.systemBound {
 		if t.system != system {
-			return errors.New("dora: turn is bound to a different system prompt")
+			return errors.New("turn is bound to a different system prompt")
 		}
 		return nil
 	}
@@ -104,10 +104,10 @@ func (t *Turn) Continuation() string {
 // AppendRound appends one complete assistant/tool round.
 func (t *Turn) AppendRound(round Round, continuation string) error {
 	if t == nil {
-		return errors.New("dora: turn is nil")
+		return errors.New("turn is nil")
 	}
 	if t.completed {
-		return errors.New("dora: turn is already complete")
+		return errors.New("turn is already complete")
 	}
 	if err := validateRound(round); err != nil {
 		return err
@@ -125,10 +125,10 @@ func (t *Turn) Complete(result, continuation string) error {
 
 func (t *Turn) completeWithUsage(result, continuation string, usage *Usage) error {
 	if t == nil {
-		return errors.New("dora: turn is nil")
+		return errors.New("turn is nil")
 	}
 	if t.completed {
-		return errors.New("dora: turn is already complete")
+		return errors.New("turn is already complete")
 	}
 	t.result = result
 	t.usage = cloneUsage(usage)
@@ -175,20 +175,20 @@ func (t *Turn) Result() (string, bool) {
 
 func validateRound(round Round) error {
 	if round.Assistant.Role != RoleAssistant {
-		return fmt.Errorf("dora: round assistant has role %q", round.Assistant.Role)
+		return fmt.Errorf("round assistant has role %q", round.Assistant.Role)
 	}
 	if len(round.Assistant.ToolCalls) == 0 {
-		return errors.New("dora: round assistant has no tool calls")
+		return errors.New("round assistant has no tool calls")
 	}
 	if len(round.Tools) != len(round.Assistant.ToolCalls) {
-		return fmt.Errorf("dora: round has %d tool results for %d tool calls", len(round.Tools), len(round.Assistant.ToolCalls))
+		return fmt.Errorf("round has %d tool results for %d tool calls", len(round.Tools), len(round.Assistant.ToolCalls))
 	}
 	for i, message := range round.Tools {
 		if message.Role != RoleTool {
-			return fmt.Errorf("dora: round tool result %d has role %q", i, message.Role)
+			return fmt.Errorf("round tool result %d has role %q", i, message.Role)
 		}
 		if message.ToolCallID != round.Assistant.ToolCalls[i].ID {
-			return fmt.Errorf("dora: round tool result %d has call ID %q, want %q", i, message.ToolCallID, round.Assistant.ToolCalls[i].ID)
+			return fmt.Errorf("round tool result %d has call ID %q, want %q", i, message.ToolCallID, round.Assistant.ToolCalls[i].ID)
 		}
 	}
 	return nil

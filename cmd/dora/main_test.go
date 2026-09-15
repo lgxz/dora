@@ -9,7 +9,7 @@ func TestVersionString(t *testing.T) {
 	})
 	version, commit, date = "1.2.3", "abc123", "2026-08-10T00:00:00Z"
 
-	want := "dora 1.2.3 (commit abc123, built 2026-08-10T00:00:00Z)"
+	want := "1.2.3 (commit abc123, built 2026-08-10T00:00:00Z)"
 	if got := versionString(); got != want {
 		t.Fatalf("version = %q, want %q", got, want)
 	}

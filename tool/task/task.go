@@ -100,7 +100,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		}{
 			JobID:   jobID,
 			Status:  "running",
-			Message: "Task is running in the background. Use the job tool to check status before Dora exits.",
+			Message: "Task is running in the background. Use the job tool to check status before exit.",
 		})
 		return dora.ToolResult{Content: string(content)}, nil
 	}

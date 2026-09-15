@@ -441,7 +441,7 @@ When the limit is reached with both stdin and stderr attached to a terminal,
 Dora asks whether to continue for another segment. Confirming resumes from the
 completed tool output without replaying work. Declining stops normally without
 persisting the incomplete turn. With piped or redirected I/O, Dora does not
-prompt and returns `dora: maximum rounds exceeded` instead.
+prompt and returns `maximum rounds exceeded` instead.
 
 Every Agent has an immutable system prompt. The binary ships a built-in default
 (working habits such as verifying results against the literal request before

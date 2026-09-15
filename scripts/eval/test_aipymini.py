@@ -47,7 +47,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_version_omits_underlying_executable_name(self):
         agent = self.agent(model_name="openrouter/auto")
-        version = agent.parse_version("dora 1.2.3 (commit abc123, built today)")
+        version = agent.parse_version("1.2.3 (commit abc123, built today)")
         self.assertEqual(version, "1.2.3 (commit abc123, built today)")
         self.assertNotIn("dora", version.lower())
 

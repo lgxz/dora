@@ -27,7 +27,7 @@ func runSetup(opts options, streams IO) error {
 	}
 
 	reader := bufio.NewReader(streams.Stdin)
-	fmt.Fprintln(streams.Stdout, "Dora setup")
+	fmt.Fprintln(streams.Stdout, "Setup")
 	fmt.Fprintln(streams.Stdout, "")
 	fmt.Fprintln(streams.Stdout, "Select a model provider:")
 	for i, provider := range cfg.Providers {

@@ -79,7 +79,7 @@ func (s *server) Initialize(_ context.Context, params acpsdk.InitializeRequest) 
 	}
 	authMethods := []acpsdk.AuthMethod{}
 	if supportsTerminalAuth(params.ClientCapabilities) {
-		description := "Configure a model provider and API key for Dora"
+		description := "Configure a model provider and API key"
 		authMethods = append(authMethods, acpsdk.AuthMethod{Terminal: &acpsdk.AuthMethodTerminalInline{
 			Id:          "dora-setup",
 			Name:        "Configure Dora",

@@ -22,7 +22,7 @@ const maxRateLimitAttempts = 5
 var (
 	// ErrMaxRounds indicates that a model kept requesting tools without
 	// producing a final response.
-	ErrMaxRounds = errors.New("dora: maximum rounds exceeded")
+	ErrMaxRounds = errors.New("maximum rounds exceeded")
 )
 
 // Agent runs the model-tool loop. It is immutable after construction and does
@@ -72,10 +72,10 @@ func New(model Model, tools ...Tool) (*Agent, error) {
 // NewWithConfig creates an Agent with explicit immutable configuration.
 func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) {
 	if model == nil {
-		return nil, errors.New("dora: model is nil")
+		return nil, errors.New("model is nil")
 	}
 	if cfg.MaxRounds < 0 {
-		return nil, errors.New("dora: MaxRounds cannot be negative")
+		return nil, errors.New("MaxRounds cannot be negative")
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
@@ -105,15 +105,15 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 
 	for _, tool := range tools {
 		if tool == nil {
-			return nil, errors.New("dora: tool is nil")
+			return nil, errors.New("tool is nil")
 		}
 
 		spec := cloneToolSpec(tool.Spec())
 		if spec.Name == "" {
-			return nil, errors.New("dora: tool name is empty")
+			return nil, errors.New("tool name is empty")
 		}
 		if _, exists := a.tools[spec.Name]; exists {
-			return nil, fmt.Errorf("dora: duplicate tool %q", spec.Name)
+			return nil, fmt.Errorf("duplicate tool %q", spec.Name)
 		}
 
 		a.tools[spec.Name] = tool
@@ -139,13 +139,13 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 // different options concurrently.
 func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer Observer, opts RunOptions) error {
 	if a == nil || a.model == nil {
-		return errors.New("dora: agent is not initialized")
+		return errors.New("agent is not initialized")
 	}
 	if turn == nil {
-		return errors.New("dora: turn is nil")
+		return errors.New("turn is nil")
 	}
 	if turn.Completed() {
-		return errors.New("dora: turn is already complete")
+		return errors.New("turn is already complete")
 	}
 	if opts.WorkingDirectory != "" {
 		ctx = withWorkingDirectory(ctx, opts.WorkingDirectory)
@@ -179,7 +179,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 
 		capacity, compactionErr := a.ensureContextCapacity(ctx, modelHistory, lastUsage, specs)
 		if compactionErr != nil {
-			return fmt.Errorf("dora: compact context: %w", compactionErr)
+			return fmt.Errorf("compact context: %w", compactionErr)
 		}
 		if capacity.Compacted {
 			modelContinuation = ""
@@ -212,7 +212,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 			response, err = a.generateWithRetry(ctx, request, nil, observer)
 		}
 		if err != nil {
-			return fmt.Errorf("dora: generate response: %w", err)
+			return fmt.Errorf("generate response: %w", err)
 		}
 		// Anchor the next occupancy estimate on this call's real token usage.
 		// Setting it after the response keeps a nil usage (providers that report

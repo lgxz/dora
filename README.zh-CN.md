@@ -268,7 +268,7 @@ agent:
 ./dora --max-rounds 96 "Complete a long task"
 ```
 
-当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止，但不会持久化这个未完成的 turn。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `dora: maximum rounds exceeded`。
+当 stdin 和 stderr 都连接到终端且达到限制时，Dora 会询问是否继续到下一个片段。确认后将从已完成的工具输出处恢复，而不重放已完成的工作。拒绝则正常停止，但不会持久化这个未完成的 turn。使用管道或重定向 I/O 时，Dora 不会提示，而是返回 `maximum rounds exceeded`。
 
 每个 Agent 都持有一条不可变的系统提示词。二进制内置了一份默认提示词（涵盖诸如"宣布任务完成前先按请求的字面要求核对结果"之类的工作习惯）；配置非空的 `agent.system_prompt` 会整体替换内置默认：
 

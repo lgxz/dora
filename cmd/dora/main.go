@@ -71,13 +71,13 @@ func main() {
 }
 
 func versionString() string {
-	return fmt.Sprintf("dora %s (commit %s, built %s)", version, commit, date)
+	return fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
 }
 
 func report(err error) {
-	if strings.HasPrefix(err.Error(), "dora:") {
+	if strings.HasPrefix(err.Error(), "E:") {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	fmt.Fprintln(os.Stderr, "dora:", err)
+	fmt.Fprintln(os.Stderr, "E:", err)
 }

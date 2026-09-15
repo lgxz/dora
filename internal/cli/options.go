@@ -72,7 +72,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.StringVar(&opts.metricsPath, "metrics-file", "", "write aggregate model usage as JSON")
 	flags.StringVar(&opts.workdir, "workdir", "", "working directory used to resolve relative tool paths")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Dora - A tiny, extensible, and efficient LLM agent.\n\n")
+		fmt.Fprintf(stderr, "A tiny, extensible, and efficient LLM agent.\n\n")
 		fmt.Fprintf(stderr, "Usage: dora [options] <prompt>\n")
 		fmt.Fprintf(stderr, "Examples:\n")
 		fmt.Fprintf(stderr, "  $ dora -quiet What's your name?\n\n")
@@ -120,7 +120,7 @@ func handleImmediate(ctx context.Context, opts options, streams IO) (bool, error
 			Force:          opts.forceUpdate,
 		})
 	}
-	if _, err := fmt.Fprintln(streams.Stderr, "dora: checking for updates"); err != nil {
+	if _, err := fmt.Fprintln(streams.Stderr, "checking for updates"); err != nil {
 		return true, err
 	}
 	result, err := service.Update(ctx)
