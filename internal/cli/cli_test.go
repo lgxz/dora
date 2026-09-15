@@ -76,11 +76,11 @@ policy:
 	if err := writeTestConfig(t, configPath, configContents); err != nil {
 		t.Fatal(err)
 	}
-	metricsPath := filepath.Join(t.TempDir(), "metrics.json")
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--config", configPath, "--metrics-file", metricsPath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--config", configPath, "--trace-file", tracePath, "hello"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           &stdout,
 		Stderr:           &stderr,
@@ -100,19 +100,22 @@ policy:
 	if !strings.Contains(stderr.String(), "Model openai/fast") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-	metricsContents, err := os.ReadFile(metricsPath)
+	traceContents, err := os.ReadFile(tracePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var usage dora.Usage
-	if err := json.Unmarshal(metricsContents, &usage); err != nil {
+	var trace turnTrace
+	if err := json.Unmarshal(traceContents, &trace); err != nil {
 		t.Fatal(err)
 	}
-	if usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.TotalTokens != 15 {
-		t.Fatalf("usage = %#v", usage)
+	if trace.SchemaVersion != turnTraceSchemaVersion || trace.User != "hello" {
+		t.Fatalf("trace = %#v", trace)
 	}
-	if usage.InputDetails == nil || usage.InputDetails.CachedTokens == nil || *usage.InputDetails.CachedTokens != 3 {
-		t.Fatalf("input details = %#v", usage.InputDetails)
+	if trace.Final == nil || trace.Final.Content != "hello from model" {
+		t.Fatalf("trace final = %#v", trace.Final)
+	}
+	if trace.Final.Usage == nil || trace.Final.Usage.TotalTokens != 15 {
+		t.Fatalf("trace final usage = %#v", trace.Final.Usage)
 	}
 }
 

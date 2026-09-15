@@ -8,12 +8,12 @@
 #
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
-#   AIPYMINI_DATASET Harbor 数据集，默认 terminal-bench@2.1
+#   AIPYMINI_DATASET Harbor 数据集，默认固定为 leaderboard 官方版本
 #   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
 #
-# 其余 Harbor 参数透传；Agent 和配置入口由本脚本管理，不可另行覆盖。
-# 直接生成仅含 Agent 名称、加载路径和模型的临时 YAML，不需要静态配置文件，
-# 也不依赖 Harbor 的 -m 参数合并。其他设置通过 -n 等 Harbor 参数传入。
+# 其余 Harbor 参数透传；Agent、数据集和配置入口由本脚本管理，不可另行覆盖。
+# 临时 YAML 包含固定数据集、Agent 名称、加载路径和模型，不需要静态配置文件，
+# 也不依赖 Harbor 的 -m/-d 参数合并。其他设置通过 -n 等 Harbor 参数传入。
 
 set -euo pipefail
 
@@ -54,8 +54,8 @@ while [ "$#" -gt 0 ]; do
       usage
       exit 0
       ;;
-    -a|-a?*|--agent|--agent=*|--agent-import-path|--agent-import-path=*|-c|-c?*|--config|--config=*)
-      echo "错误：Agent 和 Job 配置由 run_tb.sh 管理，不能传入 $1。" >&2
+    -a|-a?*|--agent|--agent=*|--agent-import-path|--agent-import-path=*|-c|-c?*|--config|--config=*|-d|-d?*|--dataset|--dataset=*)
+      echo "错误：Agent、数据集和 Job 配置由 run_tb.sh 管理，不能传入 $1。" >&2
       exit 1
       ;;
     *)
@@ -73,8 +73,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 可覆盖的默认值。
 : "${AIPYMINI_BINARY:="$SCRIPT_DIR/../../dist/dora-linux-arm64"}"
-: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1}"
+: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
+if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
+  echo "错误：AIPYMINI_DATASET 必须使用 ORG/NAME@REF 格式。" >&2
+  exit 1
+fi
+dataset_name="${AIPYMINI_DATASET%@*}"
+dataset_ref="${AIPYMINI_DATASET#*@}"
 
 # 确认本地 Linux 构建产物存在且可执行。
 if [ ! -x "$AIPYMINI_BINARY" ]; then
@@ -127,11 +133,16 @@ export AIPYMINI_BINARY="$aipymini_binary_path"
 export PYTHONPATH="$job_config_dir${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 
-# YAML 单引号字符串通过双写单引号转义；模型已禁止空白和换行。
+# YAML 单引号字符串通过双写单引号转义；模型和数据集已禁止空白和换行。
 yaml_model="$(printf '%s' "$model_spec" | sed "s/'/''/g")"
+yaml_dataset_name="$(printf '%s' "$dataset_name" | sed "s/'/''/g")"
+yaml_dataset_ref="$(printf '%s' "$dataset_ref" | sed "s/'/''/g")"
 (
   umask 077
   printf '%s\n' \
+    'datasets:' \
+    "  - name: '$yaml_dataset_name'" \
+    "    ref: '$yaml_dataset_ref'" \
     'agents:' \
     '  - name: aipymini' \
     '    import_path: aipymini:AIPyMiniAgent' \
@@ -139,13 +150,12 @@ yaml_model="$(printf '%s' "$model_spec" | sed "s/'/''/g")"
 )
 
 # 不打印 --ae 或额外参数中的潜在密钥。
-echo "> harbor run --config \"$job_config_path\" (agent=aipymini, model=$model_spec)" >&2
+echo "> harbor run --config \"$job_config_path\" (dataset=$AIPYMINI_DATASET, agent=aipymini, model=$model_spec)" >&2
 
 # 执行 Harbor Terminal-Bench 评估。
 # shellcheck disable=SC2086
 harbor run \
   --config "$job_config_path" \
-  -d "$AIPYMINI_DATASET" \
   "${agent_env_args[@]}" \
   -o "$AIPYMINI_JOBS_DIR" \
   ${harbor_args[@]+"${harbor_args[@]}"}

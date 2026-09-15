@@ -97,8 +97,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	}
 	defer source.Close()
 	serverMode := source.Enabled()
-	if serverMode && opts.metricsPath != "" {
-		return errors.New("--metrics-file cannot be used in event daemon mode")
+	if serverMode && opts.tracePath != "" {
+		return errors.New("--trace-file cannot be used in event daemon mode")
 	}
 
 	var prompt string
@@ -183,10 +183,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 		}
 		result, promptErr := appSession.Prompt(ctx, prompt, promptOptions)
-		metricsErr := writeMetricsFile(opts.metricsPath, result.Turn)
+		traceErr := writeTraceFile(opts.tracePath, result.Turn)
 		if promptErr != nil {
-			if metricsErr != nil {
-				return errors.Join(promptErr, metricsErr)
+			if traceErr != nil {
+				return errors.Join(promptErr, traceErr)
 			}
 			if app.IsPersistenceError(promptErr) {
 				return promptErr
@@ -197,8 +197,8 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			}
 			return promptErr
 		}
-		if metricsErr != nil {
-			return metricsErr
+		if traceErr != nil {
+			return traceErr
 		}
 		if !serverMode && !result.Completed {
 			return nil

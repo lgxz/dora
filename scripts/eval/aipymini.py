@@ -76,6 +76,17 @@ try:  # pragma: no cover - exercised when harbor is available
     from harbor.agents.installed.base import BaseInstalledAgent, CliFlag, EnvVar
     from harbor.environments.base import BaseEnvironment
     from harbor.models.agent.context import AgentContext
+    from harbor.models.trajectories import (
+        Agent,
+        FinalMetrics,
+        Metrics,
+        Observation,
+        ObservationResult,
+        Step,
+        ToolCall,
+        Trajectory,
+    )
+    from harbor.utils.trajectory_utils import format_trajectory_json
 except ImportError as _imp_err:  # pragma: no cover
     _BaseInstalledAgentBase = object
     CliFlag = None  # type: ignore[assignment,misc]
@@ -90,7 +101,8 @@ else:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 BINARY_PATH = "/installed-agent/aipymini"
-METRICS_PATH = "/logs/agent/metrics.json"
+TRACE_PATH = "/logs/agent/trace.json"
+TRAJECTORY_PATH = "/logs/agent/trajectory.json"
 
 
 def _optional_token_count(metrics: dict[str, Any], key: str) -> int | None:
@@ -100,6 +112,37 @@ def _optional_token_count(metrics: dict[str, Any], key: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{key} must be a non-negative integer or null")
     return value
+
+
+def _atif_metrics(usage: Any) -> Metrics | None:
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        raise ValueError("usage must be an object or null")
+    input_details = usage.get("input_details")
+    output_details = usage.get("output_details")
+    if input_details is not None and not isinstance(input_details, dict):
+        raise ValueError("input_details must be an object or null")
+    if output_details is not None and not isinstance(output_details, dict):
+        raise ValueError("output_details must be an object or null")
+    extra: dict[str, int] = {}
+    total_tokens = _optional_token_count(usage, "total_tokens")
+    if total_tokens is not None:
+        extra["total_tokens"] = total_tokens
+    if output_details is not None:
+        reasoning_tokens = _optional_token_count(output_details, "reasoning_tokens")
+        if reasoning_tokens is not None:
+            extra["reasoning_tokens"] = reasoning_tokens
+    return Metrics(
+        prompt_tokens=_optional_token_count(usage, "input_tokens"),
+        completion_tokens=_optional_token_count(usage, "output_tokens"),
+        cached_tokens=(
+            _optional_token_count(input_details, "cached_tokens")
+            if input_details is not None
+            else None
+        ),
+        extra=extra or None,
+    )
 
 
 class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
@@ -312,7 +355,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} --metrics-file {shlex.quote(METRICS_PATH)} "
+            f"{BINARY_PATH} --trace-file {shlex.quote(TRACE_PATH)} "
             f"{extra_flags}> /logs/agent/run.txt 2>&1"
         )
 
@@ -326,38 +369,151 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
-        """Populate Harbor's token fields from aipymini's aggregate usage file."""
-        metrics_path = self.logs_dir / Path(METRICS_PATH).name
+        """Create ATIF output and populate Harbor's aggregate token fields."""
+        trajectory = self._write_trajectory()
+        if trajectory is None or trajectory.final_metrics is None:
+            return
+
+        context.n_input_tokens = trajectory.final_metrics.total_prompt_tokens
+        context.n_output_tokens = trajectory.final_metrics.total_completion_tokens
+        context.n_cache_tokens = trajectory.final_metrics.total_cached_tokens
+
+    def _write_trajectory(self) -> Trajectory | None:
+        trace_path = self.logs_dir / Path(TRACE_PATH).name
         try:
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            trace = json.loads(trace_path.read_text(encoding="utf-8"))
+            trajectory = self._trajectory_from_trace(trace)
+            output = self.logs_dir / Path(TRAJECTORY_PATH).name
+            output.write_text(
+                format_trajectory_json(trajectory.to_json_dict()),
+                encoding="utf-8",
+            )
+            return trajectory
         except FileNotFoundError:
-            self.logger.warning("aipymini did not produce %s", metrics_path.name)
-            return
-        except (OSError, json.JSONDecodeError) as exc:
-            self.logger.warning("could not read aipymini token metrics: %s", exc)
-            return
+            self.logger.warning("aipymini did not produce %s", trace_path.name)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            self.logger.warning("could not create aipymini ATIF trajectory: %s", exc)
+        return None
 
-        # JSON null means the provider did not report usage. Do not estimate it.
-        if metrics is None:
-            return
-        if not isinstance(metrics, dict):
-            self.logger.warning("aipymini token metrics must be a JSON object or null")
-            return
+    def _trajectory_from_trace(self, trace: Any) -> Trajectory:
+        if not isinstance(trace, dict):
+            raise ValueError("trace must be a JSON object")
+        if trace.get("schema_version") != 1:
+            raise ValueError("unsupported trace schema_version")
 
-        try:
-            input_tokens = _optional_token_count(metrics, "input_tokens")
-            output_tokens = _optional_token_count(metrics, "output_tokens")
-            input_details = metrics.get("input_details")
-            if input_details is None:
-                cache_tokens = None
-            elif isinstance(input_details, dict):
-                cache_tokens = _optional_token_count(input_details, "cached_tokens")
-            else:
-                raise ValueError("input_details must be an object or null")
-        except ValueError as exc:
-            self.logger.warning("invalid aipymini token metrics: %s", exc)
-            return
+        steps: list[Step] = []
 
-        context.n_input_tokens = input_tokens
-        context.n_output_tokens = output_tokens
-        context.n_cache_tokens = cache_tokens
+        def append_step(**kwargs: Any) -> None:
+            steps.append(Step(step_id=len(steps) + 1, **kwargs))
+
+        system = trace.get("system")
+        if system:
+            if not isinstance(system, str):
+                raise ValueError("system must be a string")
+            append_step(source="system", message=system)
+
+        user = trace.get("user")
+        if not isinstance(user, str):
+            raise ValueError("user must be a string")
+        append_step(source="user", message=user)
+
+        usages: list[Metrics] = []
+        rounds = trace.get("rounds")
+        if not isinstance(rounds, list):
+            raise ValueError("rounds must be an array")
+        for round_data in rounds:
+            if not isinstance(round_data, dict):
+                raise ValueError("round must be an object")
+            assistant = round_data["assistant"]
+            results = round_data["tools"]
+            if not isinstance(assistant, dict) or not isinstance(results, list):
+                raise ValueError("round assistant/tools have invalid types")
+
+            atif_calls: list[ToolCall] = []
+            calls = assistant.get("tool_calls")
+            if not isinstance(calls, list):
+                raise ValueError("tool_calls must be an array")
+            for call in calls:
+                if not isinstance(call, dict):
+                    raise ValueError("tool call must be an object")
+                raw_input = call.get("input")
+                if not isinstance(raw_input, str):
+                    raise ValueError("tool input must be a string")
+                try:
+                    arguments = json.loads(raw_input)
+                except json.JSONDecodeError:
+                    arguments = {"_raw": raw_input}
+                if not isinstance(arguments, dict):
+                    arguments = {"_raw": arguments}
+                atif_calls.append(ToolCall(
+                    tool_call_id=call["id"],
+                    function_name=call["name"],
+                    arguments=arguments,
+                ))
+
+            observations: list[ObservationResult] = []
+            for result in results:
+                if not isinstance(result, dict):
+                    raise ValueError("tool result must be an object")
+                images = result.get("images")
+                observations.append(ObservationResult(
+                    source_call_id=result["tool_call_id"],
+                    content=result.get("content", ""),
+                    extra={"images": images} if images else None,
+                ))
+
+            metrics = _atif_metrics(round_data.get("usage"))
+            if metrics is not None:
+                usages.append(metrics)
+            content = assistant.get("content", "")
+            reasoning = assistant.get("reasoning")
+            if not isinstance(content, str) or (
+                reasoning is not None and not isinstance(reasoning, str)
+            ):
+                raise ValueError("assistant content/reasoning must be strings")
+            append_step(
+                source="agent",
+                message=content,
+                reasoning_content=reasoning or None,
+                tool_calls=atif_calls,
+                observation=Observation(results=observations),
+                metrics=metrics,
+                llm_call_count=1,
+            )
+
+        final = trace.get("final")
+        if final is not None:
+            if not isinstance(final, dict) or not isinstance(final.get("content"), str):
+                raise ValueError("final must contain string content")
+            metrics = _atif_metrics(final.get("usage"))
+            if metrics is not None:
+                usages.append(metrics)
+            append_step(
+                source="agent",
+                message=final["content"],
+                metrics=metrics,
+                llm_call_count=1,
+            )
+
+        def sum_metric(name: str) -> int | None:
+            values = [getattr(item, name) for item in usages]
+            reported = [value for value in values if value is not None]
+            return sum(reported) if reported else None
+
+        return Trajectory(
+            schema_version="ATIF-v1.7",
+            session_id=str(uuid.uuid4()),
+            trajectory_id=str(uuid.uuid4()),
+            agent=Agent(
+                name=self.name(),
+                version=self._version or "unknown",
+                model_name=self.model_name,
+            ),
+            steps=steps,
+            final_metrics=FinalMetrics(
+                total_prompt_tokens=sum_metric("prompt_tokens"),
+                total_completion_tokens=sum_metric("completion_tokens"),
+                total_cached_tokens=sum_metric("cached_tokens"),
+                total_steps=len(steps),
+            ),
+        )

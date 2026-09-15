@@ -8,8 +8,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from harbor.models.job.config import JobConfig
+
 
 class RunTBTests(unittest.TestCase):
+    OFFICIAL_DATASET = (
+        "terminal-bench/terminal-bench-2-1@"
+        "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a"
+    )
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="aipymini-tb-wrapper-test-")
         self.addCleanup(directory.cleanup)
@@ -50,6 +57,7 @@ class RunTBTests(unittest.TestCase):
             "TB_TEST_CAPTURE": str(self.capture),
             "TB_TEST_FAILURE": "",
         }
+        self.env.pop("AIPYMINI_DATASET", None)
 
     def run_wrapper(self, args=None):
         if args is None:
@@ -70,13 +78,24 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         capture = json.loads(self.capture.read_text())
         config = capture["config"]
-        self.assertEqual(config, {"agents": [{
-            "name": "aipymini",
-            "import_path": "aipymini:AIPyMiniAgent",
-            "model_name": "openrouter/auto",
-        }]})
+        self.assertEqual(config, {
+            "datasets": [{
+                "name": "terminal-bench/terminal-bench-2-1",
+                "ref": self.OFFICIAL_DATASET.split("@", 1)[1],
+            }],
+            "agents": [{
+                "name": "aipymini",
+                "import_path": "aipymini:AIPyMiniAgent",
+                "model_name": "openrouter/auto",
+            }],
+        })
+        job_config = JobConfig.model_validate(config)
+        self.assertEqual(job_config.datasets[0].name, "terminal-bench/terminal-bench-2-1")
+        self.assertEqual(job_config.datasets[0].ref, self.OFFICIAL_DATASET.split("@", 1)[1])
         self.assertNotIn("-m", capture["args"])
         self.assertNotIn("--ak", capture["args"])
+        self.assertNotIn("-d", capture["args"])
+        self.assertNotIn("--dataset", capture["args"])
         self.assertEqual(capture["args"][-2:], ["-n", "3"])
         self.assertIn("OPENROUTER_API_KEY=test-key-not-for-logs", capture["args"])
         self.assertEqual(capture["mode"], 0o600)
@@ -131,8 +150,11 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(capture["config"]["agents"][0]["model_name"], "trust/hy4-preview")
         self.assertNotIn("test-trust-key", result.stdout + result.stderr)
 
-    def test_agent_and_config_overrides_are_rejected(self):
-        for option in ("-a", "--agent=other", "--agent-import-path=other:Agent", "-c", "--config=other.yaml"):
+    def test_agent_dataset_and_config_overrides_are_rejected(self):
+        for option in (
+            "-a", "--agent=other", "--agent-import-path=other:Agent",
+            "-c", "--config=other.yaml", "-d", "--dataset=other/dataset",
+        ):
             with self.subTest(option=option):
                 result = self.run_wrapper(["-m", "openrouter/auto", option])
                 self.assertNotEqual(result.returncode, 0)
@@ -150,6 +172,25 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         args = json.loads(self.capture.read_text())["args"]
         self.assertEqual(args[args.index("-o") + 1], str(Path(self.env["HOME"]) / "jobs"))
+
+    def test_dataset_can_be_explicitly_overridden(self):
+        self.env["AIPYMINI_DATASET"] = "example/custom@sha256:test"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        capture = json.loads(self.capture.read_text())
+        args = capture["args"]
+        self.assertNotIn("-d", args)
+        self.assertEqual(
+            capture["config"]["datasets"],
+            [{"name": "example/custom", "ref": "sha256:test"}],
+        )
+
+    def test_invalid_dataset_override_fails_before_running_harbor(self):
+        for dataset in ("example/custom", "/custom@latest", "example/@latest", "example/custom@"):
+            with self.subTest(dataset=dataset):
+                self.env["AIPYMINI_DATASET"] = dataset
+                self.assertNotEqual(self.run_wrapper().returncode, 0)
+                self.assertFalse(self.capture.exists())
 
     def test_script_runs_without_adjacent_config(self):
         isolated_script = self.root / "run_tb.sh"
