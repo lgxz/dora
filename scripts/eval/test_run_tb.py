@@ -12,6 +12,7 @@ from harbor.models.job.config import JobConfig
 
 
 class RunTBTests(unittest.TestCase):
+    DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
     OFFICIAL_DATASET = (
         "terminal-bench/terminal-bench-2-1@"
         "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a"
@@ -53,6 +54,7 @@ class RunTBTests(unittest.TestCase):
             "TMPDIR": str(self.temp_root),
             "AIPYMINI_BINARY": sys.executable,
             "AIPYMINI_JOBS_DIR": str(self.root / "jobs"),
+            "DEEPSEEK_API_KEY": "test-deepseek-key-not-for-logs",
             "OPENROUTER_API_KEY": "test-key-not-for-logs",
             "TB_TEST_CAPTURE": str(self.capture),
             "TB_TEST_FAILURE": "",
@@ -70,7 +72,9 @@ class RunTBTests(unittest.TestCase):
             timeout=15,
         )
         self.assertEqual(list(self.temp_root.iterdir()), [])
-        self.assertNotIn(self.env["OPENROUTER_API_KEY"], result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertNotIn(self.env["DEEPSEEK_API_KEY"], output)
+        self.assertNotIn(self.env["OPENROUTER_API_KEY"], output)
         return result
 
     def test_generates_minimal_yaml_and_cleans_up(self):
@@ -122,11 +126,22 @@ class RunTBTests(unittest.TestCase):
         self.assertNotIn("--model=openrouter/auto", capture["args"])
         self.assertEqual(capture["config"]["agents"][0]["model_name"], "openrouter/auto")
 
-    def test_missing_model_does_not_fall_back_to_environment(self):
+    def test_uses_default_model_when_model_is_omitted(self):
         result = self.run_wrapper([])
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("-m", result.stderr)
-        self.assertFalse(self.capture.exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(
+            capture["config"]["agents"][0]["model_name"],
+            self.DEFAULT_MODEL,
+        )
+        self.assertIn(
+            "DEEPSEEK_API_KEY=test-deepseek-key-not-for-logs",
+            capture["args"],
+        )
+        self.assertNotIn(
+            "OPENROUTER_API_KEY=test-key-not-for-logs",
+            capture["args"],
+        )
 
     def test_invalid_model_arguments_fail_before_running_harbor(self):
         cases = [

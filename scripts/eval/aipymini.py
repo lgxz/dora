@@ -40,10 +40,10 @@ The module must be importable by the Harbor Python process. Either place
 
 For the ``aipymini`` Agent name in Hub, use ``run_tb.sh``. It directly writes a minimal
 private temporary YAML config containing the Agent name, import path, and
-``model_name`` from its required ``-m PROVIDER/PROFILE`` argument. The temporary
-config is removed on exit. No static configuration file is needed; pass other
-job settings through Harbor flags such as ``-n``. No ``-m`` or ``--ak model`` is
-passed to Harbor.
+``model_name``. It defaults to ``deepseek/deepseek-v4-pro`` and can be overridden
+with ``-m PROVIDER/PROFILE``. The temporary config is removed on exit. No static
+configuration file is needed; pass other job settings through Harbor flags such
+as ``-n``. No ``-m`` or ``--ak model`` is passed to Harbor.
 For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.
 
 The local Linux binary path is given via the host ``AIPYMINI_BINARY``

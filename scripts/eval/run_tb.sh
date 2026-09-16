@@ -2,9 +2,9 @@
 #
 # run_tb.sh — Harbor Terminal-Bench 评测启动入口（配合 scripts/eval/aipymini.py 使用）。
 #
-# 用法：run_tb.sh -m PROVIDER/PROFILE [Harbor 参数...]
+# 用法：run_tb.sh [-m PROVIDER/PROFILE] [Harbor 参数...]
 # 示例：run_tb.sh -m trust/hy4-preview -n 2
-# -m/--model 必填，由本脚本消费，不透传给 Harbor。
+# -m/--model 可选，默认 deepseek/deepseek-v4-pro；由本脚本消费，不透传给 Harbor。
 #
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
@@ -17,10 +17,12 @@
 
 set -euo pipefail
 
+DEFAULT_MODEL="deepseek/deepseek-v4-pro"
+
 usage() {
-  echo "用法：$0 -m PROVIDER/PROFILE [Harbor 参数...]"
+  echo "用法：$0 [-m PROVIDER/PROFILE] [Harbor 参数...]"
   echo "示例：$0 -m trust/hy4-preview -n 2"
-  echo "-m/--model 必填；模型同时用于 aipymini 选模和 Hub 元数据。"
+  echo "-m/--model 可选，默认 ${DEFAULT_MODEL}；模型同时用于 aipymini 选模和 Hub 元数据。"
 }
 
 model_spec=""
@@ -65,8 +67,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$model_spec" ]; then
-  usage >&2
-  exit 1
+  model_spec="$DEFAULT_MODEL"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
