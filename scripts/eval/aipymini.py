@@ -181,18 +181,12 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     SYSTEM_DEPENDENCIES: tuple[str, ...] = (
         "curl",
         "python3",
-        "ca_certificates",
-        "procps",
     )
 
-    APT_PACKAGES: tuple[str, ...] = (
-        "expect",
-        "telnet",
-        "netcat-openbsd",
-        "socat",
-        "file",
-        "python3-pip",
-        "python3-venv",
+    CA_BUNDLE_PATHS: tuple[str, ...] = (
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/cert.pem",
     )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -254,11 +248,72 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
     # -- installation ----------------------------------------------------------
 
+    async def _install_optional_tooling(self, environment: BaseEnvironment) -> None:
+        """Best-effort installation of common task tools.
+
+        Debian packages are installed only when their corresponding command or
+        CA bundle is absent. APT state is refreshed from scratch on every retry
+        so a stale CDN index cannot make agent setup fail permanently.
+        """
+        apt_check = await environment.exec(
+            command="command -v apt-get >/dev/null 2>&1",
+            user="root",
+        )
+        if apt_check.return_code != 0:
+            await self.ensure_system_dependencies(
+                environment, self.SYSTEM_DEPENDENCIES
+            )
+            ca_check = " || ".join(
+                f"test -s {shlex.quote(path)}" for path in self.CA_BUNDLE_PATHS
+            )
+            ca_result = await environment.exec(command=ca_check, user="root")
+            if ca_result.return_code != 0:
+                await self.ensure_system_dependencies(
+                    environment, ("ca_certificates",)
+                )
+            return
+
+        checks = (
+            ("curl", "command -v curl >/dev/null 2>&1"),
+            ("python3", "command -v python3 >/dev/null 2>&1"),
+            (
+                "ca-certificates",
+                " || ".join(
+                    f"test -s {shlex.quote(path)}"
+                    for path in self.CA_BUNDLE_PATHS
+                ),
+            ),
+            ("file", "command -v file >/dev/null 2>&1"),
+            ("python3-pip", "python3 -m pip --version >/dev/null 2>&1"),
+        )
+        missing: list[str] = []
+        for package, check in checks:
+            result = await environment.exec(command=check, user="root")
+            if result.return_code != 0:
+                missing.append(package)
+        if not missing:
+            return
+
+        packages = shlex.join(missing)
+        await self.exec_as_root(
+            environment,
+            command=(
+                "attempt=1; while [ \"$attempt\" -le 3 ]; do "
+                "rm -rf /var/lib/apt/lists/*; "
+                "if apt-get update -qq -o Acquire::Retries=3 && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                f"--no-install-recommends {packages}; then exit 0; fi; "
+                "[ \"$attempt\" -eq 3 ] && exit 1; "
+                "attempt=$((attempt + 1)); sleep 3; "
+                "done"
+            ),
+        )
+
     async def install(self, environment: BaseEnvironment) -> None:  # type: ignore[override]
         """Install the aipymini binary into the sandbox.
 
         Steps:
-          1. Ensure the minimal system dependencies are present.
+          1. Best-effort installation of common task tools.
           2. Resolve and upload the local Linux dora binary to
              ``/installed-agent/aipymini`` and make it executable.
           3. Verify it runs via ``aipymini --version`` and log the output.
@@ -269,24 +324,13 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 f"{_HARBOR_IMPORT_ERROR}. Run inside the harbor python env."
             ) from _HARBOR_IMPORT_ERROR
 
-        # Ensure dora's runtime dependencies exist inside the container.
-        await self.ensure_system_dependencies(environment, self.SYSTEM_DEPENDENCIES)
-
-        # Install the extra tooling via apt. These are optional conveniences,
-        # so a failure (e.g. a non-Debian base image) degrades to a warning
-        # instead of failing the whole trial.
-        packages = " ".join(self.APT_PACKAGES)
+        # Tool availability improves task coverage but is not required to
+        # upload or launch the static binary. Package-manager and mirror
+        # failures therefore degrade to a warning instead of failing a trial.
         try:
-            await self.exec_as_root(
-                environment,
-                command=(
-                    "apt-get update -qq && "
-                    "DEBIAN_FRONTEND=noninteractive apt-get install -y "
-                    "--no-install-recommends " + packages
-                ),
-            )
+            await self._install_optional_tooling(environment)
         except Exception as exc:
-            self.logger.warning("apt install of extra tooling failed: %s", exc)
+            self.logger.warning("optional task tooling installation failed: %s", exc)
 
         local_binary = self._resolve_local_binary()
 

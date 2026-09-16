@@ -9,7 +9,8 @@ import shlex
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from harbor.agents.factory import AgentFactory
 from harbor.models.agent.context import AgentContext
@@ -108,6 +109,76 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
             ],
         )
         self.assertIn("> /logs/agent/run.txt 2>&1", command)
+
+    def test_optional_tooling_skips_apt_when_everything_exists(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        environment = SimpleNamespace(
+            exec=AsyncMock(return_value=SimpleNamespace(return_code=0))
+        )
+        agent.exec_as_root = AsyncMock()
+
+        asyncio.run(agent._install_optional_tooling(environment))
+
+        self.assertEqual(environment.exec.await_count, 6)
+        agent.exec_as_root.assert_not_awaited()
+
+    def test_optional_tooling_retries_only_missing_apt_packages(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+
+        async def check(*, command, user):
+            self.assertEqual(user, "root")
+            missing = "ca-certificates.crt" in command or "pip --version" in command
+            return SimpleNamespace(return_code=1 if missing else 0)
+
+        environment = SimpleNamespace(exec=AsyncMock(side_effect=check))
+        agent.exec_as_root = AsyncMock()
+
+        asyncio.run(agent._install_optional_tooling(environment))
+
+        agent.exec_as_root.assert_awaited_once()
+        command = agent.exec_as_root.call_args.kwargs["command"]
+        self.assertIn("rm -rf /var/lib/apt/lists/*", command)
+        self.assertIn("Acquire::Retries=3", command)
+        self.assertIn("ca-certificates python3-pip", command)
+        self.assertNotIn("apt-get install -y --no-install-recommends curl", command)
+        self.assertIn('attempt=1; while [ "$attempt" -le 3 ]', command)
+
+    def test_non_apt_environment_does_not_reinstall_existing_ca_bundle(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        environment = SimpleNamespace(
+            exec=AsyncMock(side_effect=(
+                SimpleNamespace(return_code=1),
+                SimpleNamespace(return_code=0),
+            ))
+        )
+        agent.ensure_system_dependencies = AsyncMock()
+
+        asyncio.run(agent._install_optional_tooling(environment))
+
+        agent.ensure_system_dependencies.assert_awaited_once_with(
+            environment, agent.SYSTEM_DEPENDENCIES
+        )
+
+    def test_tooling_install_failure_does_not_stop_binary_install(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        agent._install_optional_tooling = AsyncMock(
+            side_effect=RuntimeError("package mirror unavailable")
+        )
+        agent.exec_as_root = AsyncMock()
+        environment = SimpleNamespace(default_user=None, upload_file=AsyncMock())
+        binary = self.logs_dir / "aipymini"
+        binary.write_bytes(b"binary")
+
+        with patch.dict("os.environ", {"AIPYMINI_BINARY": str(binary)}):
+            asyncio.run(agent.install(environment))
+
+        environment.upload_file.assert_awaited_once_with(binary, BINARY_PATH)
+        self.assertEqual(agent.exec_as_root.await_count, 2)
+        self.assertIn("chmod +x", agent.exec_as_root.await_args_list[0].kwargs["command"])
+        self.assertEqual(
+            agent.exec_as_root.await_args_list[1].kwargs["command"],
+            f"{BINARY_PATH} --version",
+        )
 
     def test_populates_harbor_context_from_trace(self):
         agent = self.agent(model_name="trust/hy4-preview")
