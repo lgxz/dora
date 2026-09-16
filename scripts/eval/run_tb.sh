@@ -72,7 +72,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 可覆盖的默认值。
-: "${AIPYMINI_BINARY:="$SCRIPT_DIR/../../dist/dora-linux-arm64"}"
+: "${AIPYMINI_BINARY:="~/.local/bin/dora"}"
 : "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
 if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
