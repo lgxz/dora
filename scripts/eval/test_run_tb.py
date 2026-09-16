@@ -25,6 +25,7 @@ class RunTBTests(unittest.TestCase):
         self.temp_root = self.root / "temp"
         self.temp_root.mkdir()
         self.capture = self.root / "capture.json"
+        self.telegram_capture = self.root / "telegram.json"
         self.script = Path(__file__).with_name("run_tb.sh")
         binary_dir = self.root / "bin"
         binary_dir.mkdir()
@@ -48,6 +49,16 @@ class RunTBTests(unittest.TestCase):
             "    sys.exit(23)\n"
         )
         harbor.chmod(0o700)
+        curl = binary_dir / "curl"
+        curl.write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['TB_TEST_TELEGRAM_CAPTURE']).write_text(\n"
+            "    json.dumps(sys.argv[1:]))\n"
+            "sys.exit(int(os.environ.get('TB_TEST_CURL_EXIT', '0')))\n"
+        )
+        curl.chmod(0o700)
         self.env = {
             **os.environ,
             "PATH": f"{binary_dir}{os.pathsep}{os.environ['PATH']}",
@@ -58,8 +69,12 @@ class RunTBTests(unittest.TestCase):
             "OPENROUTER_API_KEY": "test-key-not-for-logs",
             "TB_TEST_CAPTURE": str(self.capture),
             "TB_TEST_FAILURE": "",
+            "TB_TEST_TELEGRAM_CAPTURE": str(self.telegram_capture),
+            "TB_TEST_CURL_EXIT": "0",
         }
         self.env.pop("AIPYMINI_DATASET", None)
+        self.env.pop("TELEGRAM_TOKEN", None)
+        self.env.pop("TELEGRAM_CHAT_ID", None)
 
     def run_wrapper(self, args=None):
         if args is None:
@@ -75,6 +90,8 @@ class RunTBTests(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertNotIn(self.env["DEEPSEEK_API_KEY"], output)
         self.assertNotIn(self.env["OPENROUTER_API_KEY"], output)
+        if "TELEGRAM_TOKEN" in self.env:
+            self.assertNotIn(self.env["TELEGRAM_TOKEN"], output)
         return result
 
     def test_generates_minimal_yaml_and_cleans_up(self):
@@ -111,6 +128,7 @@ class RunTBTests(unittest.TestCase):
         self.assertFalse(Path(capture["binary_path"]).exists())
         self.assertNotIn("dora", json.dumps(capture).lower())
         self.assertNotIn("test-key-not-for-logs", json.dumps(config))
+        self.assertFalse(self.telegram_capture.exists())
 
     def test_model_is_yaml_quoted(self):
         model = "openrouter/team's-\"profile\""
@@ -180,6 +198,50 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(self.run_wrapper().returncode, 23)
         self.assertTrue(self.capture.exists())
 
+    def test_telegram_notification_requires_both_credentials(self):
+        self.env["TELEGRAM_TOKEN"] = "test-telegram-token"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.telegram_capture.exists())
+
+    def test_telegram_notification_reports_success(self):
+        self.env["TELEGRAM_TOKEN"] = "test-telegram-token"
+        self.env["TELEGRAM_CHAT_ID"] = "-1001234567890"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(self.telegram_capture.read_text())
+        self.assertIn(
+            "https://api.telegram.org/bottest-telegram-token/sendMessage",
+            args,
+        )
+        self.assertIn("chat_id=-1001234567890", args)
+        message = next(arg.removeprefix("text=") for arg in args if arg.startswith("text="))
+        self.assertIn("Terminal-Bench ✅ 完成", message)
+        self.assertIn("Agent: aipymini", message)
+        self.assertIn("Model: openrouter/auto", message)
+        self.assertIn(f"Dataset: {self.OFFICIAL_DATASET}", message)
+        self.assertRegex(message, r"Duration: \d\d:\d\d:\d\d")
+        self.assertIn("Exit code: 0", message)
+
+    def test_telegram_notification_reports_harbor_failure(self):
+        self.env["TELEGRAM_TOKEN"] = "test-telegram-token"
+        self.env["TELEGRAM_CHAT_ID"] = "-1001234567890"
+        self.env["TB_TEST_FAILURE"] = "run"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 23)
+        args = json.loads(self.telegram_capture.read_text())
+        message = next(arg.removeprefix("text=") for arg in args if arg.startswith("text="))
+        self.assertIn("Terminal-Bench ❌ 失败", message)
+        self.assertIn("Exit code: 23", message)
+
+    def test_telegram_failure_does_not_change_harbor_exit_code(self):
+        self.env["TELEGRAM_TOKEN"] = "test-telegram-token"
+        self.env["TELEGRAM_CHAT_ID"] = "-1001234567890"
+        self.env["TB_TEST_CURL_EXIT"] = "3"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Telegram 通知发送失败", result.stderr)
+
     def test_default_jobs_directory_is_under_home(self):
         self.env.pop("AIPYMINI_JOBS_DIR")
         self.env["HOME"] = str(self.root / "home")
@@ -187,6 +249,16 @@ class RunTBTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         args = json.loads(self.capture.read_text())["args"]
         self.assertEqual(args[args.index("-o") + 1], str(Path(self.env["HOME"]) / "jobs"))
+
+    def test_default_binary_is_under_home(self):
+        self.env.pop("AIPYMINI_BINARY")
+        self.env["HOME"] = str(self.root / "home")
+        binary = Path(self.env["HOME"]) / ".local" / "bin" / "dora"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"test binary")
+        binary.chmod(0o700)
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_dataset_can_be_explicitly_overridden(self):
         self.env["AIPYMINI_DATASET"] = "example/custom@sha256:test"

@@ -45,6 +45,8 @@ with ``-m PROVIDER/PROFILE``. The temporary config is removed on exit. No static
 configuration file is needed; pass other job settings through Harbor flags such
 as ``-n``. No ``-m`` or ``--ak model`` is passed to Harbor.
 For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.
+If both ``TELEGRAM_TOKEN`` and ``TELEGRAM_CHAT_ID`` are set, the wrapper sends a
+completion, failure, or interruption notification through the Telegram Bot API.
 
 The local Linux binary path is given via the host ``AIPYMINI_BINARY``
 environment variable (or the constructor kwarg ``aipymini_binary``). API keys go

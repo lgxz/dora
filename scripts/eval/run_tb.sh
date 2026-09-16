@@ -7,9 +7,10 @@
 # -m/--model 可选，默认 deepseek/deepseek-v4-pro；由本脚本消费，不透传给 Harbor。
 #
 # 可通过环境变量覆盖的默认值：
-#   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $SCRIPT_DIR/../../dist/dora-linux-arm64
+#   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $HOME/.local/bin/dora
 #   AIPYMINI_DATASET Harbor 数据集，默认固定为 leaderboard 官方版本
 #   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
+# 同时设置 TELEGRAM_TOKEN 和 TELEGRAM_CHAT_ID 时，运行结束后自动发送通知。
 #
 # 其余 Harbor 参数透传；Agent、数据集和配置入口由本脚本管理，不可另行覆盖。
 # 临时 YAML 包含固定数据集、Agent 名称、加载路径和模型，不需要静态配置文件，
@@ -73,7 +74,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 可覆盖的默认值。
-: "${AIPYMINI_BINARY:="~/.local/bin/dora"}"
+: "${AIPYMINI_BINARY:=${HOME}/.local/bin/dora}"
 : "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
 if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
@@ -112,18 +113,81 @@ agent_env_args=(
 )
 
 # 临时目录仅当前用户可访问，退出（包括失败和中断）时清理。
+run_started_seconds=$SECONDS
+job_config_dir=""
+job_config_path=""
+aipymini_adapter_path=""
+aipymini_binary_path=""
+send_telegram_notification() {
+  local exit_code="$1"
+  local elapsed_seconds="$2"
+  local status_text host_name message
+
+  if [ -z "${TELEGRAM_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "警告：已配置 Telegram 通知，但未找到 curl，无法发送通知。" >&2
+    return 0
+  fi
+
+  case "$exit_code" in
+    0) status_text="✅ 完成" ;;
+    129|130|143) status_text="⚠️ 中断" ;;
+    *) status_text="❌ 失败" ;;
+  esac
+  host_name="$(hostname 2>/dev/null)"
+  if [ -z "$host_name" ]; then
+    host_name="unknown"
+  fi
+  message="$(printf \
+    'Terminal-Bench %s\nHost: %s\nAgent: aipymini\nModel: %s\nDataset: %s\nDuration: %02d:%02d:%02d\nExit code: %d' \
+    "$status_text" \
+    "$host_name" \
+    "$model_spec" \
+    "$AIPYMINI_DATASET" \
+    "$((elapsed_seconds / 3600))" \
+    "$(((elapsed_seconds % 3600) / 60))" \
+    "$((elapsed_seconds % 60))" \
+    "$exit_code"
+  )"
+
+  if ! curl -sS --fail \
+    --connect-timeout 10 \
+    --max-time 30 \
+    -X POST \
+    "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+    --data-urlencode "text=${message}" \
+    >/dev/null 2>&1; then
+    echo "警告：Telegram 通知发送失败。" >&2
+  fi
+}
+cleanup_job_config() {
+  if [ -z "$job_config_dir" ]; then
+    return 0
+  fi
+  rm -f "$job_config_path" "$aipymini_adapter_path" "$aipymini_binary_path"
+  rmdir "$job_config_dir"
+}
+finish_run() {
+  local exit_code=$?
+  local elapsed_seconds=$((SECONDS - run_started_seconds))
+  trap - EXIT
+  set +e
+  cleanup_job_config
+  send_telegram_notification "$exit_code" "$elapsed_seconds"
+  exit "$exit_code"
+}
+trap finish_run EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 job_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/aipymini-tb.XXXXXX")"
 job_config_path="$job_config_dir/job.yaml"
 aipymini_adapter_path="$job_config_dir/aipymini.py"
 aipymini_binary_path="$job_config_dir/aipymini"
-cleanup_job_config() {
-  rm -f "$job_config_path" "$aipymini_adapter_path" "$aipymini_binary_path"
-  rmdir "$job_config_dir"
-}
-trap cleanup_job_config EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 
 # Harbor 会把命令和异常 traceback 写入结果。使用中性临时路径，避免本地
 # 仓库名、适配器来源路径和构建产物文件名泄漏到上传结果。
