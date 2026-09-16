@@ -375,7 +375,7 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 
 		var event streamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			return fmt.Errorf("decode stream event: %w", err)
+			return provider.StreamDecodeError(err)
 		}
 		switch event.Type {
 		case "response.output_text.delta":

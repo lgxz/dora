@@ -341,7 +341,7 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 		}
 		var event chatStreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return dora.Response{}, nil, fmt.Errorf("decode stream event: %w", err)
+			return dora.Response{}, nil, provider.StreamDecodeError(err)
 		}
 		for _, choice := range event.Choices {
 			if choice.Index != 0 {

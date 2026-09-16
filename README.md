@@ -539,7 +539,9 @@ reference, not a filesystem sandbox or an additional permission boundary.
 ### Model request retries
 
 Transient model failures, including a connection reset after partial text or
-reasoning has arrived, retry the current model request up to six total attempts.
+reasoning has arrived and incomplete stream JSON (`unexpected end of JSON input`),
+retry the current model request up to six total attempts. Other JSON syntax and
+type errors are not retried.
 The five waits use 2, 4, 8, 16, and 30 seconds plus up to 50% random jitter;
 a provider-supplied retry delay takes precedence. Rate-limit failures retain
 their separate five-attempt policy and provider-directed delay.

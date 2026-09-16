@@ -60,6 +60,18 @@ func Retryable(err error) error {
 	return &dora.RetryableError{Err: err}
 }
 
+// StreamDecodeError labels a stream JSON error and retries incomplete payloads.
+// encoding/json exposes premature EOF as a SyntaxError, not io.ErrUnexpectedEOF.
+// Other syntax and type errors remain permanent protocol errors.
+func StreamDecodeError(err error) error {
+	wrapped := fmt.Errorf("decode stream event: %w", err)
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) && syntax.Error() == "unexpected end of JSON input" {
+		return Retryable(wrapped)
+	}
+	return wrapped
+}
+
 // RetryableWithDelay wraps err as a dora.RetryableError with a suggested delay
 // and kind.
 func RetryableWithDelay(err error, retryAfter time.Duration, kind dora.RetryableErrorKind) error {

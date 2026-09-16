@@ -838,3 +838,45 @@ func streamResponse(events ...string) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
 }
+
+func TestGenerateStreamClassifiesJSONErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		payload   string
+		wantRetry bool
+	}{
+		{"truncated object", `{"choices":`, true},
+		{"truncated string", `{"id":"unfinished`, true},
+		{"invalid syntax", `{"id":!}`, false},
+		{"wrong type", `[]`, false},
+		{"empty data", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: "+test.payload+"\n\n")
+			}))
+			defer server.Close()
+			client, err := New(Config{BaseURL: server.URL, Model: "test-model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.GenerateStream(context.Background(), dora.Request{}, nil)
+			if err == nil || !strings.Contains(err.Error(), "decode stream event:") {
+				t.Fatalf("error = %v, want stream decode error", err)
+			}
+			var retryable *dora.RetryableError
+			if got := errors.As(err, &retryable); got != test.wantRetry {
+				t.Fatalf("retryable = %v, want %v (error %v)", got, test.wantRetry, err)
+			}
+			if test.wantRetry && retryable.Kind != dora.RetryableGeneric {
+				t.Fatalf("retry kind = %v, want generic", retryable.Kind)
+			}
+			var syntax *json.SyntaxError
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &syntax) && !errors.As(err, &typeErr) {
+				t.Fatalf("error does not preserve JSON cause: %v", err)
+			}
+		})
+	}
+}
