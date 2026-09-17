@@ -164,11 +164,15 @@ func (a *Agent) generateContextSummary(ctx context.Context, history []Message, t
 		)
 		messages := cloneMessages(history)
 		messages = append(messages, Message{Role: RoleUser, Content: prompt})
-		response, err := a.generateWithRetry(ctx, Request{
+		response, err := a.generateWithRetry(context.WithValue(ctx, attemptPurposeKey{}, "compaction"), Request{
 			Messages:        messages,
 			MaxOutputTokens: &targetTokens,
 		}, nil, nil)
 		if err != nil {
+			return result, fmt.Errorf("generate summary: %w", err)
+		}
+		setAttemptDisposition(ctx, "discarded")
+		if err := ValidateResponse(response); err != nil && !errors.Is(err, ErrEmptyResponse) {
 			return result, fmt.Errorf("generate summary: %w", err)
 		}
 		if len(response.ToolCalls) > 0 {
@@ -188,6 +192,7 @@ func (a *Agent) generateContextSummary(ctx context.Context, history []Message, t
 			lastError = fmt.Errorf("summary exceeds target: %d > %d tokens", result.tokens, targetTokens)
 			continue
 		}
+		setAttemptDisposition(ctx, "summary")
 		return result, nil
 	}
 	return result, lastError

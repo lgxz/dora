@@ -144,5 +144,8 @@ func (r *Router) View(ctx context.Context, image dora.Image, prompt string) (str
 	if err != nil {
 		return "", err
 	}
+	if err := dora.ValidateResponse(resp); err != nil {
+		return "", err
+	}
 	return resp.Content, nil
 }

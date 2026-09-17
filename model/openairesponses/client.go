@@ -136,6 +136,9 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 	defer reader.Close()
 
 	response, err := readStream(reader, emit, onActivity)
+	if body.MaxOutputTokens != nil {
+		response.OutputBudget = *body.MaxOutputTokens
+	}
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai responses: %w", err)
 	}
@@ -399,9 +402,12 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 					ID: item.CallID, Name: item.Name, Input: arguments,
 				}})
 			}
-		case "response.completed":
+		case "response.completed", "response.incomplete":
 			completed = &event.Response
-		case "response.failed", "response.incomplete":
+			if completed.Status == "" {
+				completed.Status = strings.TrimPrefix(event.Type, "response.")
+			}
+		case "response.failed":
 			message := event.Response.Error.Message
 			if message == "" {
 				message = event.Type
@@ -451,7 +457,19 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 	if err != nil {
 		return dora.Response{}, err
 	}
-	result := dora.Response{Continuation: continuation, Usage: usageFromResponses(response.Usage)}
+	result := dora.Response{Continuation: continuation, Usage: usageFromResponses(response.Usage), FinishReason: dora.FinishUnknown, RawFinishReason: response.Status}
+	if response.Status == "completed" {
+		result.FinishReason = dora.FinishStop
+	}
+	if response.Status == "incomplete" {
+		result.RawFinishReason += ":" + response.IncompleteDetails.Reason
+		switch response.IncompleteDetails.Reason {
+		case "max_output_tokens":
+			result.FinishReason = dora.FinishOutputLimit
+		case "content_filter":
+			result.FinishReason = dora.FinishBlocked
+		}
+	}
 	for _, rawItem := range response.Output {
 		var item responseItem
 		if err := json.Unmarshal(rawItem, &item); err != nil {
@@ -460,6 +478,10 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 		switch item.Type {
 		case "message":
 			for _, content := range item.Content {
+				if content.Type == "refusal" {
+					result.FinishReason = dora.FinishBlocked
+					result.RawFinishReason = "refusal"
+				}
 				if content.Type == "output_text" {
 					result.Content += content.Text
 				}
@@ -477,6 +499,9 @@ func (response responsesResponse) toDora() (dora.Response, error) {
 				ID: item.CallID, Name: item.Name, Input: arguments,
 			})
 		}
+	}
+	if result.FinishReason == dora.FinishStop && len(result.ToolCalls) > 0 {
+		result.FinishReason = dora.FinishToolCalls
 	}
 	return result, nil
 }
@@ -559,7 +584,11 @@ type streamEvent struct {
 }
 
 type responsesResponse struct {
-	ID     string            `json:"id"`
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
 	Output []json.RawMessage `json:"output"`
 	Error  struct {
 		Message string `json:"message"`

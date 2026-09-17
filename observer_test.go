@@ -12,13 +12,13 @@ func TestRunObservedReportsConversationProgress(t *testing.T) {
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		modelCalls++
 		if modelCalls == 1 {
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "echo",
 				Input: json.RawMessage(`{"text":"hello"}`),
 			}}}, nil
 		}
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "echo"},
@@ -88,7 +88,7 @@ func TestObserverEventsDoNotIncludeRemovedKinds(t *testing.T) {
 	// an up-to-date tree cannot reference them; this test additionally fails if
 	// the deleted strings are ever re-introduced as kinds.
 	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	agent, err := New(model)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestObserverCannotMutateConversation(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		modelCalls++
 		if modelCalls == 1 {
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "echo",
 				Input: json.RawMessage(`{"value":1}`),
@@ -125,7 +125,7 @@ func TestObserverCannotMutateConversation(t *testing.T) {
 		if call.Name != "echo" || string(call.Input) != `{"value":1}` {
 			t.Fatalf("history was mutated: %#v", call)
 		}
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "echo"},

@@ -77,6 +77,12 @@ policy:
 
 agent:
   max_rounds: 256
+  # On output truncation, retry from the last complete exchange once, doubling
+  # the output budget within the model/context limits. Set max_retries: 0 to fail
+  # immediately. This does not change the ordinary profile max_tokens value.
+  # output_limit_recovery:
+  #   max_retries: 1
+  #   max_output_tokens: 65536  # optional ceiling for recovery requests
   # Empty uses the built-in default. A non-empty value fully replaces it.
   # Both receive OS, architecture, and the Agent's local start date as a suffix.
   # system_prompt: You are a terminal-based AI agent.

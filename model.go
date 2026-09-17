@@ -92,6 +92,18 @@ type Usage struct {
 	OutputDetails *OutputTokenDetails `json:"output_details,omitempty"`
 }
 
+// FinishReason is the provider-neutral reason a model stopped generating.
+// Models must set it explicitly; an omitted or unknown reason is not completion.
+type FinishReason string
+
+const (
+	FinishStop        FinishReason = "stop"
+	FinishToolCalls   FinishReason = "tool_calls"
+	FinishOutputLimit FinishReason = "output_limit"
+	FinishBlocked     FinishReason = "blocked"
+	FinishUnknown     FinishReason = "unknown"
+)
+
 // Response is either a final assistant response, one or more tool calls, or
 // both. Tool calls are executed before the model is invoked again. Reasoning
 // holds the chain-of-thought that reasoning models emit alongside Content; it
@@ -100,6 +112,11 @@ type Usage struct {
 // record of the tokens the model call consumed; it is nil when the provider
 // reports none.
 type Response struct {
+	FinishReason    FinishReason
+	RawFinishReason string
+	// OutputBudget is the effective per-call output limit sent to the provider.
+	// Zero means unknown; it must not be inferred from token consumption.
+	OutputBudget int
 	Content      string
 	Reasoning    string
 	ToolCalls    []ToolCall

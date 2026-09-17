@@ -49,11 +49,18 @@ type PolicySettings struct {
 
 // Agent configures model-tool loop safeguards.
 type Agent struct {
-	MaxRounds int `yaml:"max_rounds,omitempty"`
+	MaxRounds           int                  `yaml:"max_rounds,omitempty"`
+	OutputLimitRecovery *OutputLimitRecovery `yaml:"output_limit_recovery,omitempty"`
 	// SystemPrompt replaces the CLI's built-in default system prompt. Empty
 	// uses the built-in default. The CLI appends runtime environment metadata
 	// to either choice.
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
+}
+
+// OutputLimitRecovery overrides the default of one retry with a doubled budget.
+type OutputLimitRecovery struct {
+	MaxRetries      int `yaml:"max_retries"`
+	MaxOutputTokens int `yaml:"max_output_tokens,omitempty"`
 }
 
 // Provider describes one provider endpoint with multiple profiles.
@@ -234,6 +241,9 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if err := cfg.resolveProviders(); err != nil {
 		return err
+	}
+	if r := cfg.Agent.OutputLimitRecovery; r != nil && (r.MaxRetries < 0 || r.MaxOutputTokens < 0) {
+		return errors.New("agent.output_limit_recovery limits cannot be negative")
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")

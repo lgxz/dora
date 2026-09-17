@@ -8,18 +8,22 @@ import (
 	"github.com/lgxz/dora"
 )
 
-const turnTraceSchemaVersion = 1
+const turnTraceSchemaVersion = 2
 
 // turnTrace is a provider-neutral, one-shot representation of the parent
 // Turn. The Harbor adapter converts this private interchange format to ATIF.
 // Tool input is kept as text so a malformed provider payload cannot prevent
 // the rest of a failed turn from being recorded.
 type turnTrace struct {
-	SchemaVersion int          `json:"schema_version"`
-	System        string       `json:"system,omitempty"`
-	User          string       `json:"user"`
-	Rounds        []traceRound `json:"rounds"`
-	Final         *traceFinal  `json:"final,omitempty"`
+	SchemaVersion int                 `json:"schema_version"`
+	Status        string              `json:"status"`
+	Error         string              `json:"error,omitempty"`
+	Attempts      []dora.ModelAttempt `json:"attempts"`
+	TotalUsage    *dora.Usage         `json:"total_usage,omitempty"`
+	System        string              `json:"system,omitempty"`
+	User          string              `json:"user"`
+	Rounds        []traceRound        `json:"rounds"`
+	Final         *traceFinal         `json:"final,omitempty"`
 }
 
 type traceRound struct {
@@ -47,8 +51,12 @@ type traceToolResult struct {
 }
 
 type traceFinal struct {
-	Content string      `json:"content"`
-	Usage   *dora.Usage `json:"usage,omitempty"`
+	Reasoning       string            `json:"reasoning,omitempty"`
+	FinishReason    dora.FinishReason `json:"finish_reason"`
+	RawFinishReason string            `json:"raw_finish_reason,omitempty"`
+	OutputBudget    int               `json:"output_budget"`
+	Content         string            `json:"content"`
+	Usage           *dora.Usage       `json:"usage,omitempty"`
 }
 
 func newTurnTrace(turn *dora.Turn) *turnTrace {
@@ -57,9 +65,15 @@ func newTurnTrace(turn *dora.Turn) *turnTrace {
 	}
 	trace := &turnTrace{
 		SchemaVersion: turnTraceSchemaVersion,
+		Status:        "incomplete",
+		Attempts:      turn.Attempts(),
+		TotalUsage:    turn.TotalUsage(),
 		System:        turn.System(),
 		User:          turn.User(),
 		Rounds:        make([]traceRound, 0, len(turn.Rounds())),
+	}
+	if trace.Attempts == nil {
+		trace.Attempts = []dora.ModelAttempt{}
 	}
 	for _, round := range turn.Rounds() {
 		converted := traceRound{
@@ -85,8 +99,13 @@ func newTurnTrace(turn *dora.Turn) *turnTrace {
 		}
 		trace.Rounds = append(trace.Rounds, converted)
 	}
-	if result, ok := turn.Result(); ok {
-		trace.Final = &traceFinal{Content: result, Usage: turn.Usage()}
+	if turn.RunError() != nil {
+		trace.Status = "failed"
+		trace.Error = turn.RunError().Error()
+	}
+	if final, ok := turn.FinalResponse(); ok {
+		trace.Status = "completed"
+		trace.Final = &traceFinal{Content: final.Content, Reasoning: final.Reasoning, FinishReason: final.FinishReason, RawFinishReason: final.RawFinishReason, OutputBudget: final.OutputBudget, Usage: turn.Usage()}
 	}
 	return trace
 }

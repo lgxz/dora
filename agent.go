@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type Agent struct {
 	// maxOutputTokens is the model's hard output capacity. Zero means the model
 	// does not advertise one, so request-level limits are left unclamped.
 	maxOutputTokens int
+	outputRecovery  OutputLimitRecovery
 }
 
 // AgentConfig controls immutable Agent behavior and safeguards. A zero
@@ -51,6 +53,16 @@ type Agent struct {
 type AgentConfig struct {
 	MaxRounds    int
 	SystemPrompt string
+	// Nil enables one output-limit retry. A non-nil zero value disables it.
+	OutputLimitRecovery *OutputLimitRecovery
+}
+
+// OutputLimitRecovery bounds retries of completed but truncated model responses.
+// Each retry doubles the actual request budget, clamped to the optional cap and
+// advertised model capacity. Unknown budgets cannot be increased safely.
+type OutputLimitRecovery struct {
+	MaxRetries      int
+	MaxOutputTokens int
 }
 
 // RunOptions controls one Agent run without mutating the Agent. ExcludeTools
@@ -77,6 +89,13 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 	if cfg.MaxRounds < 0 {
 		return nil, errors.New("MaxRounds cannot be negative")
 	}
+	recovery := OutputLimitRecovery{MaxRetries: 1}
+	if cfg.OutputLimitRecovery != nil {
+		recovery = *cfg.OutputLimitRecovery
+	}
+	if recovery.MaxRetries < 0 || recovery.MaxOutputTokens < 0 {
+		return nil, errors.New("output recovery limits cannot be negative")
+	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = defaultMaxRounds
@@ -101,6 +120,7 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 		systemPrompt:    cfg.SystemPrompt,
 		contextWindow:   contextWindow,
 		maxOutputTokens: maxOutputTokens,
+		outputRecovery:  recovery,
 	}
 
 	for _, tool := range tools {
@@ -137,7 +157,7 @@ func (a *Agent) RunObserved(ctx context.Context, turn *Turn, observer Observer) 
 // RunObservedWithOptions is RunObserved with per-run tool selection. The
 // Agent remains immutable, so the same Agent may run independent Turns with
 // different options concurrently.
-func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer Observer, opts RunOptions) error {
+func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer Observer, opts RunOptions) (runErr error) {
 	if a == nil || a.model == nil {
 		return errors.New("agent is not initialized")
 	}
@@ -147,6 +167,8 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 	if turn.Completed() {
 		return errors.New("turn is already complete")
 	}
+	defer func() { turn.runError = runErr }()
+	ctx = context.WithValue(ctx, attemptTurnKey{}, turn)
 	if opts.WorkingDirectory != "" {
 		ctx = withWorkingDirectory(ctx, opts.WorkingDirectory)
 	}
@@ -200,7 +222,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		var response Response
 		var err error
 		if _, ok := a.model.(StreamingModel); ok {
-			response, err = a.generateWithRetry(ctx, request, func(event ModelEvent) {
+			response, err = a.generateWithRecovery(ctx, request, func(event ModelEvent) {
 				switch event.Kind {
 				case ModelEventContentDelta:
 					notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
@@ -209,7 +231,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 				}
 			}, observer)
 		} else {
-			response, err = a.generateWithRetry(ctx, request, nil, observer)
+			response, err = a.generateWithRecovery(ctx, request, nil, observer)
 		}
 		if err != nil {
 			return fmt.Errorf("generate response: %w", err)
@@ -229,7 +251,7 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		notify(observer, Update{Kind: UpdateMessageReceived, Message: assistant, Usage: response.Usage})
 
 		if len(response.ToolCalls) == 0 {
-			if err := turn.completeWithUsage(response.Content, response.Continuation, response.Usage); err != nil {
+			if err := turn.completeResponse(response); err != nil {
 				return err
 			}
 			return nil
@@ -367,6 +389,7 @@ func (a *Agent) generateWithRetry(ctx context.Context, request Request, emit fun
 		} else {
 			response, err = a.model.Generate(ctx, request)
 		}
+		recordModelAttempt(ctx, request, response, err)
 		if err == nil {
 			return response, err
 		}
@@ -505,4 +528,99 @@ func cloneToolSpec(spec ToolSpec) ToolSpec {
 
 func cloneBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
+}
+
+// ValidateResponse rejects incomplete, empty, and ambiguous responses before
+// either completing the turn or executing tools.
+func ValidateResponse(response Response) error {
+	switch response.FinishReason {
+	case FinishOutputLimit:
+		return ErrOutputLimit
+	case FinishBlocked:
+		return ErrModelBlocked
+	case FinishStop:
+		if len(response.ToolCalls) != 0 {
+			return ErrInvalidModelResponse
+		}
+		if strings.TrimSpace(response.Content) == "" {
+			return ErrEmptyResponse
+		}
+	case FinishToolCalls:
+		if len(response.ToolCalls) == 0 {
+			return ErrInvalidModelResponse
+		}
+		for _, call := range response.ToolCalls {
+			if call.ID == "" || call.Name == "" {
+				return ErrInvalidModelResponse
+			}
+		}
+	default:
+		return ErrUnknownFinishReason
+	}
+	return nil
+}
+
+var (
+	ErrOutputLimit          = errors.New("model output budget exhausted")
+	ErrEmptyResponse        = errors.New("model returned an empty final response")
+	ErrUnknownFinishReason  = errors.New("model returned an unknown finish reason")
+	ErrInvalidModelResponse = errors.New("model response conflicts with its finish reason")
+	ErrModelBlocked         = errors.New("model response was blocked")
+)
+
+func (a *Agent) generateWithRecovery(ctx context.Context, request Request, emit func(ModelEvent), observer Observer) (Response, error) {
+	for retry := 0; ; retry++ {
+		attemptCtx := context.WithValue(ctx, attemptRecoveryKey{}, retry)
+		response, err := a.generateWithRetry(attemptCtx, request, emit, observer)
+		if err != nil {
+			return response, err
+		}
+		if err := ctx.Err(); err != nil {
+			setAttemptDisposition(ctx, "discarded")
+			return response, err
+		}
+		err = ValidateResponse(response)
+		if err == nil {
+			disposition := "final"
+			if response.FinishReason == FinishToolCalls {
+				disposition = "tools"
+			}
+			setAttemptDisposition(ctx, disposition)
+			return response, nil
+		}
+		setAttemptDisposition(ctx, "discarded")
+		if !errors.Is(err, ErrOutputLimit) {
+			return response, err
+		}
+		if ctx.Err() != nil {
+			return response, ctx.Err()
+		}
+		budget := response.OutputBudget
+		if budget <= 0 || retry >= a.outputRecovery.MaxRetries {
+			return response, err
+		}
+		// Saturate before multiplication to avoid int overflow.
+		next := int(^uint(0) >> 1)
+		if budget <= next/2 {
+			next = budget * 2
+		}
+		for _, cap := range []int{a.maxOutputTokens, a.outputRecovery.MaxOutputTokens} {
+			if cap > 0 && next > cap {
+				next = cap
+			}
+		}
+		// Account for the larger output reservation without mutating history.
+		occupied := estimateTokens(request.Messages) + estimateToolSpecTokens(request.Tools)
+		if response.Usage != nil {
+			occupied = int(response.Usage.InputTokens)
+		}
+		if available := a.contextWindow - occupied; next > available {
+			next = available
+		}
+		if next <= budget {
+			return response, err
+		}
+		request.MaxOutputTokens = &next
+		notify(observer, Update{Kind: UpdateInfo, Info: fmt.Sprintf("Model output truncated; retrying from the last complete exchange with output budget %d -> %d (%d/%d)", budget, next, retry+1, a.outputRecovery.MaxRetries)})
+	}
 }

@@ -17,7 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -134,6 +134,10 @@ func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.
 	if err != nil {
 		return 0, fmt.Errorf("encode final usage: %w", err)
 	}
+	totalUsageJSON, err := encodeUsage(turn.TotalUsage())
+	if err != nil {
+		return 0, fmt.Errorf("encode total usage: %w", err)
+	}
 	rounds := turn.Rounds()
 	committedAt := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -144,9 +148,9 @@ func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.
 
 	inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
-    system, user, result, status, error, round_count, usage_json, committed_at
-) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), ?)`,
-		turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, committedAt.Format(time.RFC3339Nano),
+    system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
+) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
+		turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, totalUsageJSON, committedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert turn: %w", err)
@@ -154,6 +158,15 @@ INSERT INTO turns (
 	turnID, err := inserted.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("read inserted turn ID: %w", err)
+	}
+	for index, attempt := range turn.Attempts() {
+		encoded, err := json.Marshal(attempt)
+		if err != nil {
+			return 0, fmt.Errorf("encode model attempt: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO model_attempts (turn_id, attempt_index, record_json) VALUES (?, ?, ?)`, turnID, index, string(encoded)); err != nil {
+			return 0, fmt.Errorf("insert model attempt: %w", err)
+		}
 	}
 	for roundIndex, round := range rounds {
 		if err := insertMessage(ctx, tx, turnID, roundIndex, 0, round.Assistant, round.Usage); err != nil {
@@ -184,7 +197,7 @@ func (s *Store) ListTurns(ctx context.Context, options session.ListOptions) (ses
 		return session.TurnPage{}, fmt.Errorf("count turns: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, user, result, status, error, round_count, usage_json, committed_at
+SELECT id, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
 FROM turns
 ORDER BY id DESC
 LIMIT ? OFFSET ?`, options.Limit, options.Offset)
@@ -195,12 +208,16 @@ LIMIT ? OFFSET ?`, options.Limit, options.Offset)
 	page := session.TurnPage{Total: total, Offset: options.Offset, Limit: options.Limit, Turns: []session.TurnSummary{}}
 	for rows.Next() {
 		var summary session.TurnSummary
-		var errorText, usageJSON sql.NullString
+		var errorText, usageJSON, totalUsageJSON sql.NullString
 		var committedAt string
-		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.Status, &errorText, &summary.RoundCount, &usageJSON, &committedAt); err != nil {
+		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.Status, &errorText, &summary.RoundCount, &usageJSON, &totalUsageJSON, &committedAt); err != nil {
 			return session.TurnPage{}, fmt.Errorf("scan turn summary: %w", err)
 		}
 		summary.Error = errorText.String
+		summary.TotalUsage, err = decodeUsage(totalUsageJSON.String)
+		if err != nil {
+			return session.TurnPage{}, fmt.Errorf("decode total usage: %w", err)
+		}
 		summary.Usage, err = decodeUsage(usageJSON.String)
 		if err != nil {
 			return session.TurnPage{}, fmt.Errorf("decode turn %d final usage: %w", summary.ID, err)
@@ -338,7 +355,8 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
-		`SELECT id, system, user, result, status, error, round_count, usage_json, committed_at FROM turns LIMIT 0`,
+		`SELECT turn_id, attempt_index, record_json FROM model_attempts LIMIT 0`,
+		`SELECT id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at FROM turns LIMIT 0`,
 		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
@@ -370,9 +388,17 @@ var schemaStatements = []string{
 		error TEXT,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
 		usage_json TEXT,
+		total_usage_json TEXT,
 		committed_at TEXT NOT NULL,
 		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed', 'canceled') AND error IS NOT NULL)),
 		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
+    )`,
+	`CREATE TABLE model_attempts (
+        turn_id INTEGER NOT NULL,
+        attempt_index INTEGER NOT NULL CHECK (attempt_index >= 0),
+        record_json TEXT NOT NULL,
+        PRIMARY KEY (turn_id, attempt_index),
+        FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE CASCADE
     )`,
 	`CREATE TABLE messages (
         turn_id INTEGER NOT NULL,
@@ -489,4 +515,42 @@ func ensureFile(path string) error {
 		return fmt.Errorf("create sqlite session: %w", err)
 	}
 	return file.Close()
+}
+
+// GetAttempts returns audit records independently of model-visible tool rounds.
+func (s *Store) GetAttempts(ctx context.Context, id int64, options session.RoundOptions) (session.AttemptPage, error) {
+	if s == nil || s.db == nil {
+		return session.AttemptPage{}, errors.New("sqlite session is not initialized")
+	}
+	if options.Offset < 0 || options.Limit <= 0 {
+		return session.AttemptPage{}, errors.New("attempt offset must be non-negative and limit positive")
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM turns WHERE id = ?`, id).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return session.AttemptPage{}, session.ErrNotFound
+		}
+		return session.AttemptPage{}, err
+	}
+	page := session.AttemptPage{Offset: options.Offset, Limit: options.Limit, Attempts: []dora.ModelAttempt{}}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_attempts WHERE turn_id = ?`, id).Scan(&page.Total); err != nil {
+		return page, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT record_json FROM model_attempts WHERE turn_id = ? ORDER BY attempt_index LIMIT ? OFFSET ?`, id, options.Limit, options.Offset)
+	if err != nil {
+		return page, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			return page, err
+		}
+		var attempt dora.ModelAttempt
+		if err := json.Unmarshal([]byte(encoded), &attempt); err != nil {
+			return page, err
+		}
+		page.Attempts = append(page.Attempts, attempt)
+	}
+	return page, rows.Err()
 }

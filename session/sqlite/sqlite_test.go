@@ -310,7 +310,7 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	reasoning := int64(3)
-	completeTurnWithResponse(t, turn, dora.Response{
+	completeTurnWithResponse(t, turn, dora.Response{FinishReason: dora.FinishStop,
 		Content: "sunny",
 		Usage: &dora.Usage{
 			InputTokens: 15, OutputTokens: 4, TotalTokens: 19,
@@ -433,7 +433,7 @@ func completedTurn(t *testing.T, user, result string, roundCount int) *dora.Turn
 type finalModel string
 
 func (m finalModel) Generate(context.Context, dora.Request) (dora.Response, error) {
-	return dora.Response{Content: string(m)}, nil
+	return dora.Response{FinishReason: dora.FinishStop, Content: string(m)}, nil
 }
 
 type finalResponseModel struct {
@@ -540,5 +540,50 @@ func TestStoreRejectsVersionSixWithoutMigration(t *testing.T) {
 	}
 	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6") {
 		t.Fatalf("expected version rejection, got %v", err)
+	}
+}
+
+func TestStorePersistsDiscardedAttemptsAndTotalUsage(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "attempts.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reasonTokens := int64(32768)
+	response := dora.Response{FinishReason: dora.FinishOutputLimit, RawFinishReason: "length", OutputBudget: 32768, Reasoning: "unfinished",
+		ToolCalls: []dora.ToolCall{{ID: "partial", Name: "bash", Input: json.RawMessage(`{`)}},
+		Usage:     &dora.Usage{InputTokens: 100, OutputTokens: 32768, TotalTokens: 32868, OutputDetails: &dora.OutputTokenDetails{ReasoningTokens: &reasonTokens}}}
+	agent, err := dora.NewWithConfig(finalResponseModel{response: response}, dora.AgentConfig{OutputLimitRecovery: &dora.OutputLimitRecovery{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := dora.NewTurn("solve")
+	cause := agent.Run(ctx, turn)
+	if !errors.Is(cause, dora.ErrOutputLimit) {
+		t.Fatal(cause)
+	}
+	id, err := store.CommitFailed(ctx, turn, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.GetAttempts(ctx, id, session.RoundOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Attempts) != 1 || page.Attempts[0].Reasoning != "unfinished" || page.Attempts[0].ToolCalls[0].Input != "{" || page.Attempts[0].Disposition != "discarded" {
+		t.Fatalf("page=%+v", page)
+	}
+	turns, err := store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := turns.Turns[0]
+	if saved.Status != session.TurnStatusFailed || saved.Usage != nil || saved.TotalUsage.TotalTokens != 32868 {
+		t.Fatalf("saved=%+v", saved)
+	}
+	empty, err := store.GetAttempts(ctx, id, session.RoundOptions{Offset: 1, Limit: 1})
+	if err != nil || empty.Total != 1 || len(empty.Attempts) != 0 {
+		t.Fatalf("page=%+v err=%v", empty, err)
 	}
 }

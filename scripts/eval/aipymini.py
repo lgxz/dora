@@ -444,7 +444,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     def _trajectory_from_trace(self, trace: Any) -> Trajectory:
         if not isinstance(trace, dict):
             raise ValueError("trace must be a JSON object")
-        if trace.get("schema_version") != 1:
+        if trace.get("schema_version") != 2:
             raise ValueError("unsupported trace schema_version")
 
         steps: list[Step] = []
@@ -465,80 +465,57 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
 
         usages: list[Metrics] = []
         rounds = trace.get("rounds")
-        if not isinstance(rounds, list):
-            raise ValueError("rounds must be an array")
-        for round_data in rounds:
-            if not isinstance(round_data, dict):
-                raise ValueError("round must be an object")
-            assistant = round_data["assistant"]
-            results = round_data["tools"]
-            if not isinstance(assistant, dict) or not isinstance(results, list):
-                raise ValueError("round assistant/tools have invalid types")
-
+        attempts = trace.get("attempts")
+        if not isinstance(rounds, list) or not isinstance(attempts, list):
+            raise ValueError("rounds and attempts must be arrays")
+        if trace.get("status") not in ("completed", "failed", "incomplete"):
+            raise ValueError("invalid trace status")
+        # Attempts are the single accounting source. Rounds/final duplicate
+        # accepted responses for conversation access and must not be summed.
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                raise ValueError("attempt must be an object")
+            metrics = _atif_metrics(attempt.get("usage"))
+            if metrics is not None:
+                usages.append(metrics)
+            content = attempt.get("content", "")
+            reasoning = attempt.get("reasoning")
+            if not isinstance(content, str) or (reasoning is not None and not isinstance(reasoning, str)):
+                raise ValueError("attempt content/reasoning must be strings")
             atif_calls: list[ToolCall] = []
-            calls = assistant.get("tool_calls")
-            if not isinstance(calls, list):
-                raise ValueError("tool_calls must be an array")
-            for call in calls:
-                if not isinstance(call, dict):
-                    raise ValueError("tool call must be an object")
-                raw_input = call.get("input")
-                if not isinstance(raw_input, str):
-                    raise ValueError("tool input must be a string")
-                try:
-                    arguments = json.loads(raw_input)
-                except json.JSONDecodeError:
-                    arguments = {"_raw": raw_input}
-                if not isinstance(arguments, dict):
-                    arguments = {"_raw": arguments}
-                atif_calls.append(ToolCall(
-                    tool_call_id=call["id"],
-                    function_name=call["name"],
-                    arguments=arguments,
-                ))
-
             observations: list[ObservationResult] = []
-            for result in results:
-                if not isinstance(result, dict):
-                    raise ValueError("tool result must be an object")
-                images = result.get("images")
-                observations.append(ObservationResult(
-                    source_call_id=result["tool_call_id"],
-                    content=result.get("content", ""),
-                    extra={"images": images} if images else None,
-                ))
-
-            metrics = _atif_metrics(round_data.get("usage"))
-            if metrics is not None:
-                usages.append(metrics)
-            content = assistant.get("content", "")
-            reasoning = assistant.get("reasoning")
-            if not isinstance(content, str) or (
-                reasoning is not None and not isinstance(reasoning, str)
-            ):
-                raise ValueError("assistant content/reasoning must be strings")
+            if attempt.get("disposition") == "tools":
+                index = attempt.get("round_index")
+                if not isinstance(index, int) or not 0 <= index < len(rounds):
+                    raise ValueError("executed attempt has no complete tool round")
+                round_data = rounds[index]
+                for call in round_data["assistant"]["tool_calls"]:
+                    raw_input = call["input"]
+                    if not isinstance(raw_input, str):
+                        raise ValueError("tool input must be a string")
+                    try:
+                        arguments = json.loads(raw_input)
+                    except json.JSONDecodeError:
+                        arguments = {"_raw": raw_input}
+                    if not isinstance(arguments, dict):
+                        arguments = {"_raw": arguments}
+                    atif_calls.append(ToolCall(tool_call_id=call["id"], function_name=call["name"], arguments=arguments))
+                for result in round_data["tools"]:
+                    images = result.get("images")
+                    observations.append(ObservationResult(
+                        source_call_id=result["tool_call_id"], content=result.get("content", ""),
+                        extra={"images": images} if images else None,
+                    ))
+            extra = {key: attempt[key] for key in (
+                "purpose", "recovery", "disposition", "finish_reason", "raw_finish_reason", "output_budget", "error"
+            ) if key in attempt}
+            if attempt.get("tool_calls") and not atif_calls:
+                extra["unexecuted_tool_calls"] = attempt["tool_calls"]
             append_step(
-                source="agent",
-                message=content,
-                reasoning_content=reasoning or None,
-                tool_calls=atif_calls,
-                observation=Observation(results=observations),
-                metrics=metrics,
-                llm_call_count=1,
-            )
-
-        final = trace.get("final")
-        if final is not None:
-            if not isinstance(final, dict) or not isinstance(final.get("content"), str):
-                raise ValueError("final must contain string content")
-            metrics = _atif_metrics(final.get("usage"))
-            if metrics is not None:
-                usages.append(metrics)
-            append_step(
-                source="agent",
-                message=final["content"],
-                metrics=metrics,
-                llm_call_count=1,
+                source="agent", message=content, reasoning_content=reasoning or None,
+                tool_calls=atif_calls or None,
+                observation=Observation(results=observations) if observations else None,
+                metrics=metrics, llm_call_count=1, extra=extra or None,
             )
 
         def sum_metric(name: str) -> int | None:

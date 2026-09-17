@@ -36,9 +36,14 @@ func buildAgent(cfg config.Config, deps agentDependencies) (*dora.Agent, error) 
 	if err != nil {
 		return nil, err
 	}
+	var recovery *dora.OutputLimitRecovery
+	if r := cfg.Agent.OutputLimitRecovery; r != nil {
+		recovery = &dora.OutputLimitRecovery{MaxRetries: r.MaxRetries, MaxOutputTokens: r.MaxOutputTokens}
+	}
 	agent, err = dora.NewWithConfig(deps.model, dora.AgentConfig{
-		MaxRounds:    cfg.Agent.MaxRounds,
-		SystemPrompt: deps.systemPrompt,
+		MaxRounds:           cfg.Agent.MaxRounds,
+		OutputLimitRecovery: recovery,
+		SystemPrompt:        deps.systemPrompt,
 	}, tools...)
 	return agent, err
 }

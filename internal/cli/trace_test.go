@@ -1,9 +1,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lgxz/dora"
@@ -60,5 +66,74 @@ func TestWriteTraceFilePreservesParentTurn(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("permissions = %o, want 600", got)
+	}
+}
+
+func TestTraceRecordsOutputLimitRecoveryWithoutDoubleCounting(t *testing.T) {
+	for _, recoverSuccessfully := range []bool{false, true} {
+		t.Run(fmt.Sprint(recoverSuccessfully), func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.yaml")
+			tracePath := filepath.Join(dir, "trace.json")
+			if err := os.WriteFile(configPath, []byte(`providers:
+  - name: test
+    base_url: https://example.test/v1
+    profiles:
+      - name: model
+        capabilities: [text]
+        max_tokens: 32768
+        max_output_tokens: 65536
+env:
+  TEST_API_KEY: key
+`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				want := 32768
+				if calls == 2 {
+					want = 65536
+				}
+				if int(body["max_tokens"].(float64)) != want {
+					t.Fatalf("budget=%v", body["max_tokens"])
+				}
+				event := `{"choices":[{"index":0,"delta":{"reasoning_content":"unfinished"},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":32768,"total_tokens":32868,"completion_tokens_details":{"reasoning_tokens":32768}}}`
+				if recoverSuccessfully && calls == 2 {
+					event = `{"choices":[{"index":0,"delta":{"content":"done","reasoning_content":"finished"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`
+				}
+				return fakeChatResponse(event), nil
+			})}
+			err := Run(context.Background(), []string{"--config", configPath, "--no-skills", "--trace-file", tracePath, "solve"}, IO{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard, StdinIsTerminal: true, HTTPClient: client})
+			if recoverSuccessfully {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, dora.ErrOutputLimit) {
+				t.Fatalf("error=%v", err)
+			}
+			encoded, err := os.ReadFile(tracePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var trace turnTrace
+			if err := json.Unmarshal(encoded, &trace); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 || trace.SchemaVersion != 2 || len(trace.Attempts) != 2 || trace.Attempts[0].Reasoning != "unfinished" || trace.Attempts[0].Disposition != "discarded" || trace.Attempts[1].Recovery != 1 {
+				t.Fatalf("trace=%+v calls=%d", trace, calls)
+			}
+			if recoverSuccessfully {
+				if trace.Status != "completed" || trace.Final == nil || trace.Final.Reasoning != "finished" || trace.TotalUsage.TotalTokens != 32988 {
+					t.Fatalf("trace=%+v", trace)
+				}
+			} else if trace.Status != "failed" || trace.Final != nil || trace.TotalUsage.TotalTokens != 65736 || trace.Error == "" {
+				t.Fatalf("trace=%+v", trace)
+			}
+		})
 	}
 }

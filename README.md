@@ -359,7 +359,7 @@ at most 20% of the window, further capped by the profile's optional
 `max_output_tokens`. That effective target is sent as a request-specific output
 limit, overriding the ordinary `max_tokens` value so a provider's smaller
 default cannot silently constrain compaction. The summary call has no tools or
-continuation. A non-empty summary returned at the output limit is accepted. The
+continuation. A summary truncated at the output limit is rejected, even when it contains text. The
 complete Turn remains unchanged for persistence, and a failed summary never
 falls back to deleting or locally truncating history.
 
@@ -431,7 +431,31 @@ agent:
   max_rounds: 96
 ```
 
-Override it for one invocation with `--max-rounds`:
+Model responses must explicitly report a normal finish reason. An empty final
+answer or a missing/unknown finish reason fails the turn instead of silently
+completing it. Output truncation never executes the returned tool calls, even
+if some of their arguments look complete.
+
+For ordinary agent calls, Dora retries an output-limited response once from the
+last complete exchange, doubling the actual request output budget (for example,
+32768 to 65536). It preserves the original history and continuation; it does not
+assume the provider can resume truncated reasoning. The retry is clamped to the
+model's advertised output capacity, available context, and an optional recovery
+ceiling. If the original budget is unknown, cannot be increased, or the retry
+also truncates, the turn fails explicitly. Cancellation/deadlines still apply.
+
+```yaml
+agent:
+  output_limit_recovery:
+    max_retries: 1          # 0 disables output-limit recovery
+    max_output_tokens: 65536 # optional recovery ceiling
+```
+
+This limit is separate from transport retries and `max_rounds`. A profile's
+`max_output_tokens` advertises hard capacity; it does not raise the ordinary
+`max_tokens` budget. Increasing recovery budgets can increase latency and cost.
+
+Override the round limit for one invocation with `--max-rounds`:
 
 ```sh
 ./dora --max-rounds 96 "Complete a long task"
@@ -515,6 +539,15 @@ For a machine-readable parent-turn transcript, pass `--trace-file PATH`. Dora
 writes a provider-neutral JSON record containing the system and user messages,
 each completed assistant/tool round (including reasoning, tool inputs, results,
 images, and per-call usage), and the final response when one was produced.
+Trace schema **2** also includes `status`, `error`, `attempts`, and `total_usage`.
+Each model attempt records its finish reason, raw provider reason, actual output
+budget (zero if unknown), recovery index, disposition, reasoning, text, tool
+arguments, and reported usage. Discarded calls and compaction calls are included.
+Final reasoning is retained. Sum attempts once: accepted responses are also
+represented in `rounds`/`final` and must not be counted again. Missing usage is
+unknown; totals sum only reported counts. Child task and image-tool model calls
+are not expanded into the parent trace. The Harbor adapter now requires schema
+2; schema 1 is rejected.
 Malformed provider tool arguments are preserved as text rather than preventing
 a failed turn from being recorded. The parent directory must already exist and
 the file is created with `0600` permissions. This option is only supported for
@@ -575,17 +608,19 @@ error, and all completed tool rounds; it has no final result or final-response
 usage. Ctrl+C cancellation is saved with status `canceled`; Dora uses a separate
 short-lived commit context so canceling the run does not also cancel its session
 write. Any other failed turn is saved with status `failed`. Both retain their
-error and only the tool rounds that completed before termination; partial
-streamed model output is not saved. Confirming the interactive continuation
+error, complete tool rounds, and separate model-attempt audit records, including
+output-limited responses. Transport failures may lack response content or usage. Confirming the interactive continuation
 prompt keeps using the same Turn and does not save an intermediate `max_rounds`
 record. Provider continuation is kept only while that turn runs.
 
-With `--session`, SQLite schema version 7 contains `turns` and `messages` tables and records the
+With `--session`, SQLite schema version 8 contains `turns`, `messages`, and `model_attempts` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, reasoning captured on round assistant messages, and each model
-call's usage JSON. Newly created files use `0600` permissions. The old named
+call's usage JSON, finish metadata, final reasoning, and reported total usage.
+The SQLite store's `GetAttempts` API pages through audit records separately from
+conversation rounds. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 6 and earlier databases are rejected; start a new file). When
+(schema version 7 and earlier databases are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain

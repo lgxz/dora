@@ -124,7 +124,7 @@ func TestRunStreamsReasoningOnlyWithFlag(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	newHTTPClient := func() *http.Client {
 		return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return fakeChatResponse(`{"choices":[{"index":0,"delta":{"reasoning_content":"考虑中"}}]}`), nil
+			return fakeChatResponse(`{"choices":[{"index":0,"delta":{"reasoning_content":"考虑中","content":"done"}}]}`), nil
 		})}
 	}
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -2435,6 +2435,25 @@ func fakeJSONResponse(body string) *http.Response {
 }
 
 func fakeChatResponse(event string) *http.Response {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(event), &payload); err != nil {
+		panic(err)
+	}
+	choices, _ := payload["choices"].([]any)
+	for _, value := range choices {
+		choice := value.(map[string]any)
+		if _, exists := choice["finish_reason"]; !exists {
+			choice["finish_reason"] = "stop"
+			if delta, ok := choice["delta"].(map[string]any); ok && delta["tool_calls"] != nil {
+				choice["finish_reason"] = "tool_calls"
+			}
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	event = string(encoded)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader("data: " + event + "\n\ndata: [DONE]\n\n")),

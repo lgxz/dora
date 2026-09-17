@@ -156,6 +156,9 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 	defer reader.Close()
 
 	response, reasoningDetails, err := readStream(reader, emit, onActivity)
+	if body.MaxTokens != nil {
+		response.OutputBudget = *body.MaxTokens
+	}
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai: %w", err)
 	}
@@ -347,6 +350,21 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 			if choice.Index != 0 {
 				continue
 			}
+			if choice.FinishReason != "" {
+				result.RawFinishReason = choice.FinishReason
+				switch choice.FinishReason {
+				case "stop":
+					result.FinishReason = dora.FinishStop
+				case "tool_calls":
+					result.FinishReason = dora.FinishToolCalls
+				case "length":
+					result.FinishReason = dora.FinishOutputLimit
+				case "content_filter":
+					result.FinishReason = dora.FinishBlocked
+				default:
+					result.FinishReason = dora.FinishUnknown
+				}
+			}
 			reasoningDetails = append(reasoningDetails, choice.Delta.ReasoningDetails...)
 			if reasoning := reasoningDelta(choice.Delta); reasoning != "" {
 				result.Reasoning += reasoning
@@ -479,8 +497,9 @@ type chatFunctionCall struct {
 
 type chatStreamEvent struct {
 	Choices []struct {
-		Index int             `json:"index"`
-		Delta chatStreamDelta `json:"delta"`
+		Index        int             `json:"index"`
+		FinishReason string          `json:"finish_reason"`
+		Delta        chatStreamDelta `json:"delta"`
 	} `json:"choices"`
 	Usage *chatUsage `json:"usage"`
 }

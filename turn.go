@@ -18,14 +18,17 @@ type Round struct {
 // rounds, and ends with one final assistant result. A Turn is mutable while it
 // is running and cannot be changed after Complete.
 type Turn struct {
-	system       string
-	systemBound  bool
-	user         string
-	rounds       []Round
-	result       string
-	usage        *Usage
-	continuation string
-	completed    bool
+	system        string
+	systemBound   bool
+	user          string
+	rounds        []Round
+	result        string
+	usage         *Usage
+	continuation  string
+	completed     bool
+	attempts      []ModelAttempt
+	runError      error
+	finalResponse Response
 }
 
 // NewTurn creates a fresh, independent turn for one user input. The Agent
@@ -130,6 +133,7 @@ func (t *Turn) completeWithUsage(result, continuation string, usage *Usage) erro
 	if t.completed {
 		return errors.New("turn is already complete")
 	}
+	t.finalResponse = Response{Content: result, FinishReason: FinishStop, Usage: cloneUsage(usage)}
 	t.result = result
 	t.usage = cloneUsage(usage)
 	t.continuation = continuation
@@ -200,4 +204,14 @@ func cloneRound(round Round) Round {
 		Tools:     cloneMessages(round.Tools),
 		Usage:     cloneUsage(round.Usage),
 	}
+}
+
+func (t *Turn) completeResponse(response Response) error {
+	if err := t.completeWithUsage(response.Content, response.Continuation, response.Usage); err != nil {
+		return err
+	}
+	t.finalResponse = response
+	t.finalResponse.Usage = cloneUsage(response.Usage)
+	t.finalResponse.ToolCalls = cloneToolCalls(response.ToolCalls)
+	return nil
 }

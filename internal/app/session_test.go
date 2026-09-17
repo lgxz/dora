@@ -47,7 +47,7 @@ func newTestSession(t *testing.T, model dora.Model, cfg dora.AgentConfig) (*Sess
 
 func TestPromptCompletesAndPersistsTurn(t *testing.T) {
 	application, store := newTestSession(t, modelFunc(func(_ context.Context, _ dora.Request) (dora.Response, error) {
-		return dora.Response{Content: "done"}, nil
+		return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
 	}), dora.AgentConfig{})
 
 	result, err := application.Prompt(context.Background(), "inspect", PromptOptions{})
@@ -71,9 +71,9 @@ func TestPromptContinuesAfterMaxRounds(t *testing.T) {
 	application, store := newTestSession(t, modelFunc(func(_ context.Context, _ dora.Request) (dora.Response, error) {
 		calls++
 		if calls == 1 {
-			return dora.Response{ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
+			return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
 		}
-		return dora.Response{Content: "done"}, nil
+		return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
 	}), dora.AgentConfig{MaxRounds: 1})
 
 	continued := 0
@@ -100,7 +100,7 @@ func TestPromptContinuesAfterMaxRounds(t *testing.T) {
 
 func TestPromptDeclinesContinuationAndPersistsMaxRounds(t *testing.T) {
 	application, store := newTestSession(t, modelFunc(func(_ context.Context, _ dora.Request) (dora.Response, error) {
-		return dora.Response{ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
+		return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
 	}), dora.AgentConfig{MaxRounds: 1})
 
 	result, err := application.Prompt(context.Background(), "inspect", PromptOptions{
@@ -156,7 +156,7 @@ func TestPromptRejectsConcurrentRun(t *testing.T) {
 	application, _ := newTestSession(t, modelFunc(func(_ context.Context, _ dora.Request) (dora.Response, error) {
 		close(started)
 		<-release
-		return dora.Response{Content: "done"}, nil
+		return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
 	}), dora.AgentConfig{})
 
 	done := make(chan error, 1)

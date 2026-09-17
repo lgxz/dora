@@ -14,7 +14,7 @@ type stubModel struct {
 }
 
 func (s *stubModel) Generate(context.Context, dora.Request) (dora.Response, error) {
-	return dora.Response{Content: s.content}, nil
+	return dora.Response{FinishReason: dora.FinishStop, Content: s.content}, nil
 }
 
 func (s *stubModel) GenerateStream(ctx context.Context, req dora.Request, emit func(dora.ModelEvent)) (dora.Response, error) {
@@ -166,7 +166,7 @@ func (c *captureModel) Generate(_ context.Context, req dora.Request) (dora.Respo
 	if c.onGenerate != nil {
 		c.onGenerate(req)
 	}
-	return dora.Response{Content: "ok"}, nil
+	return dora.Response{FinishReason: dora.FinishStop, Content: "ok"}, nil
 }
 
 func TestRouterContextSize(t *testing.T) {

@@ -111,7 +111,11 @@ type ContextSize interface {
 
 `Model` is the minimal interface that every model implementation must satisfy. `StreamingModel`, `ContextSize`, and `OutputSize` are optional capabilities: when the Agent detects `StreamingModel` it uses the streaming method, otherwise it falls back to `Generate`; when it detects `ContextSize` and the reported value is positive it uses it as the context token budget for compaction, otherwise it falls back to `DefaultContextWindowTokens`; when it detects a positive `OutputSize.MaxOutputTokens`, it treats that value as the model's hard output capacity. These capabilities leave the `Model` and `StreamingModel` contracts unchanged.
 
-`Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls.
+`Request` contains the complete provider-neutral messages, available tool definitions, and an opaque `Continuation`. `Response` can contain both text and multiple tool calls. It requires an explicit
+`FinishReason` (`stop`, `tool_calls`, `output_limit`, `blocked`, or `unknown`),
+and carries `RawFinishReason` and the effective `OutputBudget`. Zero budget means
+unknown. Custom Model implementations must adopt this contract; empty/unknown
+reasons are not inferred from response content.
 
 `Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional `InputTokenDetails`/`OutputTokenDetails` breakdowns). Input details include cached and audio tokens; output details include reasoning, audio, and accepted/rejected prediction tokens. It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Usage is carried by the `UpdateMessageReceived` observer event on every complete round, retained on the corresponding `Round` or final `Turn`, persisted by session storage, and used by the compactor as the previous round's `total_tokens` occupancy baseline (falling back to a token estimate when usage is nil). The renderer does not display it. For one-shot CLI runs, `--trace-file` writes the provider-neutral parent Turn—messages, reasoning, tool calls/results, images, and per-call usage—so integrations can translate it to external trajectory formats and aggregate usage without coupling the kernel to them.
 
@@ -203,10 +207,10 @@ sequenceDiagram
         M-->>O: content delta (optional)
         M-->>A: Response(content, reasoning, tool calls, continuation)
         A->>O: assistant message
-        alt no tool calls
+        alt validated stop with non-empty text
             A->>A: turn.Complete(result)
             A-->>C: nil
-        else tool calls present
+        else validated tool_calls response
             loop execute each in returned order
                 A->>O: tool started
                 A->>T: Execute(input)
@@ -226,10 +230,11 @@ Current execution semantics:
 - When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
 - Both model adapters classify incomplete stream JSON (`unexpected end of JSON input`) as retryable; other JSON syntax and type errors remain non-retryable. Retryable model failures restart the current request even after content or reasoning deltas have been emitted. Generic failures allow six total attempts, with base delays of 2, 4, 8, 16, and 30 seconds plus up to 50% jitter. Rate-limit failures retain five total attempts and their existing delay policy; a positive provider retry delay overrides local backoff. Normal request retries emit `UpdateInfo` with the next attempt, wait, and error; internal compaction requests have no observer. Cancellation stops retries and interrupts waits. Only a complete successful response is committed or allowed to execute tools, so prior completed tool rounds are not replayed. Already emitted presentation deltas cannot be retracted and may be repeated after recovery.
+- Output-limited responses are retained only in `Turn.Attempts`, never in conversation history. `AgentConfig.OutputLimitRecovery == nil` enables one additional request with twice the effective output budget, clamped to configured/model capacity and remaining context. An explicit zero-retry policy disables recovery. Unknown budgets, no room to increase, exhausted retries, empty final text, blocked output, or unknown finish reasons return identifiable errors. Retry history and continuation remain at the last complete exchange. Cancellation also stops recovery. The adapter maps Chat `length` and Responses `incomplete/max_output_tokens` to `output_limit`; `[DONE]` alone is not a successful semantic finish.
 - A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Continuing does not persist an intermediate record. Declining, a non-interactive failure, or an event-daemon failure persists the Turn with status `max_rounds` when a session is configured; non-interactive runs still report the error directly.
 - The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The CLI appends a `runtime_environment` block with `runtime.GOOS`, `runtime.GOARCH`, and the local Agent start date (`YYYY-MM-DD`, without time) to either prompt. It captures the date at CLI/event startup or ACP session creation and keeps it fixed for the Agent lifetime, including child tasks; it does not refresh across midnight. Environment collection remains outside the kernel. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
-- Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, but with no tools and no opaque continuation. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized or empty summary gets one stricter retry, while a non-empty response that reached the provider output limit remains acceptable. Only a validated summary atomically replaces the model-visible history, as the original system message followed by one user summary message. The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, and the number of summary attempts. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
+- Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, but with no tools and no opaque continuation. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized or empty summary gets one stricter retry, while any output-limited summary is rejected. Only a validated summary atomically replaces the model-visible history, as the original system message followed by one user summary message. The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, and the number of summary attempts. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
 
 ## CLI Run Flow
 
@@ -294,6 +299,25 @@ out of band; Dora does not implement protocol-driven `authenticate` or
 
 ## Model Adapters
 
+### Finish reasons and attempt records
+
+Every Agent model invocation, including compaction and transport retries, gets
+an audit entry independent of completed tool rounds. `ModelAttempt` stores
+round index, purpose, output-recovery index, disposition, finish metadata,
+request budget, content, reasoning, tool arguments as strings (including invalid
+JSON), usage, and transport errors when present. Failed transport calls may
+have unavailable output/usage; unreported usage is not a measured zero.
+`Turn.TotalUsage` sums reported attempts once. `Turn.Usage` remains final-call
+usage, and `Turn.FinalResponse` retains the successful final reasoning/metadata.
+Child task/image calls are not expanded in the parent attempt stream.
+
+Trace schema 2 adds status/error, attempts, total usage, and final finish metadata
+and reasoning. Harbor consumes attempts for accounting and only attaches actual
+tool observations to accepted tool attempts; rejected tool calls remain audit
+metadata. Schema 1 traces are rejected. SQLite persists attempts in
+`model_attempts`, exposes paginated `GetAttempts` through `session.AttemptReader`,
+and stores total usage separately from final-call usage on `turns`.
+
 ### Chat Completions
 
 `model/openai` converts Dora messages and tool structures into `/chat/completions` requests. It always requests an SSE stream, aggregates text and chunked tool arguments into a complete response, and implements `StreamingModel`. Its optional continuation carries structured reasoning details for tool-calling assistant messages when the selected profile enables reasoning preservation.
@@ -308,7 +332,7 @@ To capture token usage, Chat Completions requests always set `stream_options.inc
 
 Reasoning summaries surface when the provider sends them: `response.reasoning_summary_text.delta` events stream as reasoning deltas, and reasoning output items contribute their summary text to `Response.Reasoning`. Summaries are not requested proactively, so providers that only return them on demand keep an empty `Reasoning`.
 
-The Responses `response.completed` event may carry a `usage` block; the adapter decodes it into `Response.Usage` when present and leaves it nil otherwise. Responses streams report usage without any request option.
+Responses terminal `response.completed` and `response.incomplete` events may carry a `usage` block; the adapter decodes it into `Response.Usage` when present and leaves it nil otherwise. Responses streams report usage without any request option.
 
 This continuation is used to preserve data across different CLI processes, such as reasoning, function calls, and function call output, which cannot be fully expressed by generic messages alone. It belongs only to the provider and backend that created it and should not be parsed or modified by other modules.
 
@@ -358,28 +382,31 @@ persistent SQLite file, while omitting it creates an in-memory SQLite database
 for the process lifetime. There is no default session directory and no
 automatic loading of prior messages.
 
-The database uses schema version 7 and two tables:
+The database uses schema version 8 and three tables:
 
 - `turns`: one row per saved invocation, including `status` (`completed`,
   `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
-  `user`, final `result`, round count, final-response `usage_json`, and commit
+  `user`, final `result`, round count, final-response `usage_json`, reported `total_usage_json`, and commit
   time. All non-completed rows have an error and empty result/final usage;
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls use a JSON column; each call stores its arguments as base64
   `input_bytes` rather than embedded JSON, preserving all original bytes, including
   invalid JSON and invalid UTF-8. Assistant messages also store their
   captured `reasoning`. Assistant rows also store that model call's optional
-  `usage_json`; tool rows never carry usage. Like the provider continuation,
-  the final response's reasoning is displayed live but intentionally not
-  stored, because the final assistant message never enters this table.
+  `usage_json`; tool rows never carry usage. The final assistant response does
+  not enter this table;
+- `model_attempts`: one JSON audit record per model invocation, keyed by turn and
+  attempt index, including discarded responses and final reasoning. Provider
+  continuation remains ephemeral and is not included in audit records.
 
 `CommitTurn` inserts a completed turn, messages, and per-call usage in one
 transaction (no backend metadata). `CommitMaxRounds` stores all complete rounds
 plus the limit error, while `CommitFailed` and `CommitCanceled` store all
-complete rounds plus the terminal run error. None of the incomplete-turn paths
-stores partial streamed model output. Provider continuation is intentionally
-not stored. SQLite allocates the turn ID and foreign keys bind every message to
-its turn. Schema version 6 and older databases are rejected rather than migrated.
+complete rounds plus the terminal run error. All commit paths also store model
+attempts, including complete streams that ended at an output limit; interrupted
+transport streams may have unavailable response data. Provider continuation is
+intentionally not stored. SQLite allocates the turn ID and foreign keys bind every message to
+its turn. Schema version 7 and older databases are rejected rather than migrated.
 
 History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also

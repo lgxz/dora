@@ -46,6 +46,7 @@ type TurnSummary struct {
 	Error       string      `json:"error,omitempty"`
 	RoundCount  int         `json:"rounds"`
 	Usage       *dora.Usage `json:"usage,omitempty"`
+	TotalUsage  *dora.Usage `json:"total_usage,omitempty"`
 	CommittedAt time.Time   `json:"committed_at"`
 }
 
@@ -81,4 +82,17 @@ type Store interface {
 	CommitFailed(context.Context, *dora.Turn, error) (int64, error)
 	CommitCanceled(context.Context, *dora.Turn, error) (int64, error)
 	Close() error
+}
+
+// AttemptPage is a chronological page of model calls, including discarded calls.
+type AttemptPage struct {
+	Total    int                 `json:"total"`
+	Offset   int                 `json:"offset"`
+	Limit    int                 `json:"limit"`
+	Attempts []dora.ModelAttempt `json:"attempts"`
+}
+
+// AttemptReader exposes the audit stream separately from conversation rounds.
+type AttemptReader interface {
+	GetAttempts(context.Context, int64, RoundOptions) (AttemptPage, error)
 }

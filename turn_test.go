@@ -47,8 +47,8 @@ func TestTurnBuildsMessagesAndDefensivelyCopiesRounds(t *testing.T) {
 
 func TestAgentStoresRoundAndFinalUsage(t *testing.T) {
 	responses := []Response{
-		{ToolCalls: []ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}}, Usage: &Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}},
-		{Content: "done", Usage: &Usage{InputTokens: 15, OutputTokens: 3, TotalTokens: 18}},
+		{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}}, Usage: &Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}},
+		{FinishReason: FinishStop, Content: "done", Usage: &Usage{InputTokens: 15, OutputTokens: 3, TotalTokens: 18}},
 	}
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		response := responses[0]

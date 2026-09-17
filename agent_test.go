@@ -69,7 +69,7 @@ func TestRunReturnsFinalResponse(t *testing.T) {
 		if len(request.Messages) != 2 || request.Messages[0].Role != RoleSystem || request.Messages[0].Content != "system" || request.Messages[1].Content != "hello" {
 			t.Fatalf("unexpected messages: %#v", request.Messages)
 		}
-		return Response{Content: "hi"}, nil
+		return Response{FinishReason: FinishStop, Content: "hi"}, nil
 	})
 	agent, err := NewWithConfig(model, AgentConfig{SystemPrompt: "system"})
 	if err != nil {
@@ -102,9 +102,9 @@ func TestRunObservedEmitsUsagePerRound(t *testing.T) {
 	inputUsage := &Usage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		if len(request.Messages) == 1 {
-			return Response{Content: "use tool", ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}, Usage: inputUsage}, nil
+			return Response{FinishReason: FinishToolCalls, Content: "use tool", ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}, Usage: inputUsage}, nil
 		}
-		return Response{Content: "done", Usage: nil}, nil
+		return Response{FinishReason: FinishStop, Content: "done", Usage: nil}, nil
 	})
 	tool := stubTool{
 		spec:    ToolSpec{Name: "bash"},
@@ -150,9 +150,9 @@ func TestRunEmitsToolFinishedOnSuccess(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
 		if calls == 1 {
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
 		}
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec:    ToolSpec{Name: "bash"},
@@ -196,7 +196,7 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 			if len(request.Tools) != 1 || request.Tools[0].Name != "weather" {
 				t.Fatalf("unexpected tools: %#v", request.Tools)
 			}
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "weather",
 				Input: json.RawMessage(`{"city":"Shanghai"}`),
@@ -209,7 +209,7 @@ func TestRunExecutesToolAndContinues(t *testing.T) {
 			if result.Role != RoleTool || result.ToolCallID != "call-1" || result.Content != "sunny" {
 				t.Fatalf("unexpected tool result: %#v", result)
 			}
-			return Response{Content: "It is sunny."}, nil
+			return Response{FinishReason: FinishStop, Content: "It is sunny."}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -258,13 +258,13 @@ func TestRunObservedWithOptionsExcludesToolFromModelAndExecution(t *testing.T) {
 			}
 			// Even if a provider returns a call for an excluded tool, execution
 			// must use the same filtered tool set as the model request.
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "task", Input: json.RawMessage(`{}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "task", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
 			result := request.Messages[len(request.Messages)-1]
 			if !strings.Contains(result.Content, `tool "task" not found`) {
 				t.Fatalf("tool result = %#v", result)
 			}
-			return Response{Content: "recovered"}, nil
+			return Response{FinishReason: FinishStop, Content: "recovered"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -296,9 +296,9 @@ func TestRunObservedWithOptionsProvidesWorkingDirectoryToTools(t *testing.T) {
 	model := modelFunc(func(_ context.Context, _ Request) (Response, error) {
 		calls++
 		if calls == 1 {
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "inspect", Input: json.RawMessage(`{}`)}}}, nil
 		}
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "inspect"},
@@ -334,7 +334,7 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 				t.Fatal("tool executed before the streamed response completed")
 			}
 			streamReturned = true
-			return Response{
+			return Response{FinishReason: FinishToolCalls,
 				ToolCalls:    []ToolCall{{ID: "call-1", Name: "weather", Input: json.RawMessage(`{}`)}},
 				Continuation: "resp-1",
 			}, nil
@@ -342,7 +342,7 @@ func TestRunUsesStreamingModelAndCarriesContinuation(t *testing.T) {
 			if request.Continuation != "resp-1" {
 				t.Fatalf("continuation = %q", request.Continuation)
 			}
-			return Response{Content: "sunny", Continuation: "resp-2"}, nil
+			return Response{FinishReason: FinishStop, Content: "sunny", Continuation: "resp-2"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -385,13 +385,13 @@ func TestRunForwardsReasoningDeltasAndHistory(t *testing.T) {
 			emit(ModelEvent{Kind: ModelEventReasoningDelta, Delta: "think "})
 			emit(ModelEvent{Kind: ModelEventReasoningDelta, Delta: "hard"})
 			emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "checking"})
-			return Response{
+			return Response{FinishReason: FinishToolCalls,
 				Reasoning: "think hard",
 				Content:   "checking",
 				ToolCalls: []ToolCall{{ID: "call-1", Name: "weather", Input: json.RawMessage(`{}`)}},
 			}, nil
 		case 2:
-			return Response{Content: "sunny", Reasoning: "done thinking"}, nil
+			return Response{FinishReason: FinishStop, Content: "sunny", Reasoning: "done thinking"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -437,7 +437,7 @@ func TestRunTurnCarriesContinuation(t *testing.T) {
 		if request.Continuation != "saved-state" {
 			t.Fatalf("continuation = %q", request.Continuation)
 		}
-		return Response{Content: "done", Continuation: "next-state"}, nil
+		return Response{FinishReason: FinishStop, Content: "done", Continuation: "next-state"}, nil
 	})
 	agent, err := New(model)
 	if err != nil {
@@ -494,13 +494,13 @@ func TestSetJobManagerRegistersJobToolForExecution(t *testing.T) {
 			if !found {
 				t.Fatalf("job tool should be exposed like other tools")
 			}
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "job",
 				Input: json.RawMessage(`{"action":"list"}`),
 			}}}, nil
 		case 2:
-			return Response{Content: "done"}, nil
+			return Response{FinishReason: FinishStop, Content: "done"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -527,7 +527,7 @@ func TestRunFeedsBackMissingToolError(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "missing"}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "missing"}}}, nil
 		case 2:
 			if len(request.Messages) != 3 {
 				t.Fatalf("message count = %d, want 3", len(request.Messages))
@@ -537,7 +537,7 @@ func TestRunFeedsBackMissingToolError(t *testing.T) {
 				!strings.Contains(result.Content, `tool "missing" not found`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
 			}
-			return Response{Content: "recovered"}, nil
+			return Response{FinishReason: FinishStop, Content: "recovered"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -563,7 +563,7 @@ func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "fail",
 				Input: json.RawMessage(`{"bad":true}`),
@@ -577,7 +577,7 @@ func TestRunFeedsBackToolErrorAndCorrects(t *testing.T) {
 				!strings.Contains(result.Content, `tool "fail" failed`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
 			}
-			return Response{Content: "corrected"}, nil
+			return Response{FinishReason: FinishStop, Content: "corrected"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -609,7 +609,7 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
 				ID:    "call-1",
 				Name:  "weather",
 				Input: json.RawMessage(`not-json`),
@@ -623,7 +623,7 @@ func TestRunFeedsBackInvalidJSONArgsAndCorrects(t *testing.T) {
 				!strings.Contains(result.Content, `arguments for tool "weather" were not valid JSON: not-json`) {
 				t.Fatalf("unexpected tool error message: %#v", result)
 			}
-			return Response{Content: "corrected"}, nil
+			return Response{FinishReason: FinishStop, Content: "corrected"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -689,7 +689,7 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{
 				{ID: "call-slow", Name: "slow", Input: json.RawMessage(`{}`)},
 				{ID: "call-fast", Name: "fast", Input: json.RawMessage(`{}`)},
 			}}, nil
@@ -704,7 +704,7 @@ func TestRunExecutesMultipleToolCallsInParallelPreservingOrder(t *testing.T) {
 			if request.Messages[3].ToolCallID != "call-fast" || request.Messages[3].Content != "fast-done" {
 				t.Fatalf("unexpected second tool result: %#v", request.Messages[3])
 			}
-			return Response{Content: "done"}, nil
+			return Response{FinishReason: FinishStop, Content: "done"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -782,9 +782,9 @@ func TestRunToolStartedCarriesRealStartTime(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-slow", Name: "slow", Input: json.RawMessage(`{}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-slow", Name: "slow", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
-			return Response{Content: "done"}, nil
+			return Response{FinishReason: FinishStop, Content: "done"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -821,9 +821,9 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
 		if calls == 1 {
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "fail", Input: json.RawMessage(`{"args":true}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "fail", Input: json.RawMessage(`{"args":true}`)}}}, nil
 		}
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "fail"},
@@ -865,7 +865,7 @@ func TestRunEmitsToolFailedOnRecoverableError(t *testing.T) {
 
 func TestRunStopsAfterMaximumRounds(t *testing.T) {
 	model := modelFunc(func(context.Context, Request) (Response, error) {
-		return Response{ToolCalls: []ToolCall{{Name: "again"}}}, nil
+		return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "again", Name: "again", Input: json.RawMessage(`{}`)}}}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "again"},
@@ -888,7 +888,7 @@ func TestRunHonorsConfiguredMaximumRounds(t *testing.T) {
 	var calls int
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
-		return Response{ToolCalls: []ToolCall{{Name: "again"}}}, nil
+		return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "again", Name: "again", Input: json.RawMessage(`{}`)}}}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "again"},
@@ -916,7 +916,7 @@ func TestRunRetriesRetryableError(t *testing.T) {
 		if calls < 3 {
 			return Response{}, &RetryableError{RetryAfter: time.Nanosecond, Err: errors.New("transient")}
 		}
-		return Response{Content: "recovered"}, nil
+		return Response{FinishReason: FinishStop, Content: "recovered"}, nil
 	})
 	agent, err := New(model)
 	if err != nil {
@@ -976,12 +976,12 @@ func TestRunRetriesAfterPartialStream(t *testing.T) {
 				if calls == 1 {
 					original = request
 					emit(ModelEvent{Kind: kind, Delta: "partial"})
-					return Response{Content: "partial", ToolCalls: []ToolCall{{ID: "failed", Name: "test"}}}, &RetryableError{Err: errors.New("connection reset"), RetryAfter: time.Nanosecond}
+					return Response{FinishReason: FinishToolCalls, Content: "partial", ToolCalls: []ToolCall{{ID: "failed", Name: "test"}}}, &RetryableError{Err: errors.New("connection reset"), RetryAfter: time.Nanosecond}
 				}
 				if !reflect.DeepEqual(request, original) {
 					t.Fatalf("retry changed request: %#v", request)
 				}
-				return Response{Content: "recovered"}, nil
+				return Response{FinishReason: FinishStop, Content: "recovered"}, nil
 			})
 			agent, err := New(model, stubTool{spec: ToolSpec{Name: "test"}, execute: func(context.Context, json.RawMessage) (string, error) {
 				executions++
@@ -1086,13 +1086,13 @@ func TestRunToolOutputWithoutImagesUnchanged(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "plain", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
 			toolMessage := request.Messages[2]
 			if toolMessage.Content != "plain output" {
 				t.Fatalf("tool message = %#v", toolMessage)
 			}
-			return Response{Content: "done"}, nil
+			return Response{FinishReason: FinishStop, Content: "done"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -1124,13 +1124,13 @@ func TestRunDoesNotInterpretImageTags(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return Response{ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "call-1", Name: "snap", Input: json.RawMessage(`{}`)}}}, nil
 		case 2:
 			toolMessage := request.Messages[2]
 			if toolMessage.Content != content {
 				t.Fatalf("content = %q", toolMessage.Content)
 			}
-			return Response{Content: "seen"}, nil
+			return Response{FinishReason: FinishStop, Content: "seen"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -1230,5 +1230,5 @@ func TestAgentIgnoresNonPositiveMaxOutputTokens(t *testing.T) {
 }
 
 func noopGenerate(context.Context, Request) (Response, error) {
-	return Response{Content: "done"}, nil
+	return Response{FinishReason: FinishStop, Content: "done"}, nil
 }

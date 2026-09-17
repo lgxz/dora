@@ -93,11 +93,11 @@ func TestServePromptStreamsToolAndAnswerUpdates(t *testing.T) {
 			defer mu.Unlock()
 			calls++
 			if calls == 1 {
-				return dora.Response{ToolCalls: []dora.ToolCall{{
+				return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{{
 					ID: "call-1", Name: "inspect", Input: json.RawMessage(`{"path":"file.txt"}`),
 				}}}, nil
 			}
-			return dora.Response{Content: "done"}, nil
+			return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
 		})
 		agent, err := dora.New(model, inspectTool{})
 		if err != nil {

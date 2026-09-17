@@ -13,7 +13,7 @@ func TestEnsureContextCapacityKeepsHistoryBelowTrigger(t *testing.T) {
 	a := &Agent{
 		model: modelFunc(func(context.Context, Request) (Response, error) {
 			calls++
-			return Response{Content: "unexpected"}, nil
+			return Response{FinishReason: FinishStop, Content: "unexpected"}, nil
 		}),
 		contextWindow: 1000,
 	}
@@ -42,7 +42,7 @@ func TestEnsureContextCapacitySummarizesAtomically(t *testing.T) {
 	a := &Agent{
 		model: modelFunc(func(_ context.Context, got Request) (Response, error) {
 			request = got
-			return Response{Content: "requirements and completed work"}, nil
+			return Response{FinishReason: FinishStop, Content: "requirements and completed work"}, nil
 		}),
 		contextWindow: 200,
 	}
@@ -96,7 +96,7 @@ func TestGenerateContextSummaryRetriesOversizedOutput(t *testing.T) {
 		model: modelFunc(func(_ context.Context, request Request) (Response, error) {
 			calls++
 			if calls == 1 {
-				return Response{
+				return Response{FinishReason: FinishStop,
 					Content: "too long",
 					Usage:   &Usage{OutputTokens: 21},
 				}, nil
@@ -104,7 +104,7 @@ func TestGenerateContextSummaryRetriesOversizedOutput(t *testing.T) {
 			if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "substantially more concise") {
 				t.Fatal("retry did not strengthen the summary instruction")
 			}
-			return Response{Content: "short"}, nil
+			return Response{FinishReason: FinishStop, Content: "short"}, nil
 		}),
 		contextWindow: 100,
 	}
@@ -125,7 +125,7 @@ func TestGenerateContextSummaryRetriesOversizedOutput(t *testing.T) {
 func TestGenerateContextSummaryRejectsToolCalls(t *testing.T) {
 	a := &Agent{
 		model: modelFunc(func(context.Context, Request) (Response, error) {
-			return Response{ToolCalls: []ToolCall{{ID: "c1", Name: "run"}}}, nil
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "c1", Name: "run"}}}, nil
 		}),
 		contextWindow: 100,
 	}
@@ -143,7 +143,7 @@ func TestGenerateContextSummaryRejectsToolCalls(t *testing.T) {
 func TestEnsureContextCapacityRejectsRequestThatStillDoesNotFit(t *testing.T) {
 	a := &Agent{
 		model: modelFunc(func(context.Context, Request) (Response, error) {
-			return Response{Content: "short summary"}, nil
+			return Response{FinishReason: FinishStop, Content: "short summary"}, nil
 		}),
 		contextWindow: 100,
 	}
@@ -228,7 +228,7 @@ func TestAgentRunCompactsAndClearsContinuation(t *testing.T) {
 			if len(request.Tools) != 0 || request.Continuation != "" {
 				t.Fatalf("summary request = %#v", request)
 			}
-			return Response{
+			return Response{FinishReason: FinishStop,
 				Content:      "original task and tool result preserved",
 				Continuation: "summary-continuation-must-be-ignored",
 			}, nil
@@ -242,7 +242,7 @@ func TestAgentRunCompactsAndClearsContinuation(t *testing.T) {
 			if len(request.Messages) != 1 || !strings.HasPrefix(request.Messages[0].Content, "Conversation summary:") {
 				t.Fatalf("normal request messages = %#v", request.Messages)
 			}
-			return Response{Content: "done", Continuation: "new-continuation"}, nil
+			return Response{FinishReason: FinishStop, Content: "done", Continuation: "new-continuation"}, nil
 		default:
 			t.Fatal("model called too many times")
 			return Response{}, nil
@@ -292,7 +292,7 @@ func TestAgentRunLeavesTurnUntouchedWhenSummaryFails(t *testing.T) {
 	calls := 0
 	model := modelFunc(func(context.Context, Request) (Response, error) {
 		calls++
-		return Response{}, nil
+		return Response{FinishReason: FinishStop}, nil
 	})
 	agent, err := New(model)
 	if err != nil {
@@ -323,10 +323,10 @@ func TestSummaryStreamingDeltasAreNotObserved(t *testing.T) {
 		calls++
 		if len(request.Tools) == 0 {
 			emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "hidden summary delta"})
-			return Response{Content: "concise state"}, nil
+			return Response{FinishReason: FinishStop, Content: "concise state"}, nil
 		}
 		emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "visible final delta"})
-		return Response{Content: "done"}, nil
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
 	})
 	tool := stubTool{
 		spec: ToolSpec{Name: "run"},
