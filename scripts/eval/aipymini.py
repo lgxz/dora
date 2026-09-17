@@ -105,6 +105,7 @@ logger = logging.getLogger(__name__)
 BINARY_PATH = "/installed-agent/aipymini"
 TRACE_PATH = "/logs/agent/trace.json"
 TRAJECTORY_PATH = "/logs/agent/trajectory.json"
+TOOLING_LOG_PATH = "/tmp/aipymini-tooling-install.log"
 
 
 def _optional_token_count(metrics: dict[str, Any], key: str) -> int | None:
@@ -257,7 +258,8 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         CA bundle is absent. Packages are installed independently so one broken
         package does not block the others. Bullseye retries against its base
         release when the EOL security index references packages that no longer
-        exist. Package-manager failures are reported but always return success.
+        exist. Package-manager output is kept out of Harbor's live terminal and
+        written to a sandbox-local log; failures always return success.
         """
         apt_check = await environment.exec(
             command="command -v apt-get >/dev/null 2>&1",
@@ -302,12 +304,14 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         await self.exec_as_root(
             environment,
             command=(
+                f"tooling_log={shlex.quote(TOOLING_LOG_PATH)}; "
+                ": >\"$tooling_log\"; { "
                 "release=; "
                 "if [ -r /etc/os-release ]; then "
                 ". /etc/os-release; release=${VERSION_CODENAME:-}; fi; "
                 "rm -rf /var/lib/apt/lists/*; "
                 "if ! apt-get update -qq -o Acquire::Retries=3; then "
-                "echo 'optional task tooling: apt-get update failed' >&2; "
+                "echo 'optional task tooling: apt-get update failed'; "
                 "exit 0; fi; "
                 f"for package in {packages}; do "
                 "if DEBIAN_FRONTEND=noninteractive apt-get install -y "
@@ -316,8 +320,8 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 "DEBIAN_FRONTEND=noninteractive apt-get install -y "
                 "--no-install-recommends -t bullseye \"$package\"; then "
                 "continue; fi; "
-                "echo \"optional task tooling: failed to install $package\" >&2; "
-                "done; exit 0"
+                "echo \"optional task tooling: failed to install $package\"; "
+                "done; } >>\"$tooling_log\" 2>&1; exit 0"
             ),
         )
 

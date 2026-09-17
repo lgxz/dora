@@ -6,6 +6,7 @@ Use the Python environment containing Harbor. No containers or model calls run.
 import asyncio
 import json
 import shlex
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ from harbor.models.trajectories import Trajectory
 from aipymini import (
     AIPyMiniAgent,
     BINARY_PATH,
+    TOOLING_LOG_PATH,
     TRACE_PATH,
     TRAJECTORY_PATH,
 )
@@ -157,7 +159,16 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         self.assertIn('${VERSION_CODENAME:-}', command)
         self.assertIn('-t bullseye "$package"', command)
         self.assertIn('failed to install $package', command)
-        self.assertTrue(command.endswith("done; exit 0"))
+        self.assertIn(f"tooling_log={TOOLING_LOG_PATH}", command)
+        self.assertIn('} >>"$tooling_log" 2>&1', command)
+        self.assertNotIn(">&2", command)
+        self.assertTrue(command.endswith("2>&1; exit 0"))
+        syntax = subprocess.run(
+            ["bash", "-n", "-c", command],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
     def test_non_apt_environment_does_not_reinstall_existing_ca_bundle(self):
         agent = self.agent(model_name="trust/hy4-preview")
