@@ -135,7 +135,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         self.assertEqual(environment.exec.await_count, 6)
         agent.exec_as_root.assert_not_awaited()
 
-    def test_optional_tooling_retries_only_missing_apt_packages(self):
+    def test_optional_tooling_installs_missing_packages_independently(self):
         agent = self.agent(model_name="trust/hy4-preview")
 
         async def check(*, command, user):
@@ -152,9 +152,12 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         command = agent.exec_as_root.call_args.kwargs["command"]
         self.assertIn("rm -rf /var/lib/apt/lists/*", command)
         self.assertIn("Acquire::Retries=3", command)
-        self.assertIn("ca-certificates python3-pip", command)
-        self.assertNotIn("apt-get install -y --no-install-recommends curl", command)
-        self.assertIn('attempt=1; while [ "$attempt" -le 3 ]', command)
+        self.assertIn("for package in ca-certificates python3-pip", command)
+        self.assertNotIn("for package in curl", command)
+        self.assertIn('${VERSION_CODENAME:-}', command)
+        self.assertIn('-t bullseye "$package"', command)
+        self.assertIn('failed to install $package', command)
+        self.assertTrue(command.endswith("done; exit 0"))
 
     def test_non_apt_environment_does_not_reinstall_existing_ca_bundle(self):
         agent = self.agent(model_name="trust/hy4-preview")
