@@ -341,12 +341,12 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             ) from _HARBOR_IMPORT_ERROR
 
         # Tool availability improves task coverage but is not required to
-        # upload or launch the static binary. Package-manager and mirror
-        # failures therefore degrade to a warning instead of failing a trial.
+        # upload or launch the static binary. Keep package-manager diagnostics
+        # in the job's debug log so they do not disrupt Harbor's live progress.
         try:
             await self._install_optional_tooling(environment)
         except Exception as exc:
-            self.logger.warning("optional task tooling installation failed: %s", exc)
+            self.logger.debug("optional task tooling installation failed: %s", exc)
 
         local_binary = self._resolve_local_binary()
 
@@ -423,8 +423,9 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             await self.exec_as_agent(environment, command=command, env=run_env)
         except Exception as exc:  # NonZeroAgentExitCodeError and friends
             # The full transcript lives in /logs/agent/run.txt for post-hoc
-            # inspection regardless of exit status.
-            self.logger.warning("aipymini run exited with an error: %s", exc)
+            # inspection regardless of exit status. Harbor records the raised
+            # exception, so this duplicate diagnostic only needs the debug log.
+            self.logger.debug("aipymini run exited with an error: %s", exc)
             raise
 
     @override
@@ -450,9 +451,9 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             )
             return trajectory
         except FileNotFoundError:
-            self.logger.warning("aipymini did not produce %s", trace_path.name)
+            self.logger.debug("aipymini did not produce %s", trace_path.name)
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            self.logger.warning("could not create aipymini ATIF trajectory: %s", exc)
+            self.logger.debug("could not create aipymini ATIF trajectory: %s", exc)
         return None
 
     def _trajectory_from_trace(self, trace: Any) -> Trajectory:

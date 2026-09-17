@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from harbor.agents.factory import AgentFactory
 from harbor.models.agent.context import AgentContext
@@ -188,6 +188,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_tooling_install_failure_does_not_stop_binary_install(self):
         agent = self.agent(model_name="trust/hy4-preview")
+        agent.logger = MagicMock()
         agent._install_optional_tooling = AsyncMock(
             side_effect=RuntimeError("package mirror unavailable")
         )
@@ -206,6 +207,30 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
             agent.exec_as_root.await_args_list[1].kwargs["command"],
             f"{BINARY_PATH} --version",
         )
+        agent.logger.debug.assert_called_once()
+        agent.logger.warning.assert_not_called()
+
+    def test_run_failure_is_only_debug_logged_and_reraised(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        agent.logger = MagicMock()
+        agent.exec_as_agent = AsyncMock(side_effect=RuntimeError("agent failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "agent failed"):
+            asyncio.run(agent.run("Inspect the repository", object(), None))
+
+        agent.logger.debug.assert_called_once()
+        agent.logger.warning.assert_not_called()
+
+    def test_missing_or_invalid_trace_is_only_debug_logged(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        agent.logger = MagicMock()
+
+        self.assertIsNone(agent._write_trajectory())
+        (self.logs_dir / Path(TRACE_PATH).name).write_text("{")
+        self.assertIsNone(agent._write_trajectory())
+
+        self.assertEqual(agent.logger.debug.call_count, 2)
+        agent.logger.warning.assert_not_called()
 
     def test_populates_harbor_context_from_trace(self):
         agent = self.agent(model_name="trust/hy4-preview")
