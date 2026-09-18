@@ -335,7 +335,9 @@ policy:
 
 `max_tokens` caps the number of tokens the model generates in one response and
 defaults to 32768. It is sent on the wire as `max_tokens` for the
-`chat_completions` API and as `max_output_tokens` for the `responses` API; an
+`chat_completions` API (as `max_completion_tokens` when the profile sets
+`use_max_completion_tokens: true`)
+and as `max_output_tokens` for the `responses` API; an
 explicit `0` means "no explicit cap" and is relayed as-is. `temperature` has no
 default: when it is omitted, no value is sent and the provider uses its default
 sampling. It accepts values in `[0, 2]`. Because some reasoning and
@@ -568,6 +570,40 @@ by `read`, `write`, `edit`, `grep`, `glob`, and `view_image`. Absolute tool
 paths are unchanged. Configuration and `--session` paths continue to be
 resolved from the process working directory. `--workdir` selects a path
 reference, not a filesystem sandbox or an additional permission boundary.
+
+### Azure OpenAI
+
+Configure Azure OpenAI using its
+[v1 API](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
+Add it explicitly to your configuration: Azure has no default resource endpoint
+or deployment catalog. Set `base_url` to your resource URL ending in
+`/openai/v1`, and set `model` to your Azure deployment name.
+
+```yaml
+providers:
+  - name: azure
+    base_url: https://YOUR-RESOURCE.openai.azure.com/openai/v1
+    profiles:
+      - name: gpt
+        model: YOUR-DEPLOYMENT
+        use_max_completion_tokens: true
+        capabilities: [text]
+        max_tokens: 32768
+policy:
+  text:
+    provider: azure
+    profile: gpt
+```
+
+Set `AZURE_API_KEY` in the environment, or in the configuration's `env` map.
+Set `use_max_completion_tokens: true` for models requiring that parameter.
+This profile setting works with any provider name and defaults to false.
+It sends the `max_tokens` budget as `max_completion_tokens` for Chat Completions,
+including request-specific limits for compaction and output recovery.
+It has no effect on the Responses API.
+Azure also accepts `api: responses`, which sends `max_output_tokens`.
+This integration targets the v1 endpoint; legacy deployment URLs requiring
+an `api-version` query parameter are not supported.
 
 ### Model request retries
 

@@ -580,3 +580,38 @@ func clearBuiltinAPIKeys(t *testing.T) {
 	t.Setenv("DORA_POLICY_IMAGE_PROVIDER", "")
 	t.Setenv("DORA_POLICY_IMAGE_PROFILE", "")
 }
+
+func TestAzureExplicitConfiguration(t *testing.T) {
+	t.Setenv("AZURE_API_KEY", "azure-secret")
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: azure
+    base_url: https://my-resource.openai.azure.com/openai/v1
+    profiles:
+      - name: gpt
+        model: my-deployment
+        use_max_completion_tokens: true
+policy:
+  text:
+    provider: azure
+    profile: gpt
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := providerByName(t, cfg, "azure")
+	if p.APIKey != "azure-secret" || p.API != "chat_completions" ||
+		p.BaseURL != "https://my-resource.openai.azure.com/openai/v1" ||
+		p.Profiles[0].Model != "my-deployment" || !p.Profiles[0].UseMaxCompletionTokens {
+		t.Fatalf("azure = %#v", p)
+	}
+	_, err = Load(writeConfig(t, `
+providers:
+  - name: azure
+    profiles:
+      - name: my-deployment
+`))
+	if err == nil || !strings.Contains(err.Error(), "base_url cannot be empty") {
+		t.Fatalf("missing Azure endpoint error = %v", err)
+	}
+}

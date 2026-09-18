@@ -122,9 +122,11 @@ func TestModelIDFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name, spec, policy, key, wantModel, thinking string
 		wantError                                    bool
+		modern                                       bool
 	}{
 		{name: "raw model", spec: "test/vendor/new-model", key: "key", wantModel: "vendor/new-model"},
 		{name: "thinking override", spec: "test/new", key: "key", wantModel: "new", thinking: "high"},
+		{name: "modern output budget", spec: "test/known", key: "key", wantModel: "configured-model", modern: true},
 		{name: "profile wins", spec: "test/known", key: "key", wantModel: "configured-model"},
 		{name: "provider only", spec: "test", key: "key", wantModel: "configured-model"},
 		{name: "trailing slash", spec: "test/", key: "key", wantModel: "configured-model"},
@@ -138,7 +140,7 @@ func TestModelIDFallback(t *testing.T) {
 			cfg := config.Config{
 				Providers: []config.Provider{{Name: "test", BaseURL: "https://example.com/v1", API: "chat_completions", APIKey: tc.key,
 					Profiles: []config.ProfileSpec{
-						{Name: "known", Model: "configured-model", MaxTokens: &budget, Capabilities: []dora.Capability{dora.CapabilityText}},
+						{Name: "known", Model: "configured-model", MaxTokens: &budget, UseMaxCompletionTokens: tc.modern, Capabilities: []dora.Capability{dora.CapabilityText}},
 						{Name: "vision", Model: "vision-model", Capabilities: []dora.Capability{dora.CapabilityImageInput}},
 					}}},
 				Policy: config.PolicySettings{Text: config.Policy{Provider: "test", Profile: tc.policy}},
@@ -157,8 +159,15 @@ func TestModelIDFallback(t *testing.T) {
 				if tc.wantModel == "configured-model" {
 					wantBudget = 42
 				}
-				if body["max_tokens"] != wantBudget {
-					t.Fatalf("max_tokens = %v", body["max_tokens"])
+				budgetKey, absentKey := "max_tokens", "max_completion_tokens"
+				if tc.modern {
+					budgetKey, absentKey = absentKey, budgetKey
+				}
+				if body[budgetKey] != wantBudget {
+					t.Fatalf("%s = %v", budgetKey, body[budgetKey])
+				}
+				if _, ok := body[absentKey]; ok {
+					t.Fatalf("unexpected %s", absentKey)
 				}
 				if tc.thinking != "" && body["reasoning_effort"] != tc.thinking {
 					t.Fatalf("thinking = %v", body["reasoning_effort"])

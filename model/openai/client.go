@@ -41,6 +41,9 @@ type Config struct {
 	// MaxTokens caps the number of tokens the model is allowed to generate in
 	// one response. Nil sends no cap and leaves it to the provider default.
 	MaxTokens *int
+	// UseMaxCompletionTokens sends the output budget as max_completion_tokens
+	// instead of max_tokens for models requiring the modern field.
+	UseMaxCompletionTokens bool
 	// MaxOutputTokens is the model's hard output capacity. It clamps both the
 	// default MaxTokens value and request-level output limits when positive.
 	MaxOutputTokens *int
@@ -67,14 +70,15 @@ type Config struct {
 // in the embedded *provider.Provider; this struct only holds the model name
 // and generation parameters.
 type Client struct {
-	provider         *provider.Provider
-	model            string
-	maxTokens        *int
-	maxOutputTokens  *int
-	temperature      *float64
-	reasoningEffort  *string
-	thinking         *thinkingControl
-	preserveThinking bool
+	provider               *provider.Provider
+	model                  string
+	useMaxCompletionTokens bool
+	maxTokens              *int
+	maxOutputTokens        *int
+	temperature            *float64
+	reasoningEffort        *string
+	thinking               *thinkingControl
+	preserveThinking       bool
 }
 
 // New creates an OpenAI-compatible model client.
@@ -96,14 +100,15 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("openai: model is required")
 	}
 	return &Client{
-		provider:         p,
-		model:            cfg.Model,
-		maxTokens:        cfg.MaxTokens,
-		maxOutputTokens:  cfg.MaxOutputTokens,
-		temperature:      cfg.Temperature,
-		reasoningEffort:  cfg.ReasoningEffort,
-		thinking:         cfg.Thinking,
-		preserveThinking: cfg.PreserveThinking != nil && *cfg.PreserveThinking,
+		provider:               p,
+		model:                  cfg.Model,
+		maxTokens:              cfg.MaxTokens,
+		useMaxCompletionTokens: cfg.UseMaxCompletionTokens,
+		maxOutputTokens:        cfg.MaxOutputTokens,
+		temperature:            cfg.Temperature,
+		reasoningEffort:        cfg.ReasoningEffort,
+		thinking:               cfg.Thinking,
+		preserveThinking:       cfg.PreserveThinking != nil && *cfg.PreserveThinking,
 	}, nil
 }
 
@@ -158,6 +163,8 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 	response, reasoningDetails, err := readStream(reader, emit, onActivity)
 	if body.MaxTokens != nil {
 		response.OutputBudget = *body.MaxTokens
+	} else if body.MaxCompletionTokens != nil {
+		response.OutputBudget = *body.MaxCompletionTokens
 	}
 	if err != nil {
 		return dora.Response{}, fmt.Errorf("openai: %w", err)
@@ -189,6 +196,9 @@ func (c *Client) GenerateStream(ctx context.Context, request dora.Request, emit 
 
 func (c *Client) requestBody(request dora.Request) (chatRequest, error) {
 	body := chatRequest{Model: c.model, Stream: true, MaxTokens: effectiveOutputLimit(request.MaxOutputTokens, c.maxTokens, c.maxOutputTokens), Temperature: c.temperature, ReasoningEffort: c.reasoningEffort, Thinking: c.thinking}
+	if c.useMaxCompletionTokens {
+		body.MaxCompletionTokens, body.MaxTokens = body.MaxTokens, nil
+	}
 	body.StreamOptions = &chatStreamOptions{IncludeUsage: boolPtr(true)}
 	reasoningByMessage := make(map[int][]json.RawMessage)
 	if c.preserveThinking {
@@ -432,15 +442,16 @@ type streamedToolCall struct {
 }
 
 type chatRequest struct {
-	Model           string             `json:"model"`
-	Messages        []chatMessage      `json:"messages"`
-	Tools           []chatTool         `json:"tools,omitempty"`
-	Stream          bool               `json:"stream"`
-	MaxTokens       *int               `json:"max_tokens,omitempty"`
-	Temperature     *float64           `json:"temperature,omitempty"`
-	ReasoningEffort *string            `json:"reasoning_effort,omitempty"`
-	Thinking        *thinkingControl   `json:"thinking,omitempty"`
-	StreamOptions   *chatStreamOptions `json:"stream_options,omitempty"`
+	Model               string             `json:"model"`
+	Messages            []chatMessage      `json:"messages"`
+	Tools               []chatTool         `json:"tools,omitempty"`
+	Stream              bool               `json:"stream"`
+	MaxTokens           *int               `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int               `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64           `json:"temperature,omitempty"`
+	ReasoningEffort     *string            `json:"reasoning_effort,omitempty"`
+	Thinking            *thinkingControl   `json:"thinking,omitempty"`
+	StreamOptions       *chatStreamOptions `json:"stream_options,omitempty"`
 }
 
 // chatStreamOptions requests per-stream token usage from Chat Completions. When

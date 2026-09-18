@@ -244,16 +244,17 @@ func registryFromConfig(cfg config.Config, httpClient *http.Client) registry.Con
 		profiles := make([]registry.Profile, len(p.Profiles))
 		for j, m := range p.Profiles {
 			profiles[j] = registry.Profile{
-				Name:             m.Name,
-				Model:            m.Model,
-				API:              m.API,
-				Thinking:         m.Thinking,
-				PreserveThinking: m.PreserveThinking,
-				MaxTokens:        m.MaxTokens,
-				MaxOutputTokens:  m.MaxOutputTokens,
-				ContextWindow:    m.ContextWindow,
-				Temperature:      m.Temperature,
-				Capabilities:     m.Capabilities,
+				Name:                   m.Name,
+				Model:                  m.Model,
+				API:                    m.API,
+				Thinking:               m.Thinking,
+				PreserveThinking:       m.PreserveThinking,
+				MaxTokens:              m.MaxTokens,
+				UseMaxCompletionTokens: m.UseMaxCompletionTokens,
+				MaxOutputTokens:        m.MaxOutputTokens,
+				ContextWindow:          m.ContextWindow,
+				Temperature:            m.Temperature,
+				Capabilities:           m.Capabilities,
 			}
 		}
 		providers[i] = registry.ProviderConfig{

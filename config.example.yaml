@@ -1,6 +1,6 @@
 # Providers are a catalog. The embedded catalog gives deepseek, trust, and
 # openrouter built-in base_url defaults, so that field may be omitted for them.
-# Custom providers must set base_url. API keys are read from the provider-derived
+# Azure and custom providers must set base_url. API keys are read from the provider-derived
 # environment variable (for example DEEPSEEK_API_KEY or OPENROUTER_API_KEY), with
 # config-local fallbacks available under env. Model selection is driven by
 # per-capability policy (see policy below). Values in env are not exported to
@@ -22,6 +22,8 @@ providers:
         # Optional hard model output capacity; unlike max_tokens, it has no
         # default and must be positive when configured.
         # max_output_tokens: 8192
+        # Chat Completions only; default false, independent of provider name.
+        # use_max_completion_tokens: true
         # Model context capacity in tokens. Default: 1048576. Must be positive.
         context_window: 1048576
         capabilities: [text]
@@ -56,6 +58,17 @@ providers:
         context_window: 1048576
         capabilities: [image_input, text]
         preserve_thinking: true
+
+# Optional Azure provider (add under providers above):
+#   - name: azure
+#     base_url: https://YOUR-RESOURCE.openai.azure.com/openai/v1
+#     profiles:
+#       - name: gpt
+#         model: YOUR-DEPLOYMENT
+#         capabilities: [text]
+#         max_tokens: 32768
+#         use_max_completion_tokens: true  # Enable for models requiring it.
+# Set AZURE_API_KEY and policy.text.provider: azure to use it.
 
 # Optional config-local API keys. A real process environment variable with the
 # same name takes precedence.

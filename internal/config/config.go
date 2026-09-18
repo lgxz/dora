@@ -88,6 +88,8 @@ type ProfileSpec struct {
 	// leaves it disabled.
 	PreserveThinking *bool `yaml:"preserve_thinking,omitempty"`
 	MaxTokens        *int  `yaml:"max_tokens,omitempty"`
+	// UseMaxCompletionTokens selects the modern Chat Completions budget field.
+	UseMaxCompletionTokens bool `yaml:"use_max_completion_tokens,omitempty"`
 	// MaxOutputTokens is the model's hard output capacity. Nil means unknown.
 	MaxOutputTokens *int `yaml:"max_output_tokens,omitempty"`
 	// ContextWindow is the model context capacity measured in tokens. Nil uses

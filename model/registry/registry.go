@@ -38,16 +38,17 @@ type ProviderConfig struct {
 // Profile describes one named model profile under a provider. Name selects
 // the profile; Model is the model identifier sent to the provider.
 type Profile struct {
-	Name             string
-	Model            string
-	API              string // overrides provider API when non-empty
-	Thinking         *string
-	PreserveThinking *bool
-	MaxTokens        *int
-	MaxOutputTokens  *int
-	ContextWindow    *int
-	Temperature      *float64
-	Capabilities     []dora.Capability
+	Name                   string
+	Model                  string
+	API                    string // overrides provider API when non-empty
+	Thinking               *string
+	PreserveThinking       *bool
+	MaxTokens              *int
+	UseMaxCompletionTokens bool
+	MaxOutputTokens        *int
+	ContextWindow          *int
+	Temperature            *float64
+	Capabilities           []dora.Capability
 }
 
 // Config is the registry input.
@@ -99,19 +100,20 @@ func Construct(p ProviderConfig, profile Profile) (dora.Model, error) {
 	case "chat_completions":
 		reasoningEffort, thinking := mapChatThinking(p.Name, profile.Thinking)
 		return openai.New(openai.Config{
-			BaseURL:           p.BaseURL,
-			APIKey:            p.APIKey,
-			Model:             profile.Model,
-			HTTPClient:        p.HTTPClient,
-			ConnectTimeout:    dur(p.ConnectTimeoutSeconds),
-			StreamIdleTimeout: dur(p.StreamIdleTimeoutSeconds),
-			Timeout:           dur(p.TimeoutSeconds),
-			MaxTokens:         profile.MaxTokens,
-			MaxOutputTokens:   profile.MaxOutputTokens,
-			Temperature:       profile.Temperature,
-			ReasoningEffort:   reasoningEffort,
-			Thinking:          thinking,
-			PreserveThinking:  profile.PreserveThinking,
+			BaseURL:                p.BaseURL,
+			APIKey:                 p.APIKey,
+			Model:                  profile.Model,
+			HTTPClient:             p.HTTPClient,
+			ConnectTimeout:         dur(p.ConnectTimeoutSeconds),
+			StreamIdleTimeout:      dur(p.StreamIdleTimeoutSeconds),
+			Timeout:                dur(p.TimeoutSeconds),
+			MaxTokens:              profile.MaxTokens,
+			UseMaxCompletionTokens: profile.UseMaxCompletionTokens,
+			MaxOutputTokens:        profile.MaxOutputTokens,
+			Temperature:            profile.Temperature,
+			ReasoningEffort:        reasoningEffort,
+			Thinking:               thinking,
+			PreserveThinking:       profile.PreserveThinking,
 		})
 	case "responses":
 		reasoning := mapResponsesThinking(p.Name, profile.Thinking)

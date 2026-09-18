@@ -328,7 +328,7 @@ To capture token usage, Chat Completions requests always set `stream_options.inc
 
 ### Responses API
 
-`model/openairesponses` calls `/responses` and parses SSE. It implements `StreamingModel`, passes text deltas to the Agent, and encodes the typed items from the Responses protocol into an opaque continuation.
+`model/openairesponses` calls `/responses` and parses SSE. It implements `StreamingModel`, passes text deltas to the Agent, and encodes the typed items from the Responses protocol into an opaque continuation. Ordinary input messages explicitly carry `type: "message"` on both initial and continuation requests, including messages with images.
 
 Reasoning summaries surface when the provider sends them: `response.reasoning_summary_text.delta` events stream as reasoning deltas, and reasoning output items contribute their summary text to `Response.Reasoning`. Summaries are not requested proactively, so providers that only return them on demand keep an empty `Reasoning`.
 
@@ -354,7 +354,8 @@ has no default. A request-specific `Request.MaxOutputTokens` overrides
 `max_tokens`, after which the adapter clamps the result to the hard capacity.
 Because the two wire protocols use different key names, the adapters map the
 effective request limit to the correct key:
-`max_tokens` for Chat Completions and `max_output_tokens` for the Responses API;
+`max_tokens` for Chat Completions (`max_completion_tokens` when the profile sets
+`use_max_completion_tokens: true`) and `max_output_tokens` for the Responses API;
 `temperature` is common to both. An explicit `max_tokens: 0` is relayed as-is,
 meaning "no explicit cap."
 
@@ -373,6 +374,16 @@ The adapters do not validate the JSON of model-emitted tool-call arguments; they
 pass the raw arguments through to the Agent, which is the single authority on
 tool-call validity. Invalid arguments are fed back to the model as a recoverable
 `tool` message rather than aborting the run.
+
+Profiles can enable `use_max_completion_tokens` (default false) to send the
+Chat Completions output budget as `max_completion_tokens`. Config and the CLI
+pass this flag through the registry to the adapter without inspecting provider
+names. It covers default budgets, request overrides, and hard-cap clamping;
+`Response.OutputBudget` reports the actual transmitted budget. Responses API
+always uses `max_output_tokens` and ignores this Chat Completions setting.
+Azure is configured like any custom endpoint, with a v1 `base_url` ending in
+`/openai/v1` and deployment names as model identifiers. The provider-derived
+key mechanism resolves `AZURE_API_KEY` when the configured name is `azure`.
 
 ## Session
 

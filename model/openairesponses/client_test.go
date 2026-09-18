@@ -38,7 +38,7 @@ func TestGenerateStreamMapsRequestAndEvents(t *testing.T) {
 			t.Fatalf("include = %#v", include)
 		}
 		input := body["input"].([]any)
-		if input[0].(map[string]any)["content"] != "hello" {
+		if input[0].(map[string]any)["content"] != "hello" || input[0].(map[string]any)["type"] != "message" {
 			t.Fatalf("input = %#v", input)
 		}
 		tool := body["tools"].([]any)[0].(map[string]any)
@@ -771,6 +771,51 @@ func TestGenerateStreamClassifiesJSONErrors(t *testing.T) {
 			var typeErr *json.UnmarshalTypeError
 			if !errors.As(err, &syntax) && !errors.As(err, &typeErr) {
 				t.Fatalf("error does not preserve JSON cause: %v", err)
+			}
+		})
+	}
+}
+
+func TestRequestMessageItemsHaveExplicitType(t *testing.T) {
+	client, err := New(Config{BaseURL: "https://example.test/v1", Model: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []dora.Message{
+		{Role: dora.RoleSystem, Content: "system"},
+		{Role: dora.RoleUser, Content: "user"},
+		{Role: dora.RoleAssistant, Content: "assistant"},
+		{Role: dora.RoleUser, Images: []dora.Image{{URL: "https://example.test/image.png"}}},
+	}
+	for _, continued := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuation=%t", continued), func(t *testing.T) {
+			request := dora.Request{Messages: messages}
+			offset := 0
+			if continued {
+				// The system message uses appendMessages; subsequent messages
+				// use appendContinuationMessages after the opaque output item.
+				request.Continuation = `{"base_message_count":1,"message_count":1,"items":[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]}`
+				offset = 1
+			}
+			body, err := client.requestBody(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Input) != len(messages)+offset {
+				t.Fatalf("input = %s", body.Input)
+			}
+			for i, message := range messages {
+				index := i
+				if i > 0 {
+					index += offset
+				}
+				var item map[string]any
+				if err := json.Unmarshal(body.Input[index], &item); err != nil {
+					t.Fatal(err)
+				}
+				if item["type"] != "message" || item["role"] != string(message.Role) {
+					t.Fatalf("input[%d] = %s", index, body.Input[index])
+				}
 			}
 		})
 	}

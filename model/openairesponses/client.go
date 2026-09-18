@@ -245,7 +245,7 @@ func appendContinuationMessages(input *[]json.RawMessage, messages []dora.Messag
 				if err != nil {
 					return err
 				}
-				if err := appendInput(input, inputItem{Role: string(message.Role), Content: content}); err != nil {
+				if err := appendInput(input, inputItem{Type: "message", Role: string(message.Role), Content: content}); err != nil {
 					return err
 				}
 			}
@@ -276,7 +276,7 @@ func appendMessages(input *[]json.RawMessage, messages []dora.Message) error {
 				if err != nil {
 					return err
 				}
-				if err := appendInput(input, inputItem{Role: string(message.Role), Content: content}); err != nil {
+				if err := appendInput(input, inputItem{Type: "message", Role: string(message.Role), Content: content}); err != nil {
 					return err
 				}
 			}
