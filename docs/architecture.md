@@ -249,8 +249,14 @@ frontend or ACP:
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
-9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. On success it appends `completed`; maximum rounds append `max_rounds`; context cancellation appends `canceled` using a detached five-second commit context; other errors append `failed`. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. On success it appends `completed`; maximum rounds append `max_rounds`; context cancellation appends `canceled`; other errors append `failed`. Every commit runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
 10. The terminal frontend writes completed text to stdout or continues its event loop.
+
+The process entry point converts both `SIGINT` and `SIGTERM` into context
+cancellation, allowing the application to save a canceled Turn before exiting.
+Callers such as GNU `timeout` must allow time for the Agent to return and the
+detached five-second commit before escalating to `SIGKILL`; forced termination
+cannot run this cleanup. This does not add incremental persistence.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. The transient `Thinking...` placeholder and its live repaint are omitted when stderr is not a terminal, while substantive progress lines remain append-only. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
@@ -391,9 +397,12 @@ The `session` package is a provider-neutral persistence contract. The CLI's
 concrete implementation is `session/sqlite`; `--session`/`-s` selects a
 persistent SQLite file, while omitting it creates an in-memory SQLite database
 for the process lifetime. There is no default session directory and no
-automatic loading of prior messages.
+automatic loading of prior messages. The file is single-writer: beyond the
+driver's busy timeout there is no cross-process coordination, so concurrent
+dora processes sharing one session file can fail their commits when the
+timeout expires.
 
-The database uses schema version 8 and three tables:
+The database uses schema version 9 and three tables:
 
 - `turns`: one row per saved invocation, including `status` (`completed`,
   `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
@@ -403,7 +412,8 @@ The database uses schema version 8 and three tables:
   `round_index`, and `position`. Tool calls use a JSON column; each call stores its arguments as base64
   `input_bytes` rather than embedded JSON, preserving all original bytes, including
   invalid JSON and invalid UTF-8. Assistant messages also store their
-  captured `reasoning`. Assistant rows also store that model call's optional
+  captured `reasoning`, and both roles persist any attached images as an
+  `images_json` column. Assistant rows also store that model call's optional
   `usage_json`; tool rows never carry usage. The final assistant response does
   not enter this table;
 - `model_attempts`: one JSON audit record per model invocation, keyed by turn and
@@ -417,7 +427,7 @@ complete rounds plus the terminal run error. All commit paths also store model
 attempts, including complete streams that ended at an output limit; interrupted
 transport streams may have unavailable response data. Provider continuation is
 intentionally not stored. SQLite allocates the turn ID and foreign keys bind every message to
-its turn. Schema version 7 and older databases are rejected rather than migrated.
+its turn. Schema version 8 and older databases are rejected rather than migrated.
 
 History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also

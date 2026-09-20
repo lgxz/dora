@@ -641,7 +641,7 @@ plus all corresponding tool result messages and that model call's optional
 usage. Successfully completed turns are appended atomically. A turn
 stopped by the maximum-round limit is also saved with status `max_rounds`, its
 error, and all completed tool rounds; it has no final result or final-response
-usage. Ctrl+C cancellation is saved with status `canceled`; Dora uses a separate
+usage. Ctrl+C (`SIGINT`) and `SIGTERM` cancellation are saved with status `canceled`; Dora uses a separate
 short-lived commit context so canceling the run does not also cancel its session
 write. Any other failed turn is saved with status `failed`. Both retain their
 error, complete tool rounds, and separate model-attempt audit records, including
@@ -649,14 +649,27 @@ output-limited responses. Transport failures may lack response content or usage.
 prompt keeps using the same Turn and does not save an intermediate `max_rounds`
 record. Provider continuation is kept only while that turn runs.
 
-With `--session`, SQLite schema version 8 contains `turns`, `messages`, and `model_attempts` tables and records the
+When using GNU `timeout`, allow time for cancellation and session storage before
+forcing termination, for example:
+
+```sh
+timeout --kill-after=10s 300s dora --session session.sqlite "Your task"
+```
+
+The initial `SIGTERM` requests cancellation; the additional ten seconds allow
+cleanup before `SIGKILL`. Storage gets its own five-second timeout after the
+Agent returns. Slow tool cancellation may need a longer grace period. `SIGKILL`
+cannot be handled and may lose the current turn. Only complete tool rounds and
+available model-attempt records are retained, not unfinished streaming text.
+
+With `--session`, SQLite schema version 9 contains `turns`, `messages`, and `model_attempts` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
-tool rounds, reasoning captured on round assistant messages, and each model
+tool rounds, attached image references, reasoning captured on round assistant messages, and each model
 call's usage JSON, finish metadata, final reasoning, and reported total usage.
 The SQLite store's `GetAttempts` API pages through audit records separately from
 conversation rounds. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 7 and earlier databases are rejected; start a new file). When
+(schema version 8 and earlier databases are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain

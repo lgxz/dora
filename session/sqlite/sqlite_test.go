@@ -64,6 +64,30 @@ func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	}
 }
 
+func TestOpenAppliesConnectionPragmas(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	memory, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memory.Close()
+	for name, db := range map[string]*sql.DB{"file": store.db, "memory": memory.db} {
+		var foreignKeys, busyTimeout int
+		if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+			t.Fatalf("%s: foreign_keys = %d, err = %v", name, foreignKeys, err)
+		}
+		if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil || busyTimeout != 5000 {
+			t.Fatalf("%s: busy_timeout = %d, err = %v", name, busyTimeout, err)
+		}
+	}
+}
+
 func TestOpenMemoryStoresTurnsUntilClosed(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenMemory(ctx)
@@ -298,9 +322,10 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 			Role:      dora.RoleAssistant,
 			Content:   "checking",
 			Reasoning: "let me look",
+			Images:    []dora.Image{{URL: "https://example.com/chart.png"}},
 			ToolCalls: []dora.ToolCall{{ID: "call-1", Name: "echo", Input: json.RawMessage(`{}`)}},
 		},
-		Tools: []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "output"}},
+		Tools: []dora.Message{{Role: dora.RoleTool, ToolCallID: "call-1", Content: "output", Images: []dora.Image{{Path: "/tmp/scan.png"}}}},
 		Usage: &dora.Usage{
 			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
 			InputDetails: &dora.InputTokenDetails{CachedTokens: &cached},
@@ -327,6 +352,12 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	}
 	if len(page.Rounds) != 1 || page.Rounds[0].Assistant.Reasoning != "let me look" {
 		t.Fatalf("rounds = %#v", page.Rounds)
+	}
+	if images := page.Rounds[0].Assistant.Images; len(images) != 1 || images[0].URL != "https://example.com/chart.png" {
+		t.Fatalf("assistant images = %#v", images)
+	}
+	if images := page.Rounds[0].Tools[0].Images; len(images) != 1 || images[0].Path != "/tmp/scan.png" {
+		t.Fatalf("tool images = %#v", images)
 	}
 	if usage := page.Rounds[0].Usage; usage == nil || usage.TotalTokens != 12 || usage.InputDetails == nil || usage.InputDetails.CachedTokens == nil || *usage.InputDetails.CachedTokens != 7 {
 		t.Fatalf("round usage = %#v", usage)
@@ -522,6 +553,26 @@ func TestStorePreservesArgumentBytesAcrossReopen(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStoreRejectsVersionEightWithoutMigration(t *testing.T) {
+	// v8 databases have no images_json column and are rejected rather than
+	// migrated, by design.
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 8`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 8") {
+		t.Fatalf("expected version rejection, got %v", err)
 	}
 }
 

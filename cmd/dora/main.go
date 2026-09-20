@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/lgxz/dora/internal/cli"
 	"github.com/muesli/termenv"
@@ -19,7 +20,9 @@ var (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// timeout and process supervisors normally request shutdown with SIGTERM.
+	// Cancel the run so the application can persist its terminal Turn before exit.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	info, err := os.Stdin.Stat()

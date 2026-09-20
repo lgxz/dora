@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
+
+// connectionPragmas travels in the DSN rather than in one-time statements so
+// the driver applies it to every connection it creates, including a pool
+// connection recreated after an error.
+const connectionPragmas = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+
+// fileDSN encodes path as a file: URI carrying connectionPragmas. Reserved URI
+// characters in path are percent-escaped, and a Windows drive path gains the
+// empty authority slash (file:///C:/...).
+func fileDSN(path string) string {
+	slash := filepath.ToSlash(path)
+	if !strings.HasPrefix(slash, "/") {
+		slash = "/" + slash
+	}
+	uri := url.URL{Scheme: "file", Path: slash, RawQuery: connectionPragmas}
+	return uri.String()
+}
 
 // Store is a SQLite-backed session store.
 type Store struct {
@@ -37,13 +55,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := ensureFile(absolute); err != nil {
 		return nil, err
 	}
-	return open(ctx, absolute, absolute)
+	return open(ctx, fileDSN(absolute), absolute)
 }
 
 // OpenMemory opens an ephemeral SQLite session database. Its contents live
 // only for the lifetime of the returned Store and are discarded on Close.
 func OpenMemory(ctx context.Context) (*Store, error) {
-	return open(ctx, ":memory:", ":memory:")
+	return open(ctx, "file::memory:?"+connectionPragmas, ":memory:")
 }
 
 func open(ctx context.Context, dsn, path string) (*Store, error) {
@@ -258,7 +276,7 @@ func (s *Store) GetRounds(ctx context.Context, id int64, options session.RoundOp
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json
+SELECT round_index, position, role, content, reasoning, images_json, tool_calls_json, tool_call_id, usage_json
 FROM messages
 WHERE turn_id = ? AND round_index >= ? AND round_index < ?
 ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limit)
@@ -271,11 +289,11 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 	for rows.Next() {
 		var roundIndex, position int
 		var role string
-		var content, reasoning, callsJSON, callID, usageJSON sql.NullString
-		if err := rows.Scan(&roundIndex, &position, &role, &content, &reasoning, &callsJSON, &callID, &usageJSON); err != nil {
+		var content, reasoning, imagesJSON, callsJSON, callID, usageJSON sql.NullString
+		if err := rows.Scan(&roundIndex, &position, &role, &content, &reasoning, &imagesJSON, &callsJSON, &callID, &usageJSON); err != nil {
 			return session.RoundPage{}, fmt.Errorf("scan turn %d message: %w", id, err)
 		}
-		message, err := decodeMessage(role, content.String, reasoning.String, callsJSON.String, callID.String)
+		message, err := decodeMessage(role, content.String, reasoning.String, imagesJSON.String, callsJSON.String, callID.String)
 		if err != nil {
 			return session.RoundPage{}, fmt.Errorf("decode turn %d round %d position %d: %w", id, roundIndex, position, err)
 		}
@@ -318,12 +336,6 @@ ORDER BY round_index, position`, id, options.Offset, options.Offset+options.Limi
 }
 
 func (s *Store) initialize(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("enable sqlite foreign keys: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
-		return fmt.Errorf("set sqlite busy timeout: %w", err)
-	}
 	var version int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read sqlite schema version: %w", err)
@@ -357,7 +369,7 @@ func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
 		`SELECT turn_id, attempt_index, record_json FROM model_attempts LIMIT 0`,
 		`SELECT id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at FROM turns LIMIT 0`,
-		`SELECT turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
+		`SELECT turn_id, round_index, position, role, content, reasoning, images_json, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
 		rows, err := s.db.QueryContext(ctx, query)
@@ -407,6 +419,7 @@ var schemaStatements = []string{
         role TEXT NOT NULL,
         content TEXT,
         reasoning TEXT,
+        images_json TEXT,
         tool_calls_json TEXT,
         tool_call_id TEXT,
 		usage_json TEXT,
@@ -430,14 +443,18 @@ func insertMessage(ctx context.Context, tx *sql.Tx, turnID int64, roundIndex, po
 	if err != nil {
 		return fmt.Errorf("encode turn %d round %d position %d tool calls: %w", turnID, roundIndex, position, err)
 	}
+	images, err := encodeImages(message.Images)
+	if err != nil {
+		return fmt.Errorf("encode turn %d round %d position %d images: %w", turnID, roundIndex, position, err)
+	}
 	usageJSON, err := encodeUsage(usage)
 	if err != nil {
 		return fmt.Errorf("encode turn %d round %d position %d usage: %w", turnID, roundIndex, position, err)
 	}
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO messages (turn_id, round_index, position, role, content, reasoning, tool_calls_json, tool_call_id, usage_json)
-VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
-		turnID, roundIndex, position, string(message.Role), message.Content, message.Reasoning, calls, message.ToolCallID, usageJSON,
+INSERT INTO messages (turn_id, round_index, position, role, content, reasoning, images_json, tool_calls_json, tool_call_id, usage_json)
+VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
+		turnID, roundIndex, position, string(message.Role), message.Content, message.Reasoning, images, calls, message.ToolCallID, usageJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("insert turn %d round %d position %d: %w", turnID, roundIndex, position, err)
@@ -476,8 +493,31 @@ func encodeToolCalls(calls []dora.ToolCall) (string, error) {
 	return string(encoded), err
 }
 
-func decodeMessage(role, content, reasoning, callsJSON, callID string) (dora.Message, error) {
-	message := dora.Message{Role: dora.Role(role), Content: content, Reasoning: reasoning, ToolCallID: callID}
+func encodeImages(images []dora.Image) (string, error) {
+	if len(images) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(images)
+	return string(encoded), err
+}
+
+func decodeImages(value string) ([]dora.Image, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var images []dora.Image
+	if err := json.Unmarshal([]byte(value), &images); err != nil {
+		return nil, err
+	}
+	return images, nil
+}
+
+func decodeMessage(role, content, reasoning, imagesJSON, callsJSON, callID string) (dora.Message, error) {
+	images, err := decodeImages(imagesJSON)
+	if err != nil {
+		return dora.Message{}, err
+	}
+	message := dora.Message{Role: dora.Role(role), Content: content, Reasoning: reasoning, Images: images, ToolCallID: callID}
 	if callsJSON != "" {
 		var records []toolCallRecord
 		if err := json.Unmarshal([]byte(callsJSON), &records); err != nil {
@@ -522,35 +562,41 @@ func (s *Store) GetAttempts(ctx context.Context, id int64, options session.Round
 	if s == nil || s.db == nil {
 		return session.AttemptPage{}, errors.New("sqlite session is not initialized")
 	}
+	if id <= 0 {
+		return session.AttemptPage{}, errors.New("turn ID must be positive")
+	}
 	if options.Offset < 0 || options.Limit <= 0 {
 		return session.AttemptPage{}, errors.New("attempt offset must be non-negative and limit positive")
 	}
 	var exists int
 	if err := s.db.QueryRowContext(ctx, `SELECT id FROM turns WHERE id = ?`, id).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return session.AttemptPage{}, session.ErrNotFound
+			return session.AttemptPage{}, fmt.Errorf("%w: %d", session.ErrNotFound, id)
 		}
-		return session.AttemptPage{}, err
+		return session.AttemptPage{}, fmt.Errorf("get turn %d attempts: %w", id, err)
 	}
 	page := session.AttemptPage{Offset: options.Offset, Limit: options.Limit, Attempts: []dora.ModelAttempt{}}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_attempts WHERE turn_id = ?`, id).Scan(&page.Total); err != nil {
-		return page, err
+		return session.AttemptPage{}, fmt.Errorf("count turn %d attempts: %w", id, err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT record_json FROM model_attempts WHERE turn_id = ? ORDER BY attempt_index LIMIT ? OFFSET ?`, id, options.Limit, options.Offset)
 	if err != nil {
-		return page, err
+		return session.AttemptPage{}, fmt.Errorf("get turn %d attempts: %w", id, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var encoded string
 		if err := rows.Scan(&encoded); err != nil {
-			return page, err
+			return session.AttemptPage{}, fmt.Errorf("scan turn %d attempt: %w", id, err)
 		}
 		var attempt dora.ModelAttempt
 		if err := json.Unmarshal([]byte(encoded), &attempt); err != nil {
-			return page, err
+			return session.AttemptPage{}, fmt.Errorf("decode turn %d attempt %d: %w", id, options.Offset+len(page.Attempts), err)
 		}
 		page.Attempts = append(page.Attempts, attempt)
 	}
-	return page, rows.Err()
+	if err := rows.Err(); err != nil {
+		return session.AttemptPage{}, fmt.Errorf("get turn %d attempts: %w", id, err)
+	}
+	return page, nil
 }

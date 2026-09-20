@@ -107,8 +107,14 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 			WorkingDirectory: s.workingDirectory,
 		})
 		if runErr == nil {
-			if _, err := s.store.CommitTurn(runCtx, turn); err != nil {
-				return PromptResult{Turn: turn}, &PersistenceError{err: err}
+			// A completed turn is the one result that must not be lost: commit it
+			// on a detached context like the terminal paths, so a cancellation
+			// racing the run-to-store transition cannot discard it.
+			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
+			_, commitErr := s.store.CommitTurn(commitCtx, turn)
+			cancelCommit()
+			if commitErr != nil {
+				return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
 			}
 			content, _ := turn.Result()
 			return PromptResult{Turn: turn, Content: content, Completed: true}, nil

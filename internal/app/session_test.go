@@ -150,6 +150,39 @@ func TestCancelStopsActivePromptAndPersistsCancellation(t *testing.T) {
 	}
 }
 
+// The commit of a completed turn must survive a cancellation that races the
+// transition from the run loop to the store, not only the explicitly canceled
+// terminal paths. The kernel's last context check happens before the final
+// message notification, so canceling from the observer deterministically lands
+// in that window.
+func TestPromptPersistsCompletedTurnWhenContextCancelsMidRun(t *testing.T) {
+	application, store := newTestSession(t, modelFunc(func(_ context.Context, _ dora.Request) (dora.Response, error) {
+		return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
+	}), dora.AgentConfig{})
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observer := dora.ObserverFunc(func(update dora.Update) {
+		if update.Kind == dora.UpdateMessageReceived && len(update.Message.ToolCalls) == 0 {
+			cancel()
+		}
+	})
+	result, err := application.Prompt(runCtx, "cancel mid-run", PromptOptions{Observer: observer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed || result.Content != "done" {
+		t.Fatalf("result = %#v", result)
+	}
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || page.Turns[0].Status != session.TurnStatusCompleted {
+		t.Fatalf("turns = %#v", page)
+	}
+}
+
 func TestPromptRejectsConcurrentRun(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
