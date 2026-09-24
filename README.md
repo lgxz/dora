@@ -657,19 +657,20 @@ timeout --kill-after=10s 300s dora --session session.sqlite "Your task"
 ```
 
 The initial `SIGTERM` requests cancellation; the additional ten seconds allow
-cleanup before `SIGKILL`. Storage gets its own five-second timeout after the
-Agent returns. Slow tool cancellation may need a longer grace period. `SIGKILL`
+cleanup before `SIGKILL`. Parent storage and each child-history flush have
+separate five-second budgets; background Task shutdown can also wait five
+seconds. Slow cancellation or child-history cleanup may need a longer grace period. `SIGKILL`
 cannot be handled and may lose the current turn. Only complete tool rounds and
 available model-attempt records are retained, not unfinished streaming text.
 
-With `--session`, SQLite schema version 9 contains `turns`, `messages`, and `model_attempts` tables and records the
+With `--session`, SQLite schema version 10 contains `turns`, `messages`, and `model_attempts` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, attached image references, reasoning captured on round assistant messages, and each model
 call's usage JSON, finish metadata, final reasoning, and reported total usage.
 The SQLite store's `GetAttempts` API pages through audit records separately from
 conversation rounds. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 8 and earlier databases are rejected; start a new file). When
+(schema version 9 and earlier databases are rejected; start a new file). When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain
@@ -677,6 +678,22 @@ commands, tool output, and token usage, so treat persistent files as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
+
+Child task turns are saved in the same database with `parent_turn_id` pointing
+at the main turn. `history list` returns all turns, including each turn's final
+result, status, and `parent_turn_id` for child tasks (omitted for main turns).
+Its total and pagination count both main and child turns, so related turns may
+appear on different pages. `history get` keeps its round-page format: use any
+turn ID to inspect that turn's tool rounds. Parent usage and trace output do
+not include child usage.
+
+Task completion only collects the terminal Turn in memory, without waiting for
+SQLite. Collected children are saved after a prompt finishes and during session
+closure. A background task always retains its original parent, even if it
+finishes during a later prompt; a late result is saved at the next prompt-end
+or session-close boundary. Failed, canceled, and maximum-round children are
+saved too. Child write failures are reported during cleanup without changing
+the task result. Forced termination can still lose unsaved child records.
 
 Session storage preserves tool argument bytes exactly, including malformed JSON.
 `history get` returns each tool call's `input` as a string containing the original
@@ -882,8 +899,10 @@ The result immediately contains a `task_N` job ID. Use the same `job` tool to
 list, poll, or kill it; `job.poll.wait_seconds` controls how long that poll
 waits, while Task itself has no duration estimate. A completed Task result is
 retained for repeated polls. Unlike background shell processes, background
-Tasks run inside Dora and stop—with their uncollected result lost—when the Dora
-process exits. Their nested progress remains hidden, including while they run
+Tasks run inside Dora and cannot survive process exit. On graceful session
+closure Dora cancels remaining Tasks and waits up to five seconds for them to
+return, then saves the collected history before closing storage. Tasks that
+ignore cancellation beyond that grace period may lose their history. Their nested progress remains hidden, including while they run
 in the background. Killing a Task cancels its context cooperatively. The job
 reports `cancelling` until the nested run actually returns and only then reports
 `killed`; a component that ignores context cancellation can therefore delay

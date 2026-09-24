@@ -180,3 +180,59 @@ func TestHistoryGetsStoredMalformedArguments(t *testing.T) {
 		t.Fatalf("listing = %#v", listing)
 	}
 }
+
+func TestHistoryListsParentRelationsAndKeepsGetFormat(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	parent := dora.NewTurn("parent")
+	_ = parent.Complete("parent answer", "")
+	parentID, err := store.CommitTurn(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := dora.NewTurn("child")
+	_ = child.Complete("child answer", "")
+	childID, err := store.CommitChild(ctx, parentID, child, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(ctx, json.RawMessage(`{"action":"list"}`))
+	var list session.TurnPage
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal([]byte(result.Content), &list); err != nil {
+		t.Fatal(err)
+	}
+
+	if list.Total != 2 || list.Turns[0].ID != childID || list.Turns[0].Result != "child answer" || list.Turns[0].ParentTurnID == nil || *list.Turns[0].ParentTurnID != parentID || list.Turns[1].ParentTurnID != nil {
+		t.Fatalf("list=%+v", list)
+	}
+	for _, id := range []int64{parentID, childID} {
+		input, _ := json.Marshal(map[string]any{"action": "get", "turn_id": id})
+		result, err = tool.Execute(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page historyRoundPage
+		if err = json.Unmarshal([]byte(result.Content), &page); err != nil {
+			t.Fatal(err)
+		}
+
+		var fields map[string]json.RawMessage
+		if err = json.Unmarshal([]byte(result.Content), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if len(fields) != 4 || fields["total"] == nil || fields["offset"] == nil || fields["limit"] == nil || fields["rounds"] == nil {
+			t.Fatalf("get shape changed: %s", result.Content)
+		}
+	}
+}

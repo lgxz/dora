@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/app"
 	"github.com/lgxz/dora/internal/config"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/model/router"
@@ -53,10 +54,12 @@ func runTask(ctx context.Context, agent *dora.Agent, instruction string) (string
 		return "", errors.New("task agent is not initialized")
 	}
 	turn := dora.NewTurn(instruction)
-	if err := agent.RunObservedWithOptions(ctx, turn, nil, dora.RunOptions{
+	runErr := agent.RunObservedWithOptions(ctx, turn, nil, dora.RunOptions{
 		ExcludeTools: []string{tasktool.Name},
-	}); err != nil {
-		return "", err
+	})
+	app.RecordTask(ctx, turn, runErr)
+	if runErr != nil {
+		return "", runErr
 	}
 	result, complete := turn.Result()
 	if !complete {

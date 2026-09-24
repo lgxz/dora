@@ -137,21 +137,25 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		_ = sessionStore.Close()
 		return err
 	}
-	defer appSession.Close()
+	defer func() {
+		if err := appSession.Close(); err != nil {
+			fmt.Fprintf(streams.Stderr, "Warning: session cleanup: %v\n", err)
+		}
+	}()
 	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
 	if observer != nil {
 		selection := model.TextSelection()
 		observer.Model(selection.Provider, selection.Profile, selection.Thinking)
 	}
 	// Command jobs are external processes and may outlive Dora; Task jobs are
-	// in-process and are lost on exit. Silenced by --quiet.
+	// in-process and are canceled during session cleanup. Silenced by --quiet.
 	defer func() {
 		commands, tasks := appSession.ActiveCounts()
 		if commands > 0 {
 			info(observer, "background jobs are still running; they keep running after exit")
 		}
 		if tasks > 0 {
-			info(observer, "background tasks are still running; they stop and lose their results after exit")
+			info(observer, "background tasks are still running; canceling them and saving available history before exit")
 		}
 	}()
 

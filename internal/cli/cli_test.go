@@ -938,8 +938,9 @@ model:
 `); err != nil {
 		t.Fatal(err)
 	}
+	sessionPath := filepath.Join(t.TempDir(), "family.sqlite")
 	var stdout strings.Builder
-	if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--config", configPath, "parent request"}, IO{
+	if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--session", sessionPath, "--config", configPath, "parent request"}, IO{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
 		StdinIsTerminal: true, HTTPClient: httpClient,
 	}); err != nil {
@@ -948,6 +949,26 @@ model:
 	if stdout.String() != "parent result\n" || calls != 3 {
 		t.Fatalf("stdout = %q, calls = %d", stdout.String(), calls)
 	}
+	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	saved, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
+	if err != nil || saved.Total != 2 {
+		t.Fatalf("saved=%+v err=%v", saved, err)
+	}
+	child, parent := saved.Turns[0], saved.Turns[1]
+	if parent.ParentTurnID != nil || parent.Result != "parent result" || child.Result != "child result" || child.ParentTurnID == nil || *child.ParentTurnID != parent.ID {
+		t.Fatalf("saved=%+v", saved)
+	}
+
+	attempts, err := store.GetAttempts(context.Background(), child.ID, session.RoundOptions{Limit: 10})
+	if err != nil || attempts.Total != 1 {
+		t.Fatalf("attempts=%+v err=%v", attempts, err)
+	}
+
 }
 
 func TestRunStartsBackgroundTaskAndPollsResult(t *testing.T) {

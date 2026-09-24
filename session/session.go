@@ -39,15 +39,16 @@ type RoundOptions struct {
 // nil for turns stopped at the maximum-round limit, by an error, or by
 // cancellation.
 type TurnSummary struct {
-	ID          int64       `json:"id"`
-	User        string      `json:"user"`
-	Result      string      `json:"result"`
-	Status      TurnStatus  `json:"status"`
-	Error       string      `json:"error,omitempty"`
-	RoundCount  int         `json:"rounds"`
-	Usage       *dora.Usage `json:"usage,omitempty"`
-	TotalUsage  *dora.Usage `json:"total_usage,omitempty"`
-	CommittedAt time.Time   `json:"committed_at"`
+	ID           int64       `json:"id"`
+	ParentTurnID *int64      `json:"parent_turn_id,omitempty"`
+	User         string      `json:"user"`
+	Result       string      `json:"result"`
+	Status       TurnStatus  `json:"status"`
+	Error        string      `json:"error,omitempty"`
+	RoundCount   int         `json:"rounds"`
+	Usage        *dora.Usage `json:"usage,omitempty"`
+	TotalUsage   *dora.Usage `json:"total_usage,omitempty"`
+	CommittedAt  time.Time   `json:"committed_at"`
 }
 
 // TurnPage is a newest-first page of saved turns.
@@ -67,7 +68,7 @@ type RoundPage struct {
 	Rounds []dora.Round `json:"rounds"`
 }
 
-// Reader provides read-only access to saved turns.
+// Reader provides read-only access to saved turns, including child turns.
 type Reader interface {
 	ListTurns(context.Context, ListOptions) (TurnPage, error)
 	GetRounds(context.Context, int64, RoundOptions) (RoundPage, error)
@@ -78,6 +79,7 @@ type Reader interface {
 type Store interface {
 	Reader
 	CommitTurn(context.Context, *dora.Turn) (int64, error)
+	CommitChild(context.Context, int64, *dora.Turn, error) (int64, error)
 	CommitMaxRounds(context.Context, *dora.Turn, error) (int64, error)
 	CommitFailed(context.Context, *dora.Turn, error) (int64, error)
 	CommitCanceled(context.Context, *dora.Turn, error) (int64, error)

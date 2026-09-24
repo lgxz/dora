@@ -638,3 +638,98 @@ func TestStorePersistsDiscardedAttemptsAndTotalUsage(t *testing.T) {
 		t.Fatalf("page=%+v err=%v", empty, err)
 	}
 }
+
+func TestChildTurnsAreLinkedAndIncludedInList(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "family.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CommitChild(ctx, 1, completedTurn(t, "orphan", "answer", 0), nil); err == nil {
+		t.Fatal("accepted self-referencing child without a parent")
+	}
+	parentID, err := store.CommitTurn(ctx, completedTurn(t, "parent", "parent answer", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		status session.TurnStatus
+		cause  error
+	}{
+		{session.TurnStatusCompleted, nil}, {session.TurnStatusFailed, errors.New("failed")},
+		{session.TurnStatusCanceled, context.Canceled}, {session.TurnStatusMaxRounds, dora.ErrMaxRounds},
+	}
+	var ids []int64
+	for _, tc := range cases {
+		child := dora.NewTurn("child")
+		if tc.cause == nil {
+			child = completedTurn(t, "child", "child answer", 1)
+		}
+		id, err := store.CommitChild(ctx, parentID, child, tc.cause)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if _, err := store.CommitChild(ctx, parentID+1000, completedTurn(t, "orphan", "answer", 0), nil); err == nil {
+		t.Fatal("accepted missing parent")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Read one row per page so parent/child relations survive pagination.
+	for offset := 0; offset < len(ids)+1; offset++ {
+		page, err := store.ListTurns(ctx, session.ListOptions{Offset: offset, Limit: 1})
+		if err != nil || page.Total != len(ids)+1 || len(page.Turns) != 1 {
+			t.Fatalf("page=%+v err=%v", page, err)
+		}
+		row := page.Turns[0]
+		if offset == len(ids) {
+			if row.ID != parentID || row.ParentTurnID != nil {
+				t.Fatalf("parent=%+v", row)
+			}
+			continue
+		}
+		i := len(ids) - 1 - offset
+		if row.ID != ids[i] || row.ParentTurnID == nil || *row.ParentTurnID != parentID || row.Status != cases[i].status {
+			t.Fatalf("child=%+v", row)
+		}
+		rounds, err := store.GetRounds(ctx, row.ID, session.RoundOptions{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cases[i].cause == nil && (row.Result != "child answer" || len(rounds.Rounds) != 1) {
+			t.Fatalf("child=%+v rounds=%+v", row, rounds)
+		}
+	}
+	empty, err := store.ListTurns(ctx, session.ListOptions{Offset: len(ids) + 1, Limit: 1})
+	if err != nil || empty.Total != len(ids)+1 || len(empty.Turns) != 0 {
+		t.Fatalf("page=%+v err=%v", empty, err)
+	}
+
+}
+
+func TestStoreRejectsVersionNine(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 9`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 9") {
+		t.Fatalf("error=%v", err)
+	}
+}

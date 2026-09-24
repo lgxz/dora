@@ -390,3 +390,28 @@ func (m *Manager) ActiveCounts() (commands, tasks int) {
 	}
 	return commands, tasks
 }
+
+// StopTasks cancels and waits for in-process Tasks only. Adopted command jobs
+// retain their existing lifetime. Call after the foreground prompt has stopped
+// producing tasks; task runners cannot recursively launch more tasks.
+func (m *Manager) StopTasks(ctx context.Context) error {
+	m.mu.Lock()
+	var tasks []*Job
+	for _, job := range m.jobs {
+		if job.kind == KindTask {
+			tasks = append(tasks, job)
+		}
+	}
+	m.mu.Unlock()
+	for _, task := range tasks {
+		_, _ = m.Kill(task.ID)
+	}
+	for _, task := range tasks {
+		select {
+		case <-task.done:
+		case <-ctx.Done():
+			return fmt.Errorf("wait for task shutdown: %w", ctx.Err())
+		}
+	}
+	return nil
+}

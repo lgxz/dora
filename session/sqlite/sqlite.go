@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 // connectionPragmas travels in the DSN rather than in one-time statements so
 // the driver applies it to every connection it creates, including a pool
@@ -99,7 +99,7 @@ func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) 
 		return 0, errors.New("cannot commit an incomplete turn")
 	}
 	result, _ := turn.Result()
-	return s.commitTurn(ctx, turn, session.TurnStatusCompleted, result, "", turn.Usage())
+	return s.commitTurn(ctx, 0, turn, session.TurnStatusCompleted, result, "", turn.Usage())
 }
 
 // CommitMaxRounds atomically appends an incomplete turn stopped by the round limit.
@@ -113,7 +113,7 @@ func (s *Store) CommitMaxRounds(ctx context.Context, turn *dora.Turn, cause erro
 	if !errors.Is(cause, dora.ErrMaxRounds) {
 		return 0, errors.New("max-round turn requires ErrMaxRounds")
 	}
-	return s.commitTurn(ctx, turn, session.TurnStatusMaxRounds, "", cause.Error(), nil)
+	return s.commitTurn(ctx, 0, turn, session.TurnStatusMaxRounds, "", cause.Error(), nil)
 }
 
 // CommitFailed atomically appends an incomplete turn stopped by an error. Only
@@ -129,7 +129,7 @@ func (s *Store) CommitFailed(ctx context.Context, turn *dora.Turn, cause error) 
 	if cause == nil {
 		return 0, errors.New("failed turn requires an error")
 	}
-	return s.commitTurn(ctx, turn, session.TurnStatusFailed, "", cause.Error(), nil)
+	return s.commitTurn(ctx, 0, turn, session.TurnStatusFailed, "", cause.Error(), nil)
 }
 
 // CommitCanceled atomically appends an incomplete turn stopped by context
@@ -144,10 +144,10 @@ func (s *Store) CommitCanceled(ctx context.Context, turn *dora.Turn, cause error
 	if !errors.Is(cause, context.Canceled) {
 		return 0, errors.New("canceled turn requires context.Canceled")
 	}
-	return s.commitTurn(ctx, turn, session.TurnStatusCanceled, "", cause.Error(), nil)
+	return s.commitTurn(ctx, 0, turn, session.TurnStatusCanceled, "", cause.Error(), nil)
 }
 
-func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
+func (s *Store) commitTurn(ctx context.Context, parentID int64, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
 	usageJSON, err := encodeUsage(usage)
 	if err != nil {
 		return 0, fmt.Errorf("encode final usage: %w", err)
@@ -166,9 +166,9 @@ func (s *Store) commitTurn(ctx context.Context, turn *dora.Turn, status session.
 
 	inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
-    system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
-) VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
-		turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, totalUsageJSON, committedAt.Format(time.RFC3339Nano),
+    parent_turn_id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
+) VALUES (NULLIF(?, 0), ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
+		parentID, turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, totalUsageJSON, committedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert turn: %w", err)
@@ -215,7 +215,7 @@ func (s *Store) ListTurns(ctx context.Context, options session.ListOptions) (ses
 		return session.TurnPage{}, fmt.Errorf("count turns: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
+SELECT id, parent_turn_id, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
 FROM turns
 ORDER BY id DESC
 LIMIT ? OFFSET ?`, options.Limit, options.Offset)
@@ -226,10 +226,14 @@ LIMIT ? OFFSET ?`, options.Limit, options.Offset)
 	page := session.TurnPage{Total: total, Offset: options.Offset, Limit: options.Limit, Turns: []session.TurnSummary{}}
 	for rows.Next() {
 		var summary session.TurnSummary
+		var parent sql.NullInt64
 		var errorText, usageJSON, totalUsageJSON sql.NullString
 		var committedAt string
-		if err := rows.Scan(&summary.ID, &summary.User, &summary.Result, &summary.Status, &errorText, &summary.RoundCount, &usageJSON, &totalUsageJSON, &committedAt); err != nil {
+		if err := rows.Scan(&summary.ID, &parent, &summary.User, &summary.Result, &summary.Status, &errorText, &summary.RoundCount, &usageJSON, &totalUsageJSON, &committedAt); err != nil {
 			return session.TurnPage{}, fmt.Errorf("scan turn summary: %w", err)
+		}
+		if parent.Valid {
+			summary.ParentTurnID = &parent.Int64
 		}
 		summary.Error = errorText.String
 		summary.TotalUsage, err = decodeUsage(totalUsageJSON.String)
@@ -368,7 +372,7 @@ func (s *Store) initialize(ctx context.Context) error {
 func (s *Store) validateSchema(ctx context.Context) error {
 	queries := []string{
 		`SELECT turn_id, attempt_index, record_json FROM model_attempts LIMIT 0`,
-		`SELECT id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at FROM turns LIMIT 0`,
+		`SELECT id, parent_turn_id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at FROM turns LIMIT 0`,
 		`SELECT turn_id, round_index, position, role, content, reasoning, images_json, tool_calls_json, tool_call_id, usage_json FROM messages LIMIT 0`,
 	}
 	for _, query := range queries {
@@ -393,6 +397,7 @@ func (s *Store) validateSchema(ctx context.Context) error {
 var schemaStatements = []string{
 	`CREATE TABLE turns (
         id INTEGER PRIMARY KEY,
+        parent_turn_id INTEGER REFERENCES turns(id) CHECK (parent_turn_id != id),
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
@@ -405,6 +410,7 @@ var schemaStatements = []string{
 		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed', 'canceled') AND error IS NOT NULL)),
 		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
     )`,
+	`CREATE INDEX turns_parent ON turns(parent_turn_id)`,
 	`CREATE TABLE model_attempts (
         turn_id INTEGER NOT NULL,
         attempt_index INTEGER NOT NULL CHECK (attempt_index >= 0),
@@ -599,4 +605,32 @@ func (s *Store) GetAttempts(ctx context.Context, id int64, options session.Round
 		return session.AttemptPage{}, fmt.Errorf("get turn %d attempts: %w", id, err)
 	}
 	return page, nil
+}
+
+// CommitChild records a terminal child without changing the parent transcript or usage.
+func (s *Store) CommitChild(ctx context.Context, parentID int64, turn *dora.Turn, cause error) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("sqlite session is not initialized")
+	}
+	if parentID <= 0 || turn == nil {
+		return 0, errors.New("child requires a parent ID and turn")
+	}
+	status := session.TurnStatusCompleted
+	result, complete := turn.Result()
+	errorText := ""
+	if !complete {
+		if cause == nil {
+			return 0, errors.New("incomplete child requires an error")
+		}
+		errorText = cause.Error()
+		switch {
+		case errors.Is(cause, dora.ErrMaxRounds):
+			status = session.TurnStatusMaxRounds
+		case errors.Is(cause, context.Canceled):
+			status = session.TurnStatusCanceled
+		default:
+			status = session.TurnStatusFailed
+		}
+	}
+	return s.commitTurn(ctx, parentID, turn, status, result, errorText, turn.Usage())
 }

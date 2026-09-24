@@ -402,9 +402,10 @@ driver's busy timeout there is no cross-process coordination, so concurrent
 dora processes sharing one session file can fail their commits when the
 timeout expires.
 
-The database uses schema version 9 and three tables:
+The database uses schema version 10 and three tables:
 
-- `turns`: one row per saved invocation, including `status` (`completed`,
+- `turns`: one row per saved invocation, with nullable `parent_turn_id` referencing
+  the parent row (NULL for main turns), including `status` (`completed`,
   `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
   `user`, final `result`, round count, final-response `usage_json`, reported `total_usage_json`, and commit
   time. All non-completed rows have an error and empty result/final usage;
@@ -427,7 +428,7 @@ complete rounds plus the terminal run error. All commit paths also store model
 attempts, including complete streams that ended at an output limit; interrupted
 transport streams may have unavailable response data. Provider continuation is
 intentionally not stored. SQLite allocates the turn ID and foreign keys bind every message to
-its turn. Schema version 8 and older databases are rejected rather than migrated.
+its turn. Schema version 9 and older databases are rejected rather than migrated.
 
 History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also
@@ -437,9 +438,12 @@ The existing history output size cap still applies.
 
 `tool/history` is registered from the first turn against the active session.
 An empty database is a valid history source whose `list` result is empty.
-`list` returns saved turns newest first and includes status, error, and the
-number of rounds in each turn. `get` selects one turn by ID and returns a chronological
-page of complete rounds; both actions accept `offset` and `limit`. History tool
+`list` returns all turns newest first and includes result, status, error, usage,
+round count, and `parent_turn_id` for child rows (omitted for main turns).
+Totals and pagination include both main and child rows; a family may span
+multiple pages. `get` accepts either kind of turn ID and returns only a
+chronological page of complete rounds with `total`, `offset`, `limit`, and
+`rounds`. Both actions accept `offset` and `limit`. History tool
 calls and their results are ordinary messages in the current Turn and are
 persisted with it on completion.
 
@@ -492,6 +496,18 @@ model-visible definitions and executable tools. All other tools and their
 underlying process, filesystem, working-directory, and permission state remain
 shared; this is conversation-context isolation, not a security sandbox.
 
+`internal/cli.runTask` reports its terminal Turn and error to an application
+collector carried in the run context. Each prompt owns a separate collector;
+background contexts preserve that collector after the parent prompt returns.
+The callback only retains the terminal Turn; it does not write SQLite. The
+application commits the parent first, then saves collected children with
+`Store.CommitChild` at prompt completion and session closure. Late background
+results wait for the next such boundary. Children retain their original parent
+ID, including across later prompts. All four terminal statuses reuse the
+existing turn serialization. Child persistence errors are returned as cleanup
+diagnostics, never substituted for task execution results. No Observer or
+kernel change is required, and the parent trace/usage remain parent-only.
+
 Multiple Task calls returned in one response follow the Agent's normal
 unbounded concurrent tool execution. Nested runs use no Observer, preventing
 parallel child progress from interleaving in the terminal; the outer Task
@@ -513,8 +529,11 @@ the nested run observes its context and returns.
 
 Background Tasks have no concurrency limit. They are goroutines in the Dora
 process, so they do not survive process exit and any uncollected result is
-lost. This differs from adopted command processes, which continue after Dora
-exits. Foreground and background Task calls inherit run context values such as
+lost on forced exit. On graceful session closure, Dora cancels only in-process
+Tasks and waits up to five seconds for their terminal records before flushing
+children and closing storage. Adopted command processes retain their normal
+lifetime; explicit ACP Shutdown still cancels all jobs. Uncooperative Tasks
+that outlive this grace period cannot contribute further history. Foreground and background Task calls inherit run context values such as
 the working directory. Background Tasks deliberately drop the parent deadline
 and cancellation while retaining those values, preserving their independent
 lifecycle; they remain cancellable through the job tool.

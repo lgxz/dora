@@ -46,7 +46,7 @@ func New(reader session.Reader) (*Tool, error) {
 func (t *Tool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "history",
-		Description: "Inspect saved turns and model usage in this session. Earlier turns are not in the current context; use list to find turn IDs, status, errors, and final-response usage, then get to read tool rounds and their usage. In get results, tool-call input is argument text encoded as a string; input_bytes is a base64 fallback for invalid UTF-8.",
+		Description: "Inspect saved turns and model usage in this session. Earlier turns are not in the current context; use list to find all turns, their results, status, usage, and parent_turn_id for child tasks, then get to read tool rounds by any turn ID. In get results, tool-call input is argument text encoded as a string; input_bytes is a base64 fallback for invalid UTF-8.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {

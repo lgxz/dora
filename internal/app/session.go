@@ -62,10 +62,14 @@ type Session struct {
 	jobs             *job.Manager
 	workingDirectory string
 
-	mu     sync.Mutex
-	active context.CancelFunc
-	done   chan struct{}
-	closed bool
+	mu              sync.Mutex
+	active          context.CancelFunc
+	done            chan struct{}
+	closed          bool
+	recordMu        sync.Mutex
+	childRecords    []childRecord
+	childrenClosed  bool
+	childSaveErrors []error
 }
 
 // NewSession creates an application session from already assembled runtime
@@ -100,6 +104,9 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 		return PromptResult{}, err
 	}
 	defer finish()
+	collector := &childCollector{owner: s}
+	runCtx = context.WithValue(runCtx, childrenKey{}, collector)
+	defer s.flushChildren(false)
 
 	turn := dora.NewTurn(prompt)
 	for {
@@ -111,8 +118,9 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 			// on a detached context like the terminal paths, so a cancellation
 			// racing the run-to-store transition cannot discard it.
 			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
-			_, commitErr := s.store.CommitTurn(commitCtx, turn)
+			parentID, commitErr := s.store.CommitTurn(commitCtx, turn)
 			cancelCommit()
+			collector.parentID = parentID
 			if commitErr != nil {
 				return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
 			}
@@ -130,8 +138,9 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 				continue
 			}
 			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
-			_, commitErr := s.store.CommitMaxRounds(commitCtx, turn, runErr)
+			parentID, commitErr := s.store.CommitMaxRounds(commitCtx, turn, runErr)
 			cancelCommit()
+			collector.parentID = parentID
 			if commitErr != nil {
 				return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
 			}
@@ -146,12 +155,14 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 
 		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
 		var commitErr error
+		var parentID int64
 		if errors.Is(runErr, context.Canceled) {
-			_, commitErr = s.store.CommitCanceled(commitCtx, turn, runErr)
+			parentID, commitErr = s.store.CommitCanceled(commitCtx, turn, runErr)
 		} else {
-			_, commitErr = s.store.CommitFailed(commitCtx, turn, runErr)
+			parentID, commitErr = s.store.CommitFailed(commitCtx, turn, runErr)
 		}
 		cancelCommit()
+		collector.parentID = parentID
 		if commitErr != nil {
 			return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
 		}
@@ -240,8 +251,16 @@ func (s *Session) close(cancelJobs bool) error {
 	if cancelJobs {
 		s.jobs.CancelAll()
 	}
-	if err := s.store.Close(); err != nil {
-		return fmt.Errorf("close application session: %w", err)
+	// Background Tasks do not survive session closure. Give their canceled
+	// Turns a chance to reach the collector before closing the store.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), commitTimeout)
+	if err := s.jobs.StopTasks(cleanupCtx); err != nil {
+		s.childSaveErrors = append(s.childSaveErrors, err)
 	}
-	return nil
+	cancelCleanup()
+	s.flushChildren(true)
+	if err := s.store.Close(); err != nil {
+		s.childSaveErrors = append(s.childSaveErrors, fmt.Errorf("close application session: %w", err))
+	}
+	return errors.Join(s.childSaveErrors...)
 }
