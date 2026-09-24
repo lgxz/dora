@@ -2,7 +2,7 @@
 
 This module adapts **dora** (the terminal LLM agent written in Go, see
 `/Users/lgx/Src/dora`) so it can be driven by the Harbor evaluation
-framework (`harbor run --dataset terminal-bench@2.1`).
+framework (`harbor run --dataset terminal-bench/terminal-bench@4.0.0`).
 
 Class
 -----
@@ -36,12 +36,13 @@ How to run
 The module must be importable by the Harbor Python process. Either place
 ``scripts/eval`` on ``PYTHONPATH`` or ``pip install -e .`` the project, then::
 
-    harbor run --dataset terminal-bench@2.1 --agent aipymini:AIPyMiniAgent -m openrouter/auto
+    harbor run --dataset terminal-bench/terminal-bench@4.0.0 --agent aipymini:AIPyMiniAgent -m openrouter/auto
 
 For the ``aipymini`` Agent name in Hub, use ``run_tb.sh``. It directly writes a minimal
-private temporary YAML config containing the Agent name, import path, and
-``model_name``. It defaults to ``deepseek/deepseek-v4-pro`` and can be overridden
-with ``-m PROVIDER/PROFILE``. The temporary config is removed on exit. No static
+private temporary YAML config containing the Terminal-Bench 4.0.0 dataset, the
+three excluded H100 tasks, the Agent name, import path, and ``model_name``. It
+defaults to ``deepseek/deepseek-v4-pro`` and can be overridden with ``-m
+PROVIDER/PROFILE``. The temporary config is removed on exit. No static
 configuration file is needed; pass other job settings through Harbor flags such
 as ``-n``. No ``-m`` or ``--ak model`` is passed to Harbor.
 For example: ``scripts/eval/run_tb.sh -m trust/hy4-preview -n 2``.

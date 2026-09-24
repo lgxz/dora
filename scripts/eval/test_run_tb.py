@@ -13,10 +13,12 @@ from harbor.models.job.config import JobConfig
 
 class RunTBTests(unittest.TestCase):
     DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
-    OFFICIAL_DATASET = (
-        "terminal-bench/terminal-bench-2-1@"
-        "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a"
-    )
+    OFFICIAL_DATASET = "terminal-bench/terminal-bench@4.0.0"
+    GPU_TASKS = [
+        "fp8-rmsnorm-gemm",
+        "jax-speedrun-gpu",
+        "math-eval-grader",
+    ]
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="aipymini-tb-wrapper-test-")
@@ -101,8 +103,9 @@ class RunTBTests(unittest.TestCase):
         config = capture["config"]
         self.assertEqual(config, {
             "datasets": [{
-                "name": "terminal-bench/terminal-bench-2-1",
+                "name": "terminal-bench/terminal-bench",
                 "ref": self.OFFICIAL_DATASET.split("@", 1)[1],
+                "exclude_task_names": self.GPU_TASKS,
             }],
             "agents": [{
                 "name": "aipymini",
@@ -111,8 +114,9 @@ class RunTBTests(unittest.TestCase):
             }],
         })
         job_config = JobConfig.model_validate(config)
-        self.assertEqual(job_config.datasets[0].name, "terminal-bench/terminal-bench-2-1")
+        self.assertEqual(job_config.datasets[0].name, "terminal-bench/terminal-bench")
         self.assertEqual(job_config.datasets[0].ref, self.OFFICIAL_DATASET.split("@", 1)[1])
+        self.assertEqual(job_config.datasets[0].exclude_task_names, self.GPU_TASKS)
         self.assertNotIn("-m", capture["args"])
         self.assertNotIn("--ak", capture["args"])
         self.assertNotIn("-d", capture["args"])
@@ -269,7 +273,11 @@ class RunTBTests(unittest.TestCase):
         self.assertNotIn("-d", args)
         self.assertEqual(
             capture["config"]["datasets"],
-            [{"name": "example/custom", "ref": "sha256:test"}],
+            [{
+                "name": "example/custom",
+                "ref": "sha256:test",
+                "exclude_task_names": self.GPU_TASKS,
+            }],
         )
 
     def test_invalid_dataset_override_fails_before_running_harbor(self):

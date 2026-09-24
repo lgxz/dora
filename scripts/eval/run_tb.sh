@@ -8,7 +8,7 @@
 #
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $HOME/.local/bin/dora
-#   AIPYMINI_DATASET Harbor 数据集，默认固定为 leaderboard 官方版本
+#   AIPYMINI_DATASET Harbor 数据集，默认固定为 Terminal-Bench 4.0.0
 #   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
 # 同时设置 TELEGRAM_TOKEN 和 TELEGRAM_CHAT_ID 时，运行结束后自动发送通知。
 #
@@ -75,7 +75,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 可覆盖的默认值。
 : "${AIPYMINI_BINARY:=${HOME}/.local/bin/dora}"
-: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a}"
+: "${AIPYMINI_DATASET:=terminal-bench/terminal-bench@4.0.0}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
 if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
   echo "错误：AIPYMINI_DATASET 必须使用 ORG/NAME@REF 格式。" >&2
@@ -208,6 +208,10 @@ yaml_dataset_ref="$(printf '%s' "$dataset_ref" | sed "s/'/''/g")"
     'datasets:' \
     "  - name: '$yaml_dataset_name'" \
     "    ref: '$yaml_dataset_ref'" \
+    '    exclude_task_names:' \
+    '      - fp8-rmsnorm-gemm' \
+    '      - jax-speedrun-gpu' \
+    '      - math-eval-grader' \
     'agents:' \
     '  - name: aipymini' \
     '    import_path: aipymini:AIPyMiniAgent' \
