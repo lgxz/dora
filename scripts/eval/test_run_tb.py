@@ -15,9 +15,10 @@ from harbor.models.task.id import PackageTaskId
 class RunTBTests(unittest.TestCase):
     DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
     OFFICIAL_DATASET = "terminal-bench/terminal-bench@4.0.0"
-    GPU_TASKS = [
+    EXCLUDED_TASKS = [
         "terminal-bench/fp8-rmsnorm-gemm",
         "terminal-bench/jax-speedrun-gpu",
+        "terminal-bench/live-database-cutover",
         "terminal-bench/math-eval-grader",
     ]
 
@@ -106,7 +107,7 @@ class RunTBTests(unittest.TestCase):
             "datasets": [{
                 "name": "terminal-bench/terminal-bench",
                 "ref": self.OFFICIAL_DATASET.split("@", 1)[1],
-                "exclude_task_names": self.GPU_TASKS,
+                "exclude_task_names": self.EXCLUDED_TASKS,
             }],
             "agents": [{
                 "name": "aipymini",
@@ -117,7 +118,10 @@ class RunTBTests(unittest.TestCase):
         job_config = JobConfig.model_validate(config)
         self.assertEqual(job_config.datasets[0].name, "terminal-bench/terminal-bench")
         self.assertEqual(job_config.datasets[0].ref, self.OFFICIAL_DATASET.split("@", 1)[1])
-        self.assertEqual(job_config.datasets[0].exclude_task_names, self.GPU_TASKS)
+        self.assertEqual(
+            job_config.datasets[0].exclude_task_names,
+            self.EXCLUDED_TASKS,
+        )
         self.assertNotIn("-m", capture["args"])
         self.assertNotIn("--ak", capture["args"])
         self.assertNotIn("-d", capture["args"])
@@ -139,20 +143,21 @@ class RunTBTests(unittest.TestCase):
         dataset = DatasetConfig(
             name="terminal-bench/terminal-bench",
             ref="4.0.0",
-            exclude_task_names=self.GPU_TASKS,
+            exclude_task_names=self.EXCLUDED_TASKS,
         )
         task_ids = [
             PackageTaskId(org="terminal-bench", name="fp8-rmsnorm-gemm"),
             PackageTaskId(org="terminal-bench", name="jax-speedrun-gpu"),
             PackageTaskId(org="terminal-bench", name="math-eval-grader"),
             PackageTaskId(org="terminal-bench", name="live-database-cutover"),
+            PackageTaskId(org="terminal-bench", name="distributed-dedup"),
         ]
 
         filtered = dataset._filter_task_ids(task_ids)
 
         self.assertEqual(
             [task_id.get_name() for task_id in filtered],
-            ["terminal-bench/live-database-cutover"],
+            ["terminal-bench/distributed-dedup"],
         )
 
     def test_model_is_yaml_quoted(self):
@@ -297,7 +302,7 @@ class RunTBTests(unittest.TestCase):
             [{
                 "name": "example/custom",
                 "ref": "sha256:test",
-                "exclude_task_names": self.GPU_TASKS,
+                "exclude_task_names": self.EXCLUDED_TASKS,
             }],
         )
 

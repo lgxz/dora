@@ -211,6 +211,7 @@ yaml_dataset_ref="$(printf '%s' "$dataset_ref" | sed "s/'/''/g")"
     '    exclude_task_names:' \
     '      - terminal-bench/fp8-rmsnorm-gemm' \
     '      - terminal-bench/jax-speedrun-gpu' \
+    '      - terminal-bench/live-database-cutover' \
     '      - terminal-bench/math-eval-grader' \
     'agents:' \
     '  - name: aipymini' \

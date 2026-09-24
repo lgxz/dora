@@ -40,7 +40,7 @@ The module must be importable by the Harbor Python process. Either place
 
 For the ``aipymini`` Agent name in Hub, use ``run_tb.sh``. It directly writes a minimal
 private temporary YAML config containing the Terminal-Bench 4.0.0 dataset, the
-three excluded H100 tasks, the Agent name, import path, and ``model_name``. It
+excluded H100 and 16-CPU tasks, the Agent name, import path, and ``model_name``. It
 defaults to ``deepseek/deepseek-v4-pro`` and can be overridden with ``-m
 PROVIDER/PROFILE``. The temporary config is removed on exit. No static
 configuration file is needed; pass other job settings through Harbor flags such
