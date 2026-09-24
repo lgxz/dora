@@ -8,16 +8,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harbor.models.job.config import JobConfig
+from harbor.models.job.config import DatasetConfig, JobConfig
+from harbor.models.task.id import PackageTaskId
 
 
 class RunTBTests(unittest.TestCase):
     DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
     OFFICIAL_DATASET = "terminal-bench/terminal-bench@4.0.0"
     GPU_TASKS = [
-        "fp8-rmsnorm-gemm",
-        "jax-speedrun-gpu",
-        "math-eval-grader",
+        "terminal-bench/fp8-rmsnorm-gemm",
+        "terminal-bench/jax-speedrun-gpu",
+        "terminal-bench/math-eval-grader",
     ]
 
     def setUp(self):
@@ -133,6 +134,26 @@ class RunTBTests(unittest.TestCase):
         self.assertNotIn("dora", json.dumps(capture).lower())
         self.assertNotIn("test-key-not-for-logs", json.dumps(config))
         self.assertFalse(self.telegram_capture.exists())
+
+    def test_gpu_exclusions_match_package_task_names(self):
+        dataset = DatasetConfig(
+            name="terminal-bench/terminal-bench",
+            ref="4.0.0",
+            exclude_task_names=self.GPU_TASKS,
+        )
+        task_ids = [
+            PackageTaskId(org="terminal-bench", name="fp8-rmsnorm-gemm"),
+            PackageTaskId(org="terminal-bench", name="jax-speedrun-gpu"),
+            PackageTaskId(org="terminal-bench", name="math-eval-grader"),
+            PackageTaskId(org="terminal-bench", name="live-database-cutover"),
+        ]
+
+        filtered = dataset._filter_task_ids(task_ids)
+
+        self.assertEqual(
+            [task_id.get_name() for task_id in filtered],
+            ["terminal-bench/live-database-cutover"],
+        )
 
     def test_model_is_yaml_quoted(self):
         model = "openrouter/team's-\"profile\""

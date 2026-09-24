@@ -209,9 +209,9 @@ yaml_dataset_ref="$(printf '%s' "$dataset_ref" | sed "s/'/''/g")"
     "  - name: '$yaml_dataset_name'" \
     "    ref: '$yaml_dataset_ref'" \
     '    exclude_task_names:' \
-    '      - fp8-rmsnorm-gemm' \
-    '      - jax-speedrun-gpu' \
-    '      - math-eval-grader' \
+    '      - terminal-bench/fp8-rmsnorm-gemm' \
+    '      - terminal-bench/jax-speedrun-gpu' \
+    '      - terminal-bench/math-eval-grader' \
     'agents:' \
     '  - name: aipymini' \
     '    import_path: aipymini:AIPyMiniAgent' \
