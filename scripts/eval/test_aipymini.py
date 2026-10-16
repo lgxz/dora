@@ -49,6 +49,11 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
     def agent(self, **kwargs):
         return AIPyMiniAgent(logs_dir=self.logs_dir, version="test", **kwargs)
 
+    def trace_agent(self, **kwargs):
+        """Agent with the opt-in trace dump enabled, as run_tb.sh --trace does."""
+        with patch.dict("os.environ", {"AIPYMINI_TRACE": "1"}):
+            return self.agent(**kwargs)
+
     def test_model_name_drives_flags_and_metadata(self):
         agent = self.agent(model_name="openrouter/auto")
         self.assertEqual(
@@ -117,13 +122,34 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
             aipymini_argv,
             [
                 BINARY_PATH,
-                "--trace-file",
-                TRACE_PATH,
                 "--model",
                 agent.model_name,
             ],
         )
+        self.assertNotIn("--trace-file", aipymini_argv)
         self.assertIn("> /logs/agent/run.txt 2>&1", command)
+
+    def test_trace_dump_is_opt_in(self):
+        for env_value, expected in (
+            (None, []),
+            ("0", []),
+            ("1", ["--trace-file", TRACE_PATH]),
+            ("true", ["--trace-file", TRACE_PATH]),
+        ):
+            with self.subTest(env_value=env_value):
+                if env_value is None:
+                    agent = self.agent(model_name="trust/hy4-preview")
+                else:
+                    with patch.dict("os.environ", {"AIPYMINI_TRACE": env_value}):
+                        agent = self.agent(model_name="trust/hy4-preview")
+                agent.exec_as_agent = AsyncMock()
+                asyncio.run(agent.run("Inspect the repository", object(), None))
+                command = agent.exec_as_agent.call_args.kwargs["command"]
+                aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" > ", 1)[0])
+                self.assertEqual(
+                    [arg for arg in aipymini_argv if arg in ("--trace-file", TRACE_PATH)],
+                    expected,
+                )
 
     def test_optional_tooling_skips_apt_when_everything_exists(self):
         agent = self.agent(model_name="trust/hy4-preview")
@@ -233,7 +259,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         agent.logger.warning.assert_not_called()
 
     def test_populates_harbor_context_from_trace(self):
-        agent = self.agent(model_name="trust/hy4-preview")
+        agent = self.trace_agent(model_name="trust/hy4-preview")
         (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
             "schema_version": 2,
             "user": "test",
@@ -258,7 +284,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         self.assertIsNone(context.cost_usd)
 
     def test_converts_parent_trace_to_valid_atif(self):
-        agent = self.agent(model_name="trust/hy4-preview")
+        agent = self.trace_agent(model_name="trust/hy4-preview")
         trace_path = self.logs_dir / Path(TRACE_PATH).name
         trace_path.write_text(json.dumps(trace_v2({
             "schema_version": 2,
@@ -320,7 +346,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         self.assertEqual(trajectory.final_metrics.total_steps, 4)
 
     def test_invalid_tool_arguments_are_preserved_in_atif(self):
-        agent = self.agent(model_name="trust/hy4-preview")
+        agent = self.trace_agent(model_name="trust/hy4-preview")
         (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
             "schema_version": 2,
             "user": "test",
@@ -367,10 +393,28 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
             self.agent(model_name="deepseek/deepseek-v4-pro")._trajectory_from_trace(dict(schema_version=1))
 
     def test_missing_trace_leaves_context_empty(self):
-        agent = self.agent(model_name="trust/hy4-preview")
+        agent = self.trace_agent(model_name="trust/hy4-preview")
         context = AgentContext()
         agent.populate_context_post_run(context)
         self.assertTrue(context.is_empty())
+
+    def test_trace_disabled_skips_trajectory_and_token_accounting(self):
+        agent = self.agent(model_name="trust/hy4-preview")
+        (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
+            "schema_version": 2,
+            "user": "test",
+            "rounds": [],
+            "final": {
+                "content": "done",
+                "usage": {"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
+            },
+        })))
+        context = AgentContext()
+
+        agent.populate_context_post_run(context)
+
+        self.assertTrue(context.is_empty())
+        self.assertFalse((self.logs_dir / Path(TRAJECTORY_PATH).name).exists())
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ class RunTBTests(unittest.TestCase):
             "    'args': args, 'path': str(config_path),\n"
             "    'adapter_path': aipymini.__file__,\n"
             "    'binary_path': os.environ['AIPYMINI_BINARY'],\n"
+            "    'trace_env': os.environ.get('AIPYMINI_TRACE', ''),\n"
             "    'mode': config_path.stat().st_mode & 0o777,\n"
             "    'config': yaml.safe_load(config_path.read_text())}\n"
             "capture_path.write_text(json.dumps(capture))\n"
@@ -173,6 +174,17 @@ class RunTBTests(unittest.TestCase):
         capture = json.loads(self.capture.read_text())
         self.assertNotIn("--model=openrouter/auto", capture["args"])
         self.assertEqual(capture["config"]["agents"][0]["model_name"], "openrouter/auto")
+
+    def test_trace_export_is_opt_in(self):
+        self.run_wrapper(["-m", "openrouter/auto"])
+        self.assertEqual(json.loads(self.capture.read_text())["trace_env"], "")
+
+        self.capture.unlink()
+        result = self.run_wrapper(["-m", "openrouter/auto", "--trace"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(capture["trace_env"], "1")
+        self.assertNotIn("--trace", capture["args"])
 
     def test_uses_default_model_when_model_is_omitted(self):
         result = self.run_wrapper([])

@@ -50,8 +50,11 @@ If both ``TELEGRAM_TOKEN`` and ``TELEGRAM_CHAT_ID`` are set, the wrapper sends a
 completion, failure, or interruption notification through the Telegram Bot API.
 
 The local Linux binary path is given via the host ``AIPYMINI_BINARY``
-environment variable (or the constructor kwarg ``aipymini_binary``). API keys go
-through ``extra_env`` (``--ae``)::
+environment variable (or the constructor kwarg ``aipymini_binary``). The ATIF
+trace dump is opt-in: by default dora runs without ``--trace-file``, so no
+``trajectory.json`` and no Harbor token accounting is produced. Enable it with
+``run_tb.sh --trace`` or by exporting ``AIPYMINI_TRACE=1`` on the host. API
+keys go through ``extra_env`` (``--ae``)::
 
     --ak aipymini_binary=/path/to/aipymini-linux \\
     --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
@@ -205,6 +208,14 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 "model_name is required; set agents[].model_name in the Harbor "
                 "job config or pass Harbor -m."
             )
+        # The ATIF trace dump is opt-in (run_tb.sh --trace, or the host
+        # AIPYMINI_TRACE environment variable). A mismatched dora binary and
+        # adapter pair only surfaces through the trace conversion, so the
+        # default run stays free of that coupling.
+        self._trace_enabled = (
+            str(os.environ.get("AIPYMINI_TRACE", "")).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
 
     @override
     def build_cli_flags(self) -> str:
@@ -410,13 +421,19 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         instruction_env_var = instruction_shell_var.upper()
         run_env[instruction_env_var] = instruction
 
+        # Opt-in trace dump: without it the binary writes no trace file and
+        # populate_context_post_run has nothing to convert.
+        trace_flags = (
+            f"--trace-file {shlex.quote(TRACE_PATH)} " if self._trace_enabled else ""
+        )
+
         command = (
             "export PATH=\"$HOME/.local/bin:$PATH\"; "
             f"{instruction_shell_var}=\"${instruction_env_var}\"; "
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} --trace-file {shlex.quote(TRACE_PATH)} "
+            f"{BINARY_PATH} {trace_flags}"
             f"{extra_flags}> /logs/agent/run.txt 2>&1"
         )
 
@@ -432,6 +449,10 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
         """Create ATIF output and populate Harbor's aggregate token fields."""
+        if not self._trace_enabled:
+            # Trace dump is disabled: there is no trace file to convert and
+            # the token fields are intentionally left unset.
+            return
         trajectory = self._write_trajectory()
         if trajectory is None or trajectory.final_metrics is None:
             return

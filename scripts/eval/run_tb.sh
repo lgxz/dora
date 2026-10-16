@@ -2,14 +2,17 @@
 #
 # run_tb.sh — Harbor Terminal-Bench 评测启动入口（配合 scripts/eval/aipymini.py 使用）。
 #
-# 用法：run_tb.sh [-m PROVIDER/PROFILE] [Harbor 参数...]
+# 用法：run_tb.sh [-m PROVIDER/PROFILE] [--trace] [Harbor 参数...]
 # 示例：run_tb.sh -m trust/hy4-preview -n 2
 # -m/--model 可选，默认 deepseek/deepseek-v4-pro；由本脚本消费，不透传给 Harbor。
+# --trace 开启 ATIF 轨迹导出，默认关闭。开启后 aipymini 会向沙箱内二进制传
+# --trace-file 并生成 trajectory.json，Harbor 结果才包含 token 统计。
 #
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $HOME/.local/bin/dora
 #   AIPYMINI_DATASET Harbor 数据集，默认固定为 Terminal-Bench 4.0.0
 #   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
+#   AIPYMINI_TRACE   是否导出 ATIF 轨迹，1 开启；--trace 等价于置 1
 # 同时设置 TELEGRAM_TOKEN 和 TELEGRAM_CHAT_ID 时，运行结束后自动发送通知。
 #
 # 其余 Harbor 参数透传；Agent、数据集和配置入口由本脚本管理，不可另行覆盖。
@@ -21,9 +24,10 @@ set -euo pipefail
 DEFAULT_MODEL="deepseek/deepseek-v4-pro"
 
 usage() {
-  echo "用法：$0 [-m PROVIDER/PROFILE] [Harbor 参数...]"
+  echo "用法：$0 [-m PROVIDER/PROFILE] [--trace] [Harbor 参数...]"
   echo "示例：$0 -m trust/hy4-preview -n 2"
   echo "-m/--model 可选，默认 ${DEFAULT_MODEL}；模型同时用于 aipymini 选模和 Hub 元数据。"
+  echo "--trace 开启 ATIF 轨迹导出（默认关闭），开启后 Harbor 结果包含 token 统计。"
 }
 
 model_spec=""
@@ -53,6 +57,10 @@ while [ "$#" -gt 0 ]; do
       set_model "${1#*=}"
       shift
       ;;
+    --trace)
+      AIPYMINI_TRACE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -77,6 +85,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${AIPYMINI_BINARY:=${HOME}/.local/bin/dora}"
 : "${AIPYMINI_DATASET:=terminal-bench/terminal-bench@4.0.0}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
+: "${AIPYMINI_TRACE:=}"
 if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
   echo "错误：AIPYMINI_DATASET 必须使用 ORG/NAME@REF 格式。" >&2
   exit 1
@@ -195,6 +204,7 @@ cp "$SCRIPT_DIR/aipymini.py" "$aipymini_adapter_path"
 cp "$AIPYMINI_BINARY" "$aipymini_binary_path"
 chmod 700 "$aipymini_binary_path"
 export AIPYMINI_BINARY="$aipymini_binary_path"
+export AIPYMINI_TRACE
 export PYTHONPATH="$job_config_dir${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 
