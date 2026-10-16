@@ -47,6 +47,7 @@ class RunTBTests(unittest.TestCase):
             "    'adapter_path': aipymini.__file__,\n"
             "    'binary_path': os.environ['AIPYMINI_BINARY'],\n"
             "    'trace_env': os.environ.get('AIPYMINI_TRACE', ''),\n"
+            "    'max_rounds_env': os.environ.get('AIPYMINI_MAX_ROUNDS', ''),\n"
             "    'mode': config_path.stat().st_mode & 0o777,\n"
             "    'config': yaml.safe_load(config_path.read_text())}\n"
             "capture_path.write_text(json.dumps(capture))\n"
@@ -185,6 +186,33 @@ class RunTBTests(unittest.TestCase):
         capture = json.loads(self.capture.read_text())
         self.assertEqual(capture["trace_env"], "1")
         self.assertNotIn("--trace", capture["args"])
+
+    def test_max_rounds_is_optional(self):
+        self.run_wrapper(["-m", "openrouter/auto"])
+        self.assertEqual(json.loads(self.capture.read_text())["max_rounds_env"], "")
+
+        self.capture.unlink()
+        result = self.run_wrapper(["-m", "openrouter/auto", "--max-rounds", "64"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(capture["max_rounds_env"], "64")
+        self.assertNotIn("--max-rounds", capture["args"])
+
+        self.capture.unlink()
+        result = self.run_wrapper(["-m", "openrouter/auto", "--max-rounds=128"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.capture.read_text())["max_rounds_env"], "128")
+
+    def test_invalid_max_rounds_fail_before_running_harbor(self):
+        cases = [
+            ["--max-rounds"], ["--max-rounds="], ["--max-rounds", "0"],
+            ["--max-rounds=0"], ["--max-rounds", "abc"], ["--max-rounds", "-3"],
+            ["--max-rounds", "3.5"],
+        ]
+        for args in cases:
+            with self.subTest(args=args):
+                self.assertNotEqual(self.run_wrapper(args).returncode, 0)
+                self.assertFalse(self.capture.exists())
 
     def test_uses_default_model_when_model_is_omitted(self):
         result = self.run_wrapper([])

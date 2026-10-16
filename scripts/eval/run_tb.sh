@@ -2,17 +2,20 @@
 #
 # run_tb.sh — Harbor Terminal-Bench 评测启动入口（配合 scripts/eval/aipymini.py 使用）。
 #
-# 用法：run_tb.sh [-m PROVIDER/PROFILE] [--trace] [Harbor 参数...]
+# 用法：run_tb.sh [-m PROVIDER/PROFILE] [--trace] [--max-rounds N] [Harbor 参数...]
 # 示例：run_tb.sh -m trust/hy4-preview -n 2
 # -m/--model 可选，默认 deepseek/deepseek-v4-pro；由本脚本消费，不透传给 Harbor。
 # --trace 开启 ATIF 轨迹导出，默认关闭。开启后 aipymini 会向沙箱内二进制传
 # --trace-file 并生成 trajectory.json，Harbor 结果才包含 token 统计。
+# --max-rounds 可选，覆盖沙箱内二进制每段的最大模型-工具轮数（正整数）；
+# 不提供时使用二进制内置默认值。
 #
 # 可通过环境变量覆盖的默认值：
 #   AIPYMINI_BINARY  本地 Linux 二进制路径，默认 $HOME/.local/bin/dora
 #   AIPYMINI_DATASET Harbor 数据集，默认固定为 Terminal-Bench 4.0.0
 #   AIPYMINI_JOBS_DIR 结果输出目录，默认 $HOME/jobs
 #   AIPYMINI_TRACE   是否导出 ATIF 轨迹，1 开启；--trace 等价于置 1
+#   AIPYMINI_MAX_ROUNDS 覆盖最大轮数（正整数）；--max-rounds 等价于置 N
 # 同时设置 TELEGRAM_TOKEN 和 TELEGRAM_CHAT_ID 时，运行结束后自动发送通知。
 #
 # 其余 Harbor 参数透传；Agent、数据集和配置入口由本脚本管理，不可另行覆盖。
@@ -24,14 +27,21 @@ set -euo pipefail
 DEFAULT_MODEL="deepseek/deepseek-v4-pro"
 
 usage() {
-  echo "用法：$0 [-m PROVIDER/PROFILE] [--trace] [Harbor 参数...]"
+  echo "用法：$0 [-m PROVIDER/PROFILE] [--trace] [--max-rounds N] [Harbor 参数...]"
   echo "示例：$0 -m trust/hy4-preview -n 2"
   echo "-m/--model 可选，默认 ${DEFAULT_MODEL}；模型同时用于 aipymini 选模和 Hub 元数据。"
   echo "--trace 开启 ATIF 轨迹导出（默认关闭），开启后 Harbor 结果包含 token 统计。"
+  echo "--max-rounds N 可选，覆盖每段最大模型-工具轮数（正整数），不提供用二进制默认。"
 }
 
 model_spec=""
 harbor_args=()
+require_positive_int() {
+  if [[ ! "$1" =~ ^[0-9]+$ ]] || [ "$1" -le 0 ]; then
+    echo "错误：max-rounds 必须是正整数，收到：$1" >&2
+    exit 1
+  fi
+}
 set_model() {
   if [ -n "$model_spec" ]; then
     echo "错误：每次评测只能指定一个 -m/--model。" >&2
@@ -61,6 +71,20 @@ while [ "$#" -gt 0 ]; do
       AIPYMINI_TRACE=1
       shift
       ;;
+    --max-rounds)
+      if [ "$#" -lt 2 ]; then
+        echo "错误：$1 缺少正整数。" >&2
+        exit 1
+      fi
+      require_positive_int "$2"
+      AIPYMINI_MAX_ROUNDS="$2"
+      shift 2
+      ;;
+    --max-rounds=*)
+      require_positive_int "${1#*=}"
+      AIPYMINI_MAX_ROUNDS="${1#*=}"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -86,6 +110,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${AIPYMINI_DATASET:=terminal-bench/terminal-bench@4.0.0}"
 : "${AIPYMINI_JOBS_DIR:="$HOME/jobs"}"
 : "${AIPYMINI_TRACE:=}"
+if [ -n "${AIPYMINI_MAX_ROUNDS:-}" ]; then
+  require_positive_int "$AIPYMINI_MAX_ROUNDS"
+fi
 if [[ ! "$AIPYMINI_DATASET" =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[^@[:space:]]+$ ]]; then
   echo "错误：AIPYMINI_DATASET 必须使用 ORG/NAME@REF 格式。" >&2
   exit 1
@@ -205,6 +232,7 @@ cp "$AIPYMINI_BINARY" "$aipymini_binary_path"
 chmod 700 "$aipymini_binary_path"
 export AIPYMINI_BINARY="$aipymini_binary_path"
 export AIPYMINI_TRACE
+export AIPYMINI_MAX_ROUNDS
 export PYTHONPATH="$job_config_dir${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 

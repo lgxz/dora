@@ -83,6 +83,33 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         agent = self.agent(model_name=model)
         self.assertEqual(shlex.split(agent.build_cli_flags()), ["--model", model])
 
+    def test_max_rounds_is_optional_passthrough(self):
+        for env_value, expected in (
+            (None, []),
+            ("64", ["--max-rounds", "64"]),
+            (" 128 ", ["--max-rounds", "128"]),
+        ):
+            with self.subTest(env_value=env_value):
+                if env_value is None:
+                    agent = self.agent(model_name="trust/hy4-preview")
+                else:
+                    with patch.dict("os.environ", {"AIPYMINI_MAX_ROUNDS": env_value}):
+                        agent = self.agent(model_name="trust/hy4-preview")
+                agent.exec_as_agent = AsyncMock()
+                asyncio.run(agent.run("Inspect the repository", object(), None))
+                command = agent.exec_as_agent.call_args.kwargs["command"]
+                aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" > ", 1)[0])
+                self.assertEqual(
+                    [arg for arg in aipymini_argv if arg in ("--max-rounds", "64", "128")],
+                    expected,
+                )
+
+    def test_invalid_max_rounds_is_rejected(self):
+        for value in ("0", "-3", "abc", "3.5", "１２"):
+            with self.subTest(value=value), patch.dict("os.environ", {"AIPYMINI_MAX_ROUNDS": value}):
+                with self.assertRaisesRegex(ValueError, "AIPYMINI_MAX_ROUNDS"):
+                    self.agent(model_name="trust/hy4-preview")
+
     def test_missing_model_name_is_rejected(self):
         for model in (None, "", "   "):
             with self.subTest(model=model):

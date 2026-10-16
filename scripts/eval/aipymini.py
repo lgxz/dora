@@ -53,8 +53,11 @@ The local Linux binary path is given via the host ``AIPYMINI_BINARY``
 environment variable (or the constructor kwarg ``aipymini_binary``). The ATIF
 trace dump is opt-in: by default dora runs without ``--trace-file``, so no
 ``trajectory.json`` and no Harbor token accounting is produced. Enable it with
-``run_tb.sh --trace`` or by exporting ``AIPYMINI_TRACE=1`` on the host. API
-keys go through ``extra_env`` (``--ae``)::
+``run_tb.sh --trace`` or by exporting ``AIPYMINI_TRACE=1`` on the host. The
+per-segment model-tool round budget is likewise optional: ``run_tb.sh
+--max-rounds N`` (or the host ``AIPYMINI_MAX_ROUNDS``) forwards the binary's
+``--max-rounds`` flag, and leaving it unset keeps the binary's built-in
+default. API keys go through ``extra_env`` (``--ae``)::
 
     --ak aipymini_binary=/path/to/aipymini-linux \\
     --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
@@ -216,6 +219,15 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             str(os.environ.get("AIPYMINI_TRACE", "")).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        # Optional per-segment round budget forwarded as the binary's
+        # --max-rounds flag; unset keeps the binary's built-in default.
+        raw_rounds = str(os.environ.get("AIPYMINI_MAX_ROUNDS", "")).strip()
+        if raw_rounds and not (raw_rounds.isascii() and raw_rounds.isdigit() and int(raw_rounds) > 0):
+            raise ValueError(
+                "AIPYMINI_MAX_ROUNDS must be a positive integer when set; "
+                f"got {raw_rounds!r}."
+            )
+        self._max_rounds = int(raw_rounds) if raw_rounds else None
 
     @override
     def build_cli_flags(self) -> str:
@@ -426,6 +438,10 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         trace_flags = (
             f"--trace-file {shlex.quote(TRACE_PATH)} " if self._trace_enabled else ""
         )
+        # Optional round budget: without it the binary keeps its default.
+        rounds_flags = (
+            f"--max-rounds {self._max_rounds} " if self._max_rounds is not None else ""
+        )
 
         command = (
             "export PATH=\"$HOME/.local/bin:$PATH\"; "
@@ -433,7 +449,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
             f"unset {instruction_env_var}; "
             "set -o pipefail; "
             f'printf "%s" "${{{instruction_shell_var}}}" | '
-            f"{BINARY_PATH} {trace_flags}"
+            f"{BINARY_PATH} {trace_flags}{rounds_flags}"
             f"{extra_flags}> /logs/agent/run.txt 2>&1"
         )
 
