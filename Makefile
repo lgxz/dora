@@ -7,8 +7,9 @@ BINARY ?= $(BUILD_DIR)/dora$(EXE)
 RELEASE_BINARY ?= $(RELEASE_DIR)/dora$(EXE)
 VERSION ?= $(shell git describe --tags)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+GIT_DIRTY := $(shell { git --no-optional-locks status -uno --porcelain 2>/dev/null || git diff-index --name-only HEAD; } | grep -q . && echo -dirty)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-RELEASE_LDFLAGS ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(BUILD_DATE)
+RELEASE_LDFLAGS ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)$(GIT_DIRTY) -X main.date=$(BUILD_DATE)
 PREFIX ?= $(HOME)/.local
 
 # Cross-compile a statically-linked Linux binary. GOARCH defaults to arm64
