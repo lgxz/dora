@@ -63,7 +63,7 @@ root `dora` package.
 - `internal/config/`: strict YAML decoding, environment lookup, and validation.
 - `internal/paths/`: cross-platform XDG configuration, skill, and session paths.
 - `session/`: completed-turn persistence interfaces and query records.
-- `session/sqlite/`: append-only SQLite storage for completed turns.
+- `session/jsonl/`: append-only JSON Lines storage for saved turns.
 - `tool/history/`: paginated history access exposed to the model.
 - `internal/update/`: standalone-install provenance checks, GitHub release
   discovery, checksum validation, and rollback-capable executable replacement.

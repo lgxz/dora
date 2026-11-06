@@ -19,7 +19,7 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/update"
 	"github.com/lgxz/dora/session"
-	sqlitesession "github.com/lgxz/dora/session/sqlite"
+	jsonlsession "github.com/lgxz/dora/session/jsonl"
 	bashtool "github.com/lgxz/dora/tool/bash"
 	"gopkg.in/yaml.v3"
 )
@@ -938,7 +938,7 @@ model:
 `); err != nil {
 		t.Fatal(err)
 	}
-	sessionPath := filepath.Join(t.TempDir(), "family.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "family.jsonl")
 	var stdout strings.Builder
 	if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--session", sessionPath, "--config", configPath, "parent request"}, IO{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: io.Discard,
@@ -949,7 +949,7 @@ model:
 	if stdout.String() != "parent result\n" || calls != 3 {
 		t.Fatalf("stdout = %q, calls = %d", stdout.String(), calls)
 	}
-	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	store, err := jsonlsession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1125,7 +1125,7 @@ tools:
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	err := Run(context.Background(), []string{"--quiet", "--max-rounds", "1", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader("yes\n"),
 		Stdout:           &stdout,
@@ -1141,7 +1141,7 @@ tools:
 		!strings.Contains(stderr.String(), "maximum rounds reached") {
 		t.Fatalf("calls = %d, stdout = %q, stderr = %q", calls, stdout.String(), stderr.String())
 	}
-	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	store, err := jsonlsession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1175,7 +1175,7 @@ tools:
 	}
 
 	var stderr bytes.Buffer
-	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           io.Discard,
@@ -1212,7 +1212,7 @@ tools:
 		t.Fatal(err)
 	}
 
-	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	var stderr bytes.Buffer
 	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:            strings.NewReader("no\n"),
@@ -1233,7 +1233,7 @@ tools:
 
 func assertSavedMaxRounds(t *testing.T, path string, roundCount int) {
 	t.Helper()
-	store, err := sqlitesession.Open(context.Background(), path)
+	store, err := jsonlsession.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1281,7 +1281,7 @@ model:
 		t.Fatal(err)
 	}
 
-	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	err := Run(context.Background(), []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
@@ -1296,7 +1296,7 @@ model:
 		t.Fatalf("calls = %d, want 6 attempts after partial output", calls)
 	}
 
-	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	store, err := jsonlsession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1340,7 +1340,7 @@ tools:
 		t.Fatal(err)
 	}
 
-	sessionPath := filepath.Join(t.TempDir(), "session.sqlite")
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
 	err := Run(ctx, []string{"--quiet", "--session", sessionPath, "--config", configPath, "run it"}, IO{
 		Stdin:           strings.NewReader(""),
 		Stdout:          io.Discard,
@@ -1355,7 +1355,7 @@ tools:
 		t.Fatalf("calls = %d, want 2", calls)
 	}
 
-	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	store, err := jsonlsession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2170,7 +2170,7 @@ model:
 }
 
 // writeTestConfig converts the former flat test fixtures into the catalog-only
-func TestRunStoresIndependentTurnsInSQLiteSession(t *testing.T) {
+func TestRunStoresIndependentTurnsInJSONLSession(t *testing.T) {
 	var calls int
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
@@ -2208,7 +2208,7 @@ model:
 `); err != nil {
 		t.Fatal(err)
 	}
-	sessionPath := filepath.Join(root, "turns.sqlite")
+	sessionPath := filepath.Join(root, "turns.jsonl")
 	for _, prompt := range []string{"first", "second"} {
 		if err := Run(context.Background(), []string{"--quiet", "--no-skills", "--session", sessionPath, "--config", configPath, prompt}, IO{
 			Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
@@ -2218,7 +2218,7 @@ model:
 		}
 	}
 
-	store, err := sqlitesession.Open(context.Background(), sessionPath)
+	store, err := jsonlsession.Open(context.Background(), sessionPath)
 	if err != nil {
 		t.Fatal(err)
 	}

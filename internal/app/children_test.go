@@ -10,7 +10,7 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/session"
-	sqlitesession "github.com/lgxz/dora/session/sqlite"
+	jsonlsession "github.com/lgxz/dora/session/jsonl"
 )
 
 func TestChildrenKeepOriginalParentAcrossPrompts(t *testing.T) {
@@ -99,8 +99,8 @@ func TestChildSaveFailureDoesNotChangeParentResult(t *testing.T) {
 
 func TestCloseCancelsAndSavesBackgroundChild(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "session.sqlite")
-	store, err := sqlitesession.Open(ctx, path)
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	store, err := jsonlsession.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestCloseCancelsAndSavesBackgroundChild(t *testing.T) {
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = sqlitesession.Open(ctx, path)
+	store, err = jsonlsession.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}

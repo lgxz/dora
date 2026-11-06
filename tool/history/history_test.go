@@ -10,7 +10,7 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/session"
-	"github.com/lgxz/dora/session/sqlite"
+	"github.com/lgxz/dora/session/jsonl"
 )
 
 type readerStub struct {
@@ -118,7 +118,7 @@ func (reader *bigReaderStub) GetRounds(_ context.Context, _ int64, _ session.Rou
 
 func TestHistoryGetsStoredMalformedArguments(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.OpenMemory(ctx)
+	store, err := jsonl.OpenMemory(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestHistoryGetsStoredMalformedArguments(t *testing.T) {
 
 func TestHistoryListsParentRelationsAndKeepsGetFormat(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.OpenMemory(ctx)
+	store, err := jsonl.OpenMemory(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

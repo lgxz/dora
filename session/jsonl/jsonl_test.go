@@ -1,14 +1,14 @@
-package sqlite
+package jsonl
 
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,7 +19,7 @@ import (
 
 func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
+	path := filepath.Join(t.TempDir(), "history.jsonl")
 	store, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -64,30 +64,6 @@ func TestStoreCommitsAndPagesCompletedTurns(t *testing.T) {
 	}
 }
 
-func TestOpenAppliesConnectionPragmas(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	memory, err := OpenMemory(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer memory.Close()
-	for name, db := range map[string]*sql.DB{"file": store.db, "memory": memory.db} {
-		var foreignKeys, busyTimeout int
-		if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil || foreignKeys != 1 {
-			t.Fatalf("%s: foreign_keys = %d, err = %v", name, foreignKeys, err)
-		}
-		if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil || busyTimeout != 5000 {
-			t.Fatalf("%s: busy_timeout = %d, err = %v", name, busyTimeout, err)
-		}
-	}
-}
-
 func TestOpenMemoryStoresTurnsUntilClosed(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenMemory(ctx)
@@ -121,30 +97,9 @@ func TestOpenMemoryStoresTurnsUntilClosed(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsIncompleteTurnAndUnknownSchema(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CommitTurn(ctx, dora.NewTurn("user")); err == nil {
-		t.Fatal("expected incomplete turn error")
-	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 99`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil {
-		t.Fatal("expected unsupported schema error")
-	}
-}
-
 func TestStoreCommitsMaximumRoundsTurn(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +153,7 @@ func TestStoreCommitsMaximumRoundsTurn(t *testing.T) {
 
 func TestStoreCommitsFailedTurn(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +202,7 @@ func TestStoreCommitsFailedTurn(t *testing.T) {
 
 func TestStoreCommitsCanceledTurn(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +243,7 @@ func TestStoreCommitsCanceledTurn(t *testing.T) {
 }
 
 func TestStoreReturnsNotFound(t *testing.T) {
-	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.sqlite"))
+	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,19 +256,11 @@ func TestStoreReturnsNotFound(t *testing.T) {
 
 func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.sqlite"))
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "history.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-
-	var version int
-	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
-	}
 
 	turn := dora.NewTurn("weather?")
 	cached := int64(7)
@@ -368,69 +315,6 @@ func TestStoreRoundTripsAssistantReasoningAndUsage(t *testing.T) {
 	}
 	if len(turns.Turns) != 1 || turns.Turns[0].Usage == nil || turns.Turns[0].Usage.TotalTokens != 19 || turns.Turns[0].Usage.OutputDetails == nil || turns.Turns[0].Usage.OutputDetails.ReasoningTokens == nil || *turns.Turns[0].Usage.OutputDetails.ReasoningTokens != 3 {
 		t.Fatalf("turn summary = %#v", turns.Turns)
-	}
-}
-
-func TestStoreRejectsVersionFiveWithoutMigration(t *testing.T) {
-	// v5 databases do not support failed turns and are rejected rather than
-	// migrated, by design.
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 5`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil {
-		t.Fatal("expected unsupported schema error")
-	}
-}
-
-func TestStoreRejectsEarlierVersionSixDefinition(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`
-CREATE TABLE turns (
-    id INTEGER PRIMARY KEY,
-    system TEXT NOT NULL,
-    user TEXT NOT NULL,
-    result TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed')),
-    error TEXT,
-    round_count INTEGER NOT NULL,
-    usage_json TEXT,
-    committed_at TEXT NOT NULL
-);
-CREATE TABLE messages (
-    turn_id INTEGER NOT NULL,
-    round_index INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT,
-    reasoning TEXT,
-    tool_calls_json TEXT,
-    tool_call_id TEXT,
-    usage_json TEXT
-);
-PRAGMA user_version = 6;`)
-	if err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6") {
-		t.Fatalf("error = %v, want unsupported version 6", err)
 	}
 }
 
@@ -501,7 +385,7 @@ func TestStorePreservesArgumentBytesAcrossReopen(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "canceled", "max_rounds"} {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
-			path := filepath.Join(t.TempDir(), "history.sqlite")
+			path := filepath.Join(t.TempDir(), "history.jsonl")
 			store, err := Open(ctx, path)
 			if err != nil {
 				t.Fatal(err)
@@ -556,47 +440,9 @@ func TestStorePreservesArgumentBytesAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionEightWithoutMigration(t *testing.T) {
-	// v8 databases have no images_json column and are rejected rather than
-	// migrated, by design.
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 8`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 8") {
-		t.Fatalf("expected version rejection, got %v", err)
-	}
-}
-
-func TestStoreRejectsVersionSixWithoutMigration(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "history.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 6`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 6") {
-		t.Fatalf("expected version rejection, got %v", err)
-	}
-}
-
 func TestStorePersistsDiscardedAttemptsAndTotalUsage(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(ctx, filepath.Join(t.TempDir(), "attempts.sqlite"))
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "attempts.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,7 +487,7 @@ func TestStorePersistsDiscardedAttemptsAndTotalUsage(t *testing.T) {
 
 func TestChildTurnsAreLinkedAndIncludedInList(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "family.sqlite")
+	path := filepath.Join(t.TempDir(), "family.jsonl")
 	store, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -714,24 +560,6 @@ func TestChildTurnsAreLinkedAndIncludedInList(t *testing.T) {
 		t.Fatalf("page=%+v err=%v", empty, err)
 	}
 
-}
-
-func TestStoreRejectsVersionNine(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "old.sqlite")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 9`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 9") {
-		t.Fatalf("error=%v", err)
-	}
 }
 
 func appendTestRound(t *testing.T, turn *dora.Turn, number int) {
@@ -810,9 +638,8 @@ func TestTurnWriterSavesRoundsIncrementallyThenFinishes(t *testing.T) {
 		turns[0].Error != "" || turns[0].RoundCount != 2 {
 		t.Fatalf("completed turn = %+v (must be the same row, not a duplicate)", turns)
 	}
-	var system string
-	if err := store.db.QueryRow(`SELECT system FROM turns WHERE id = ?`, id).Scan(&system); err != nil || system != "system" {
-		t.Fatalf("system = %q, err = %v", system, err)
+	if system := store.turns[id-1].system; system != "system" {
+		t.Fatalf("system = %q", system)
 	}
 	rounds, err = store.GetRounds(ctx, id, session.RoundOptions{Limit: 10})
 	if err != nil || len(rounds.Rounds) != 2 || rounds.Rounds[1].Tools[0].Content != "output-2" {
@@ -847,7 +674,7 @@ func TestTurnWriterFinishWithoutSyncCreatesOneTerminalRow(t *testing.T) {
 
 func TestTurnWriterRunningRowSurvivesInterruption(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "crash.sqlite")
+	path := filepath.Join(t.TempDir(), "crash.jsonl")
 	store, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -903,9 +730,8 @@ func TestTurnWriterFinishAfterSyncKeepsRoundsOnce(t *testing.T) {
 		turns[0].Error != cause.Error() || turns[0].Result != "" || turns[0].RoundCount != 2 {
 		t.Fatalf("failed turn = %+v", turns)
 	}
-	var messages int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE turn_id = ?`, id).Scan(&messages); err != nil || messages != 4 {
-		t.Fatalf("messages = %d (want 2 rounds x assistant+tool, no duplicates), err = %v", messages, err)
+	if rounds := len(store.turns[id-1].rounds); rounds != 2 {
+		t.Fatalf("stored rounds = %d (want 2, no duplicates)", rounds)
 	}
 }
 
@@ -1047,44 +873,295 @@ func TestAgentRunSavesEachRoundBeforeNextModelRequest(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionTenWithoutMigration(t *testing.T) {
+func TestOpenCreatesPrivateFileWithHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new.jsonl")
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != `{"t":"header","v":1}`+"\n" {
+		t.Fatalf("file = %q, err = %v", data, err)
+	}
+}
+
+func TestOpenIsExclusive(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("no file locking on this platform")
+	}
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "old.sqlite")
+	path := filepath.Join(t.TempDir(), "locked.jsonl")
+	first, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("second Open error = %v, want in use", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open after Close: %v", err)
+	}
+	second.Close()
+}
+
+func TestOpenRejectsForeignFiles(t *testing.T) {
+	for name, content := range map[string]string{
+		"sqlite":       "SQLite format 3\x00\x10\x00\x01\x01",
+		"sqlite-lines": "SQLite format 3\x00\n\x00\x00",
+		"json":         `{"version":5,"messages":[]}` + "\n",
+		"text":         "hello\n",
+		"future":       `{"t":"header","v":99}` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "x.jsonl")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(context.Background(), path); err == nil {
+				t.Fatal("Open accepted a foreign file")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != content {
+				t.Fatalf("Open modified a rejected file: %q, err = %v", after, err)
+			}
+		})
+	}
+}
+
+func TestReopenKeepsIDsAndContinues(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "continue.jsonl")
 	store, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 10`); err != nil {
+	first, _ := store.CommitTurn(ctx, completedTurn(t, "one", "a", 1))
+	second, _ := store.CommitFailed(ctx, func() *dora.Turn { t := dora.NewTurn("two"); return t }(), errors.New("boom"))
+	store.Close()
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	third, err := store.CommitTurn(ctx, completedTurn(t, "three", "c", 0))
+	if err != nil || first != 1 || second != 2 || third != 3 {
+		t.Fatalf("ids = %d %d %d, err = %v", first, second, third, err)
+	}
+	turns := listAll(t, store)
+	if len(turns) != 3 || turns[0].User != "three" || turns[1].Error != "boom" || turns[2].Result != "a" || turns[2].RoundCount != 1 {
+		t.Fatalf("turns = %+v", turns)
+	}
+}
+
+func TestOpenDiscardsTornLastLine(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "torn.jsonl")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CommitTurn(ctx, completedTurn(t, "kept", "answer", 1)); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	intact, _ := os.ReadFile(path)
+	// A crash in the middle of the next write leaves half a record.
+	torn := append(append([]byte(nil), intact...), []byte(`{"t":"turn","id":2,"user":"cr`)...)
+	if err := os.WriteFile(path, torn, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open with torn tail: %v", err)
+	}
+	if turns := listAll(t, store); len(turns) != 1 || turns[0].User != "kept" {
+		t.Fatalf("turns = %+v", turns)
+	}
+	if repaired, _ := os.ReadFile(path); !bytes.Equal(repaired, intact) {
+		t.Fatalf("torn tail was not cut off: %q", repaired[len(intact):])
+	}
+	if _, err := store.CommitTurn(ctx, completedTurn(t, "after", "answer", 0)); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen after repair: %v", err)
+	}
+	defer store.Close()
+	if turns := listAll(t, store); len(turns) != 2 || turns[0].User != "after" {
+		t.Fatalf("turns after repair = %+v", turns)
+	}
+}
+
+func TestOpenKeepsCompleteRecordsOfTornBatch(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "batch.jsonl")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := dora.NewTurn("batch")
+	appendTestRound(t, turn, 1)
+	appendTestRound(t, turn, 2)
+	writer := store.BeginTurn(turn)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	data, _ := os.ReadFile(path)
+	// Cut the file in the middle of the last (second round) record.
+	if err := os.WriteFile(path, data[:len(data)-20], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].Status != session.TurnStatusRunning || turns[0].RoundCount != 1 {
+		t.Fatalf("turns = %+v", turns)
+	}
+}
+
+func TestOpenRejectsCorruptMiddleRecords(t *testing.T) {
+	ctx := context.Background()
+	header := `{"t":"header","v":1}` + "\n"
+	turn1 := `{"t":"turn","id":1,"user":"u","at":"2026-01-01T00:00:00Z"}` + "\n"
+	cases := map[string]string{
+		"garbage":            header + "not json\n" + turn1,
+		"id gap":             header + `{"t":"turn","id":2,"user":"u","at":"2026-01-01T00:00:00Z"}` + "\n",
+		"unknown type":       header + turn1 + `{"t":"mystery"}` + "\n",
+		"round without turn": header + `{"t":"round","turn":1,"i":0,"assistant":{"role":"assistant"}}` + "\n",
+		"round gap":          header + turn1 + `{"t":"round","turn":1,"i":1,"assistant":{"role":"assistant"}}` + "\n",
+		"bad parent":         header + `{"t":"turn","id":1,"parent":1,"user":"u","at":"2026-01-01T00:00:00Z"}` + "\n",
+		"end twice": header + turn1 + `{"t":"end","turn":1,"status":"completed","at":"2026-01-01T00:00:00Z"}` + "\n" +
+			`{"t":"end","turn":1,"status":"completed","at":"2026-01-01T00:00:00Z"}` + "\n",
+		"failed without error": header + turn1 + `{"t":"end","turn":1,"status":"failed","at":"2026-01-01T00:00:00Z"}` + "\n",
+		"bogus status":         header + turn1 + `{"t":"end","turn":1,"status":"bogus","at":"2026-01-01T00:00:00Z"}` + "\n",
+		"record after end": header + turn1 + `{"t":"end","turn":1,"status":"completed","at":"2026-01-01T00:00:00Z"}` + "\n" +
+			`{"t":"round","turn":1,"i":0,"assistant":{"role":"assistant"}}` + "\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "bad.jsonl")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(ctx, path); err == nil {
+				t.Fatal("Open accepted a corrupt session")
+			}
+		})
+	}
+}
+
+func TestFailedWriteIsRolledBackAndRetried(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "retry.jsonl")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := dora.NewTurn("flaky disk")
+	writer := store.BeginTurn(turn)
+	appendTestRound(t, turn, 1)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+
+	real := store.writeAt
+	store.writeAt = func(p []byte, off int64) (int, error) {
+		n, _ := real(p[:len(p)/2], off) // half a batch reaches the disk
+		return n, errors.New("disk full")
+	}
+	appendTestRound(t, turn, 2)
+	if err := writer.Sync(ctx); err == nil {
+		t.Fatal("Sync succeeded despite the write error")
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("failed write left bytes behind: %q", after[len(before):])
+	}
+	if turns := listAll(t, store); len(turns) != 1 || turns[0].RoundCount != 1 {
+		t.Fatalf("index changed by a failed write: %+v", turns)
+	}
+
+	store.writeAt = real
+	if _, err := writer.Finish(ctx, session.TurnStatusFailed, errors.New("gave up")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 10") {
-		t.Fatalf("error=%v", err)
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen after retry: %v", err)
+	}
+	defer store.Close()
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].RoundCount != 2 || turns[0].Status != session.TurnStatusFailed {
+		t.Fatalf("turns = %+v", turns)
 	}
 }
 
-func TestRunningStatusConstraints(t *testing.T) {
+func TestClosedStoreRejectsUse(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenMemory(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil || store.Close() != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := store.ListTurns(ctx, session.ListOptions{Limit: 1}); err == nil {
+		t.Fatal("ListTurns on a closed store succeeded")
+	}
+	if _, err := store.CommitTurn(ctx, completedTurn(t, "late", "x", 0)); err == nil {
+		t.Fatal("CommitTurn on a closed store succeeded")
+	}
+}
+
+func TestLargeAndSpecialContentRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "large.jsonl")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := strings.Repeat("x<>&\n\"\\é世界", 200_000)
+	turn := dora.NewTurn("big")
+	if err := turn.AppendRound(dora.Round{
+		Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: "c", Name: "echo", Input: json.RawMessage(`{}`)}}},
+		Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: "c", Content: big}},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.CommitFailed(ctx, turn, errors.New("stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer store.Close()
-	insert := func(status, errorText, result string) error {
-		_, err := store.db.Exec(`
-INSERT INTO turns (system, user, result, status, error, round_count, committed_at)
-VALUES ('', 'u', ?, ?, NULLIF(?, ''), 0, '2026-01-01T00:00:00Z')`, result, status, errorText)
-		return err
+	page, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: 1})
+	if err != nil || len(page.Rounds) != 1 || page.Rounds[0].Tools[0].Content != big {
+		t.Fatalf("round trip failed: err = %v", err)
 	}
-	if err := insert("running", "", ""); err != nil {
-		t.Fatalf("plain running row rejected: %v", err)
+	raw, _ := os.ReadFile(path)
+	if bytes.Contains(raw, []byte("\\u003c")) {
+		t.Fatal("HTML characters were escaped in the file")
 	}
-	if err := insert("running", "some error", ""); err == nil {
-		t.Fatal("running row with an error accepted")
-	}
-	if err := insert("running", "", "stray result"); err == nil {
-		t.Fatal("running row with a result accepted")
+	if got := bytes.Count(raw, []byte("\n")); got != 4 {
+		t.Fatalf("file has %d lines, want header+turn+round+end = 4", got)
 	}
 }

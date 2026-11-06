@@ -342,7 +342,7 @@ git diff | ./dora "Review this change"
 
 推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，在终端中替代 `Thinking...` 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
 
-当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前 SQLite 会话中，并由 history 工具返回；没有 `--session` 时，该数据库在内存中，随 Dora 退出而消失。
+当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前会话中，并由 history 工具返回；没有 `--session` 时，会话在内存中，随 Dora 退出而消失。
 
 如需机器可读的父 turn 记录，传入 `--trace-file PATH`。Dora 会写出与提供商无关的 JSON 记录，包含 system 和 user 消息、每个已完成的 assistant/tool 轮次（包括推理、工具输入、结果、图片和每次调用的用量），以及产生了最终响应时的最终响应。Trace schema **2** 还包含 `status`、`error`、`attempts` 和 `total_usage`。每次模型尝试都会记录其结束原因、提供商原始原因、实际输出预算（未知时为零）、恢复序号、处置方式、推理、文本、工具参数以及报告的用量。被丢弃的调用和压缩调用也包含在内。最终推理会被保留。`attempts` 只应累加一次：被采纳的响应同样出现在 `rounds`/`final` 中，不能重复计数。缺失的用量视为未知；总计只累加已报告的数量。子任务和图片工具的模型调用不会展开到父 trace 中。Harbor 适配器现在要求 schema 2，schema 1 会被拒绝。格式错误的提供商工具参数会以文本形式保留，不会妨碍记录失败的 turn。父目录必须已经存在，文件以 `0600` 权限创建。该选项仅支持一次性运行。Terminal-Bench 集成可以把这份稳定的父 turn 记录转换为基准测试的 ATIF 格式，而无需让核心 Agent 依赖 Harbor。
 
@@ -384,30 +384,30 @@ policy:
 
 ### 会话
 
-传入一个 SQLite 文件，可以跨多次 CLI 调用保留 turns：
+传入一个会话文件（JSON Lines，惯例扩展名 `.jsonl`），可以跨多次 CLI 调用保留 turns：
 
 ```sh
-./dora -s ./system-status.sqlite "Analyze this machine's system status"
-./dora -s ./system-status.sqlite "Continue with the busiest processes"
+./dora -s ./system-status.jsonl "Analyze this machine's system status"
+./dora -s ./system-status.jsonl "Continue with the busiest processes"
 ```
 
-每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 始终提供 `history` 工具，包括第一个 turn 之前：模型可以用 `list` 列出 turns 及各自的状态、错误、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成的 turn 会原子追加。因达到最大 rounds 而停止的 turn 也会以 `max_rounds` 状态保存，包含其错误和全部已完成的工具 rounds，但没有最终结果和最终响应 usage。Ctrl+C（`SIGINT`）和 `SIGTERM` 造成的取消以 `canceled` 状态保存；Dora 使用单独的短时提交上下文，使取消运行不会同时取消它的会话写入。其他失败的 turn 以 `failed` 状态保存。两者都会保留错误、完整的工具 rounds 以及单独的模型尝试审计记录，包括输出受限的响应。传输故障可能没有响应内容或 usage。确认交互式继续提示会继续使用同一个 Turn，不会保存中间的 `max_rounds` 记录。Provider continuation 只在该 turn 运行期间保留。
+每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 始终提供 `history` 工具，包括第一个 turn 之前：模型可以用 `list` 列出 turns 及各自的状态、错误、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空会话会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成的 turn 会原子追加。因达到最大 rounds 而停止的 turn 也会以 `max_rounds` 状态保存，包含其错误和全部已完成的工具 rounds，但没有最终结果和最终响应 usage。Ctrl+C（`SIGINT`）和 `SIGTERM` 造成的取消以 `canceled` 状态保存；Dora 使用单独的短时提交上下文，使取消运行不会同时取消它的会话写入。其他失败的 turn 以 `failed` 状态保存。两者都会保留错误、完整的工具 rounds 以及单独的模型尝试审计记录，包括输出受限的响应。传输故障可能没有响应内容或 usage。确认交互式继续提示会继续使用同一个 Turn，不会保存中间的 `max_rounds` 记录。Provider continuation 只在该 turn 运行期间保留。
 
 使用 GNU `timeout` 时，请在强制终止前留出取消和会话存储的时间，例如：
 
 ```sh
-timeout --kill-after=10s 300s dora --session session.sqlite "Your task"
+timeout --kill-after=10s 300s dora --session session.jsonl "Your task"
 ```
 
 最初的 `SIGTERM` 请求取消；额外的十秒用于在 `SIGKILL` 之前完成清理。父 turn 存储和每个子任务历史的写入各有五秒预算；后台 Task 的关闭也可能再等待五秒。取消缓慢或子任务历史清理可能需要更长的宽限期。`SIGKILL` 无法被处理，可能丢失当前 turn。只会保留完整的工具 rounds 和可用的模型尝试记录，不保留未完成的流式文本。
 
-指定 `--session` 时，SQLite schema version 11 包含 `turns`、`messages` 和 `model_attempts` 表，记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、附带的图片引用、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON、结束元数据、最终推理和报告的总用量。SQLite 存储的 `GetAttempts` API 与对话 rounds 分开，单独分页读取审计记录。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（schema version 10 及更早的数据库会被拒绝，请新建文件）。每个完整的工具 round 在 turn 运行期间就会保存，因此崩溃或强制退出时仍会保留已完成的 rounds；这样被打断的 turn 会停留在 `running` 状态，正在进行的那个 round 会丢失。Dora 不会恢复被中断的 turn。省略 `--session`/`-s` 时，Dora 会为当前进程创建内存 SQLite 数据库；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。Session 数据库可能包含命令、工具输出及 token 使用信息，因此请将持久化文件视为敏感内容。
+指定 `--session` 时，文件是只追加的 JSON Lines 日志：一行 header，随后是 `turn`、`round`、`attempt` 和 `end` 记录，合起来记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、附带的图片引用、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON、结束元数据、最终推理和报告的总用量。存储的 `GetAttempts` API 与对话 rounds 分开，单独分页读取审计记录。新文件权限为 `0600`。一个会话文件同一时间只属于一个 Dora 进程：第二个进程打开同一文件会报错 “in use”（在支持文件锁的平台上）。旧的 SQLite 和 JSON 会话、`--fresh` 以及自动迁移均不支持（这类文件会被原样拒绝，请新建文件）。崩溃留下的写了一半的最后一行，会在下次打开文件时丢弃。每个完整的工具 round 在 turn 运行期间就会保存，因此崩溃或强制退出时仍会保留已完成的 rounds；这样被打断的 turn 会停留在 `running` 状态，正在进行的那个 round 会丢失。Dora 不会恢复被中断的 turn。省略 `--session`/`-s` 时，Dora 会在当前进程内把会话保存在内存中；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。Session 文件可能包含命令、工具输出及 token 使用信息，因此请将持久化文件视为敏感内容。
 
 使用 `--config`、`-m`/`--model`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
-子任务 turn 保存在同一个数据库中，其 `parent_turn_id` 指向主 turn。`history list` 返回所有 turns，包括每个 turn 的最终结果、状态以及子任务的 `parent_turn_id`（主 turn 省略该字段）。它的总数和分页同时统计主 turn 和子 turn，因此相关的 turns 可能出现在不同页。`history get` 保持按 rounds 分页的格式：可以用任意 turn ID 查看该 turn 的工具 rounds。父 turn 的 usage 和 trace 输出不包含子任务的 usage。
+子任务 turn 保存在同一个文件中，其 `parent_turn_id` 指向主 turn。`history list` 返回所有 turns，包括每个 turn 的最终结果、状态以及子任务的 `parent_turn_id`（主 turn 省略该字段）。它的总数和分页同时统计主 turn 和子 turn，因此相关的 turns 可能出现在不同页。`history get` 保持按 rounds 分页的格式：可以用任意 turn ID 查看该 turn 的工具 rounds。父 turn 的 usage 和 trace 输出不包含子任务的 usage。
 
-Task 完成时只在内存中收集终态 Turn，不等待 SQLite。收集到的子任务在一次 prompt 结束后以及会话关闭时保存。后台 Task 始终保留其原始父 turn，即使它在之后的 prompt 期间才结束；迟到的结果在下一次 prompt 结束或会话关闭的边界保存。失败、取消和达到最大轮数的子任务同样会被保存。子任务的写入失败会在清理时报告，但不会改变 Task 的结果。强制终止仍可能丢失尚未保存的子任务记录。
+Task 完成时只在内存中收集终态 Turn，不等待存储写入。收集到的子任务在一次 prompt 结束后以及会话关闭时保存。后台 Task 始终保留其原始父 turn，即使它在之后的 prompt 期间才结束；迟到的结果在下一次 prompt 结束或会话关闭的边界保存。失败、取消和达到最大轮数的子任务同样会被保存。子任务的写入失败会在清理时报告，但不会改变 Task 的结果。强制终止仍可能丢失尚未保存的子任务记录。
 
 Session 存储会精确保留工具参数的字节，包括格式错误的 JSON。`history get` 把每个工具调用的 `input` 作为包含原始参数文本的字符串返回，有效和无效 JSON 都是如此。对于无效的 UTF-8，还会包含 base64 编码的 `input_bytes`，使原始字节仍然可用。History 输出仍然使用现有的大小限制；结果被截断时请缩小分页范围。
 

@@ -548,8 +548,8 @@ progress.
 When a provider reports token usage, Dora captures it for every completed model
 round, including cached and reasoning-token details when available. The
 terminal renderer does not print usage. Per-round usage and the final response
-usage are saved in the active SQLite session and returned by the history tool;
-without `--session`, that database is in memory and disappears when Dora exits.
+usage are saved in the active session and returned by the history tool;
+without `--session`, the session is in memory and disappears when Dora exits.
 
 For a machine-readable parent-turn transcript, pass `--trace-file PATH`. Dora
 writes a provider-neutral JSON record containing the system and user messages,
@@ -639,11 +639,11 @@ Only the successful complete response enters turn history.
 
 ### Sessions
 
-Pass a SQLite file to retain turns across CLI invocations:
+Pass a session file (JSON Lines; `.jsonl` by convention) to retain turns across CLI invocations:
 
 ```sh
-./dora -s ./system-status.sqlite "Analyze this machine's system status"
-./dora -s ./system-status.sqlite "Continue with the busiest processes"
+./dora -s ./system-status.jsonl "Analyze this machine's system status"
+./dora -s ./system-status.jsonl "Continue with the busiest processes"
 ```
 
 Every invocation is a fresh, independent turn. Previous messages are never
@@ -651,7 +651,7 @@ loaded into the model context automatically. Dora always adds a `history` tool,
 including before the first turn: the model can
 `list` turns, see each turn's status, error, round count, and final-response usage,
 and `get` chronological round pages using `turn_id`, `offset`, and `limit`; an
-empty database returns an empty list. A round is one assistant tool-call message
+empty session returns an empty list. A round is one assistant tool-call message
 plus all corresponding tool result messages and that model call's optional
 usage. Successfully completed turns are appended atomically. A turn
 stopped by the maximum-round limit is also saved with status `max_rounds`, its
@@ -668,7 +668,7 @@ When using GNU `timeout`, allow time for cancellation and session storage before
 forcing termination, for example:
 
 ```sh
-timeout --kill-after=10s 300s dora --session session.sqlite "Your task"
+timeout --kill-after=10s 300s dora --session session.jsonl "Your task"
 ```
 
 The initial `SIGTERM` requests cancellation; the additional ten seconds allow
@@ -678,23 +678,22 @@ seconds. Slow cancellation or child-history cleanup may need a longer grace peri
 cannot be handled and may lose the current turn. Only complete tool rounds and
 available model-attempt records are retained, not unfinished streaming text.
 
-With `--session`, SQLite schema version 11 contains `turns`, `messages`, and `model_attempts` tables and records the
+With `--session`, the file is an append-only JSON Lines log: a header line, then `turn`, `round`, `attempt`, and `end` records. Together they hold the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, attached image references, reasoning captured on round assistant messages, and each model
 call's usage JSON, finish metadata, final reasoning, and reported total usage.
-The SQLite store's `GetAttempts` API pages through audit records separately from
-conversation rounds. Newly created files use `0600` permissions. The old named
-JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 10 and earlier databases are rejected; start a new file). Each complete tool round is saved while the turn runs, so a crash or forced exit keeps the rounds finished so far; such an interrupted turn stays in status `running` and the round in flight is lost. Dora does not resume interrupted turns. When
-`--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
+The store's `GetAttempts` API pages through audit records separately from
+conversation rounds. Newly created files use `0600` permissions. A session file belongs to one Dora process at a time: a second process opening it fails with "in use" (on platforms with file locking). Older SQLite and JSON sessions, `--fresh`, and automatic migration are not supported
+(such files are rejected unchanged; start a new file). A half-written last line left by a crash is discarded the next time the file is opened. Each complete tool round is saved while the turn runs, so a crash or forced exit keeps the rounds finished so far; such an interrupted turn stays in status `running` and the round in flight is lost. Dora does not resume interrupted turns. When
+`--session`/`-s` is omitted, Dora keeps the session in memory for the
 process lifetime. This allows long-running modes to retain earlier turns while
-keeping ordinary CLI invocations ephemeral. Session databases can contain
+keeping ordinary CLI invocations ephemeral. Session files can contain
 commands, tool output, and token usage, so treat persistent files as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
 
-Child task turns are saved in the same database with `parent_turn_id` pointing
+Child task turns are saved in the same file with `parent_turn_id` pointing
 at the main turn. `history list` returns all turns, including each turn's final
 result, status, and `parent_turn_id` for child tasks (omitted for main turns).
 Its total and pagination count both main and child turns, so related turns may
@@ -703,7 +702,7 @@ turn ID to inspect that turn's tool rounds. Parent usage and trace output do
 not include child usage.
 
 Task completion only collects the terminal Turn in memory, without waiting for
-SQLite. Collected children are saved after a prompt finishes and during session
+storage. Collected children are saved after a prompt finishes and during session
 closure. A background task always retains its original parent, even if it
 finishes during a later prompt; a late result is saved at the next prompt-end
 or session-close boundary. Failed, canceled, and maximum-round children are

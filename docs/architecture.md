@@ -20,7 +20,7 @@ flowchart TD
 
     CLI --> Config["internal/config<br/>YAML config"]
     CLI --> Paths["internal/paths<br/>~/.dora paths"]
-    CLI --> Session["session/sqlite<br/>saved turn history"]
+    CLI --> Session["session/jsonl<br/>saved turn history"]
     CLI --> Update["internal/update<br/>standalone self-update"]
     CLI --> Progress["internal/progress<br/>terminal progress"]
     CLI --> Core["dora<br/>Agent core"]
@@ -73,7 +73,7 @@ Key constraints on dependency direction:
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
 | `session` | Defines saved-turn history contracts and query records | `Reader`, `Store` |
-| `session/sqlite` | Saves turns to a user-selected SQLite file as they run (`running`) and finalizes them as completed, maximum-round, failed, or canceled | `Open`, `Store.BeginTurn` (`TurnWriter.Sync`, `TurnWriter.Finish`), `Store.CommitChild`, `Store.ListTurns`, `Store.GetRounds` |
+| `session/jsonl` | Saves turns to a user-selected JSON Lines file as they run (`running`) and finalizes them as completed, maximum-round, failed, or canceled | `Open`, `Store.BeginTurn` (`TurnWriter.Sync`, `TurnWriter.Finish`), `Store.CommitChild`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
@@ -254,7 +254,7 @@ The capacity check returns a `CompactionResult` containing the selected history,
 2. Resolve and load the default or explicit configuration and validate one-shot model/thinking/round overrides.
 3. Normal CLI mode requires the model router immediately.
 4. For a normal Agent run, validate `--workdir` and compose the user prompt from command arguments and standard input.
-5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
+5. Open the active session: the file selected by `--session`, or an in-memory store when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
@@ -265,7 +265,7 @@ The process entry point converts both `SIGINT` and `SIGTERM` into context
 cancellation, allowing the application to save a canceled Turn before exiting.
 Callers such as GNU `timeout` must allow time for the Agent to return and the
 detached five-second commit before escalating to `SIGKILL`; forced termination
-cannot run this cleanup. Because every complete round is already saved while the turn runs, a forced exit (`SIGKILL`, a crash, or an out-of-memory kill) keeps the rounds finished so far; only the round in flight and the final status are lost, and the row stays `running`.
+cannot run this cleanup. Because every complete round is already saved while the turn runs, a forced exit (`SIGKILL`, a crash, or an out-of-memory kill) keeps the rounds finished so far; only the round in flight and the final status are lost, and the turn stays `running`.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. The transient `Thinking...` placeholder and its live repaint are omitted when stderr is not a terminal, while substantive progress lines remain append-only. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
@@ -293,7 +293,7 @@ Child task/image calls are not expanded in the parent attempt stream.
 Trace schema 2 adds status/error, attempts, total usage, and final finish metadata
 and reasoning. Harbor consumes attempts for accounting and only attaches actual
 tool observations to accepted tool attempts; rejected tool calls remain audit
-metadata. Schema 1 traces are rejected. SQLite persists attempts in
+metadata. Schema 1 traces are rejected. The session store persists attempts in
 `model_attempts`, exposes paginated `GetAttempts` through `session.AttemptReader`,
 and stores total usage separately from final-call usage on `turns`.
 
@@ -367,58 +367,63 @@ key mechanism resolves `AZURE_API_KEY` when the configured name is `azure`.
 ## Session
 
 The `session` package is a provider-neutral persistence contract. The CLI's
-concrete implementation is `session/sqlite`; `--session`/`-s` selects a
-persistent SQLite file, while omitting it creates an in-memory SQLite database
+concrete implementation is `session/jsonl`; `--session`/`-s` selects a
+persistent JSON Lines file, while omitting it creates an in-memory store
 for the process lifetime. There is no default session directory and no
-automatic loading of prior messages. The file is single-writer: beyond the
-driver's busy timeout there is no cross-process coordination, so concurrent
-dora processes sharing one session file can fail their commits when the
-timeout expires.
+automatic loading of prior messages. The file is single-writer: it is locked
+exclusively while open, so a second dora process pointed at the same file fails
+to start instead of interleaving records.
 
-The database uses schema version 11 and three tables:
+The session file is an append-only JSON Lines log. Its first line is a header
+(`{"t":"header","v":1}`); every later line is one record tagged by `t`:
 
-- `turns`: one row per saved invocation, with nullable `parent_turn_id` referencing
-  the parent row (NULL for main turns), including `status` (`running`, `completed`,
-  `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
-  `user`, final `result`, round count, final-response `usage_json`, reported `total_usage_json`, and the
-  time of the latest save. `running` and `completed` rows have no error; every
-  non-completed row has an empty result and no final usage; the failed,
-  canceled, and max-round rows also have an error. A row that stays `running`
-  was interrupted before it finished (or belongs to a live process still
-  working on it; Dora does not try to tell the two apart);
-- `messages`: intermediate assistant/tool messages keyed by `turn_id`,
-  `round_index`, and `position`. Tool calls use a JSON column; each call stores its arguments as base64
-  `input_bytes` rather than embedded JSON, preserving all original bytes, including
-  invalid JSON and invalid UTF-8. Assistant messages also store their
-  captured `reasoning`, and both roles persist any attached images as an
-  `images_json` column. Assistant rows also store that model call's optional
-  `usage_json`; tool rows never carry usage. The final assistant response does
-  not enter this table;
-- `model_attempts`: one JSON audit record per model invocation, keyed by turn and
-  attempt index, including discarded responses and final reasoning. Provider
-  continuation remains ephemeral and is not included in audit records.
+- `turn`: a turn starts. It carries the sequential turn `id`, an optional
+  `parent` (the main turn of a child task), the plain-text `system` and `user`
+  prompts, and the time;
+- `round`: one complete assistant/tool round, keyed by `turn` and the round
+  index `i`. Tool calls store their arguments as base64 `input_bytes` rather
+  than embedded JSON, preserving all original bytes, including invalid JSON and
+  invalid UTF-8. Assistant messages also store their captured `reasoning`, and
+  both roles persist any attached images. The round carries that model call's
+  optional `usage`; the final assistant response does not enter a round;
+- `attempt`: one audit record per model invocation, keyed by turn and attempt
+  index, including discarded responses and final reasoning. Provider
+  continuation remains ephemeral and is not included in audit records;
+- `end`: the terminal `status` (`completed`, `max_rounds`, `failed`, or
+  `canceled`), optional `error`, final `result`, final-response `usage`,
+  reported `total_usage`, a changed `system` prompt, and the time. A completed
+  turn has no error; every other terminal turn has an error and no result or
+  final usage.
+
+A turn with no `end` record is reported as `running`: it was interrupted before
+it finished (or belongs to a live process still working on it; Dora does not try
+to tell the two apart). Opening the file replays it into an in-memory index of
+turns and the byte range of every round and attempt line, so listing turns costs
+no message decoding and `GetRounds`/`GetAttempts` read only the requested
+lines from disk. Replay checks that turn IDs are sequential, every record names
+an unfinished turn, indexes are consecutive, and `end` fields match their
+status; a damaged file is rejected rather than guessed at.
 
 A main turn is saved through a `session.TurnWriter` obtained from
-`Store.BeginTurn`, which does no storage work itself. `Sync` runs in one
-transaction and appends the complete rounds and finalized model attempts the
-writer has not stored yet; the first `Sync` with at least one round also
-creates the row as `running`, and a `Sync` with nothing new is a no-op. `Finish`
-appends whatever is still missing and records the terminal status, result,
-final usage, total usage, and system prompt in the same transaction, using an
-`UPDATE ... WHERE status = 'running'` so a row cannot be finalized twice. The
-writer advances its counters only after a transaction commits, so a failed
-`Sync` is repaired by the next `Sync` or by `Finish` without losing or
-duplicating rows. A turn that completes no round before it ends is created by
+`Store.BeginTurn`, which does no storage work itself. `Sync` appends, in one
+write, the complete rounds and finalized model attempts the writer has not
+stored yet; the first `Sync` with at least one round also writes the `turn`
+record, and a `Sync` with nothing new is a no-op. `Finish` appends whatever is
+still missing plus the `end` record in the same write and syncs the file; the
+turn index refuses a second `end`. A failed write is cut back to the previous
+size, and the writer advances its counters only after a write succeeds, so a
+failed `Sync` is repaired by the next `Sync` or by `Finish` without losing or
+duplicating records. A turn that completes no round before it ends is created by
 `Finish` alone. Failed, canceled, and max-round turns store all complete rounds
 plus the terminal run error. All save paths also store model attempts,
 including complete streams that ended at an output limit; interrupted transport
 streams may have unavailable response data. `CommitTurn`, `CommitMaxRounds`,
-`CommitFailed`, and `CommitCanceled` remain on the concrete SQLite store as
+`CommitFailed`, and `CommitCanceled` remain on the concrete JSONL store as
 single-shot wrappers over the same writer for callers that only hold a finished
 Turn; a child turn is saved once by `CommitChild`. Provider continuation is
-intentionally not stored. SQLite allocates the turn ID and foreign keys bind
-every message to its turn. Schema version 10 and older databases are rejected
-rather than migrated.
+intentionally not stored. A crash can leave half a record at the end of the
+file; the next open discards it, keeping every complete line before it.
+SQLite sessions and other formats are rejected unchanged rather than migrated.
 
 History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also
@@ -427,7 +432,7 @@ gets base64 `input_bytes` for lossless inspection. This avoids marshaling invali
 The existing history output size cap still applies.
 
 `tool/history` is registered from the first turn against the active session.
-An empty database is a valid history source whose `list` result is empty.
+An empty session is a valid history source whose `list` result is empty.
 `list` returns all turns newest first and includes result, status, error, usage,
 round count, and `parent_turn_id` for child rows (omitted for main turns).
 Totals and pagination include both main and child rows; a family may span
@@ -437,9 +442,9 @@ chronological page of complete rounds with `total`, `offset`, `limit`, and
 calls and their results are ordinary messages in the current Turn and are
 persisted with it on completion.
 
-New database files are created with mode `0600`. The old versioned JSON session
-format, `--fresh`, migration, and compatibility adapters are deliberately not
-implemented.
+New session files are created with mode `0600`. The old versioned JSON and
+SQLite session formats, `--fresh`, migration, and compatibility adapters are
+deliberately not implemented.
 
 ## Skills
 
@@ -503,7 +508,7 @@ shared; this is conversation-context isolation, not a security sandbox.
 `internal/cli.runTask` reports its terminal Turn and error to an application
 collector carried in the run context. Each prompt owns a separate collector;
 background contexts preserve that collector after the parent prompt returns.
-The callback only retains the terminal Turn; it does not write SQLite. The
+The callback only retains the terminal Turn; it does not write the session. The
 application commits the parent first, then saves collected children with
 `Store.CommitChild` at prompt completion and session closure. Late background
 results wait for the next such boundary. Children retain their original parent
@@ -593,7 +598,7 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
 - Session history is append-only. A turn is saved round by round while it runs and finalized once when it stops; the round in flight when the process dies, and any streaming text, are not saved. Saved turns are for inspection (the history tool, traces); Dora has no resume feature, and the provider continuation is not stored.
 - Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, persisted to session history, and included in a one-shot `--trace-file`, but are not rendered. Child task execution is intentionally not expanded into this record.
-- SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
+- The session file is held with an exclusive lock for the life of the process (flock on Unix, no write sharing on Windows), so a second Dora process cannot open it. Each save is one write; a failed write is cut back so the save can be retried, and a torn last line from a crash is discarded on the next open.
 - The CLI remains the configuration and tool composition root; `internal/app`
   owns only frontend-neutral execution and persistence, not provider discovery.
 - There is currently no interactive REPL or general event bus.

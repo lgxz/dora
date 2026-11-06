@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/lgxz/dora/session"
-	sqlitesession "github.com/lgxz/dora/session/sqlite"
+	jsonlsession "github.com/lgxz/dora/session/jsonl"
 )
 
 // Re-execute the test binary to exercise main's actual signal registration and
@@ -64,7 +64,7 @@ func TestShutdownSignalPersistsSession(t *testing.T) {
 
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "config.yaml")
-			databasePath := filepath.Join(dir, "session.sqlite")
+			databasePath := filepath.Join(dir, "session.jsonl")
 			config := fmt.Sprintf(`providers:
   - name: signaltest
     base_url: %q
@@ -116,7 +116,7 @@ env:
 			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || !strings.Contains(output.String(), "context canceled") {
 				t.Fatalf("expected graceful canceled exit, got %v\n%s", err, output.String())
 			}
-			store, err := sqlitesession.Open(context.Background(), databasePath)
+			store, err := jsonlsession.Open(context.Background(), databasePath)
 			if err != nil {
 				t.Fatal(err)
 			}

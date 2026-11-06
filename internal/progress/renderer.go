@@ -68,7 +68,7 @@ func New(output io.Writer, terminal, color, showReasoning bool) *Renderer {
 	return &Renderer{output: output, terminal: terminal, color: color, showReasoning: showReasoning, tools: make(map[string]toolRun)}
 }
 
-// Session reports the SQLite history file used by this turn.
+// Session reports the JSONL history file used by this turn.
 func (r *Renderer) Session(path string) {
 	if r == nil || r.output == nil {
 		return

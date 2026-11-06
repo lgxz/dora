@@ -11,7 +11,7 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/session"
-	sqlitesession "github.com/lgxz/dora/session/sqlite"
+	jsonlsession "github.com/lgxz/dora/session/jsonl"
 )
 
 type modelFunc func(context.Context, dora.Request) (dora.Response, error)
@@ -28,9 +28,9 @@ func (stubTool) Execute(context.Context, json.RawMessage) (dora.ToolResult, erro
 	return dora.ToolResult{Content: "ok"}, nil
 }
 
-func newTestSession(t *testing.T, model dora.Model, cfg dora.AgentConfig) (*Session, *sqlitesession.Store) {
+func newTestSession(t *testing.T, model dora.Model, cfg dora.AgentConfig) (*Session, *jsonlsession.Store) {
 	t.Helper()
-	store, err := sqlitesession.OpenMemory(context.Background())
+	store, err := jsonlsession.OpenMemory(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func twoToolRoundsThenStop(onCall func(call int, request dora.Request)) modelFun
 }
 
 func TestPromptSavesEachRoundBeforeTheNextModelRequest(t *testing.T) {
-	var store *sqlitesession.Store
+	var store *jsonlsession.Store
 	model := twoToolRoundsThenStop(func(call int, _ dora.Request) {
 		page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 10})
 		if err != nil {
@@ -272,7 +272,7 @@ type failingSyncWriter struct{ session.TurnWriter }
 func (failingSyncWriter) Sync(context.Context) error { return errors.New("disk is full") }
 
 func TestPromptWarnsOnceWhenProgressSaveFailsAndFinishStillSavesEverything(t *testing.T) {
-	real, err := sqlitesession.OpenMemory(context.Background())
+	real, err := jsonlsession.OpenMemory(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,9 +333,9 @@ func (w *finishFaultWriter) Finish(ctx context.Context, status session.TurnStatu
 	return w.TurnWriter.Finish(ctx, status, cause)
 }
 
-func newFaultSession(t *testing.T, model dora.Model, failures int) (*Session, *sqlitesession.Store, *finishFault) {
+func newFaultSession(t *testing.T, model dora.Model, failures int) (*Session, *jsonlsession.Store, *finishFault) {
 	t.Helper()
-	real, err := sqlitesession.OpenMemory(context.Background())
+	real, err := jsonlsession.OpenMemory(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

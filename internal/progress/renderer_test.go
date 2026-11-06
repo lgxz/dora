@@ -103,8 +103,8 @@ func TestRendererUsesColorOnlyWhenEnabled(t *testing.T) {
 func TestRendererShowsSessionState(t *testing.T) {
 	var output bytes.Buffer
 	renderer := New(&output, false, false, false)
-	renderer.Session("system-status.sqlite")
-	if !strings.Contains(output.String(), "Session \"system-status.sqlite\"") {
+	renderer.Session("system-status.jsonl")
+	if !strings.Contains(output.String(), "Session \"system-status.jsonl\"") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

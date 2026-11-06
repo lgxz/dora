@@ -17,7 +17,7 @@ import (
 	"github.com/lgxz/dora/internal/progress"
 	"github.com/lgxz/dora/model/registry"
 	"github.com/lgxz/dora/model/router"
-	sqlitesession "github.com/lgxz/dora/session/sqlite"
+	jsonlsession "github.com/lgxz/dora/session/jsonl"
 )
 
 func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *router.Router, error) {
@@ -159,15 +159,11 @@ func parseModelSpec(s string) (provider, profile string, err error) {
 	return provider, profile, nil
 }
 
-func openSession(ctx context.Context, path string) (*sqlitesession.Store, error) {
+func openSession(ctx context.Context, path string) (*jsonlsession.Store, error) {
 	if path == "" {
-		return sqlitesession.OpenMemory(ctx)
+		return jsonlsession.OpenMemory(ctx)
 	}
-	store, err := sqlitesession.Open(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	return store, nil
+	return jsonlsession.Open(ctx, path)
 }
 
 func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) *progress.Renderer {
