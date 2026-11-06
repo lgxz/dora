@@ -128,7 +128,7 @@ type PowerShell struct {
 
 // DefaultTaskConcurrency is how many Task runs may execute at once when
 // tools.task.max_concurrent is unset.
-const DefaultTaskConcurrency = 4
+const DefaultTaskConcurrency = 8
 
 // Task configures delegation to a fresh Agent turn. Nil Enabled defaults to
 // enabled. MaxConcurrent bounds simultaneous task runs, foreground and

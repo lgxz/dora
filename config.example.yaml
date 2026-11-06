@@ -123,5 +123,5 @@ tools:
     # conversation contexts.
     # enabled: true
     # Most task runs that execute at once, foreground and background together.
-    # Further runs wait for a free slot. Default: 4.
-    # max_concurrent: 4
+    # Further runs wait for a free slot. Default: 8.
+    # max_concurrent: 8

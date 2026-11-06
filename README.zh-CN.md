@@ -515,7 +515,7 @@ tools:
     enabled: false
 ```
 
-同时最多运行四个 task（前台和后台合计），超出的会等待空闲名额；可用 `tools.task.max_concurrent` 调整上限。
+同时最多运行八个 task（前台和后台合计），超出的会等待空闲名额；可用 `tools.task.max_concurrent` 调整上限。
 
 ## 图像理解
 

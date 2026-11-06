@@ -873,7 +873,7 @@ tools:
     enabled: false
 ```
 
-At most four task runs execute at once, foreground and background together;
+At most eight task runs execute at once, foreground and background together;
 further runs wait for a free slot. Change the limit with
 `tools.task.max_concurrent`.
 
