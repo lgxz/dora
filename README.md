@@ -287,8 +287,10 @@ a self-hosted endpoint), add it to `providers` with `base_url` and profiles. The
 `base_url + "/chat/completions"`, so `base_url` should be the provider's `/v1`
 (or equivalent) root.
 
-For a self-hosted Ollama endpoint that requires no authentication, leave
-`OLLAMA_API_KEY` unset:
+For a self-hosted Ollama endpoint that requires no authentication, also set
+any non-empty placeholder API key (for example `export OLLAMA_API_KEY=local`,
+or the same name under the configuration's `env` section); otherwise the
+provider is treated as unavailable and skipped during selection:
 
 ```yaml
 providers:
@@ -296,6 +298,8 @@ providers:
     base_url: http://localhost:11434/v1
     profiles:
       - name: llama3.1
+env:
+  OLLAMA_API_KEY: local
 ```
 
 To replace OpenRouter's built-in `auto` profile with an explicit catalog, list

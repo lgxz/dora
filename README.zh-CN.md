@@ -13,7 +13,9 @@
 
 ## 基准测试结果
 
-dora 在 [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench-2.1)（89 个任务）上使用 `deepseek-v4-flash` 模型进行评估。下表记录了随着 dora 的演进，各次评估运行的平均通过率：
+dora 在 [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench-2.1)（89 个任务）上进行评估。下表记录了随着 dora 的演进，各次评估运行的平均通过率：
+
+### deepseek-v4-flash（thinking 关闭）
 
 | 运行 | 日期 | 平均值 | 通过数 | 备注 |
 |-----|------|------|--------|-------|
@@ -24,9 +26,17 @@ dora 在 [terminal-bench-2.1](https://github.com/harbor-framework/terminal-bench
 | 5 | 2026-08-14 | 0.618 | 55/89 | 系统提示词 |
 | 6 | 2026-08-14 | 0.685 | 61/89 | read/write/edit 工具 |
 
+### deepseek-v4-pro（thinking：high）
+
+| 运行 | 日期 | 平均值 | 备注 |
+|-----|------|------|--------|
+| 1 | 2026-08-28 | 0.787 |  |
+
+https://hub.harborframework.com/jobs/747f9a67-ed3a-498b-a70e-6786a70eb8a5
+
 ## 范围
 
-内核支持可选的模型流式事件，同时保持其基线 `Model` 接口为同步。工具调用被刻意安排为仅在当前模型响应完成后才执行，并且一个响应中的多个工具调用会并发执行（结果按返回顺序输出）。内核没有内置的内存、策略引擎、中间件或提供商 SDK。
+内核支持可选的模型流式事件，同时保持其基线 `Model` 接口为同步。工具调用被刻意安排为仅在当前模型响应完成后才执行。一个响应中的多个工具调用会并发执行，但会修改文件或进程的工具（`write`、`edit`、`bash`、`powershell`）实现了可选的 `ExclusiveTool` 接口，会单独按模型书写的顺序依次运行，因此依赖前一个调用的调用能看到它的效果。结果按返回顺序保存。内核没有内置的内存、策略引擎、中间件或提供商 SDK。
 
 ## CLI
 
@@ -215,7 +225,7 @@ env:
   OPENROUTER_API_KEY: sk-or-v1-...
 ```
 
-对于无需认证的本地端点，同时省略真实环境变量和配置 fallback。如果两个 provider 名称归一化后得到相同的环境变量，配置校验会报错。包含 key 的配置文件属于敏感信息，应妥善保护。
+即使是无需认证的本地端点，也需要一个非空的 API key（任意占位值即可）才能被选中。如果两个 provider 名称归一化后得到相同的环境变量，配置校验会报错。包含 key 的配置文件属于敏感信息，应妥善保护。
 
 使用 `max_tokens`、`max_output_tokens` 和 `temperature` 控制普通响应的输出预算、模型硬输出容量和采样：
 
@@ -235,25 +245,38 @@ policy:
     profile: balanced
 ```
 
-`max_tokens` 限制普通响应生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API，以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`max_output_tokens` 是可选且必须为正数的模型硬输出容量，没有默认值；它会同时裁剪 `max_tokens` 和单次请求设置的输出上限。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这些键属于 model catalog，没有对应的命令行标志。
+`max_tokens` 限制普通响应生成的 token 数量，默认为 32768。它在线上以 `max_tokens` 形式发送给 `chat_completions` API（当 profile 设置 `use_max_completion_tokens: true` 时则以 `max_completion_tokens` 发送），以 `max_output_tokens` 形式发送给 `responses` API；显式设置为 `0` 表示"无显式上限"并按原样传递。`max_output_tokens` 是可选且必须为正数的模型硬输出容量，没有默认值；它会同时裁剪 `max_tokens` 和单次请求设置的输出上限。`temperature` 没有默认值：省略时不会发送任何值，提供商使用自己的默认采样。它接受 `[0, 2]` 范围内的值。由于某些推理模型和工具调用模型会忽略或拒绝非默认温度，请将 `temperature` 视为尽力而为。这些键属于 model catalog，没有对应的命令行标志。
 
-`context_window` 属于 model profile，表示模型以 token 为单位的上下文容量。默认值为 1048576，配置值必须为正数。当提供商返回 usage 时，Dora 使用上一次调用的准确 `total_tokens`，再加上该响应之后产生的工具结果 token 估算；没有 usage 时则估算完整消息历史和工具 schema。提供商中立的估算规则约为每四个 ASCII 字节或每个非 ASCII 字符一个 token，并包含少量消息 framing 开销；该估算不估算视觉 token。当包含输出预留在内的预测用量达到上下文窗口的 80% 时，Dora 会请当前模型生成语义摘要，用它替换模型可见历史。摘要目标为窗口的 20%，并进一步受 profile 可选的 `max_output_tokens` 裁剪；这个有效目标会作为单次请求的输出上限，覆盖普通请求的 `max_tokens`，避免提供商较小的默认值静默限制压缩。摘要调用不携带工具或 continuation，达到输出上限但非空的摘要仍可接受。用于持久化的完整 Turn 保持不变，摘要失败时也不会回退到删除或本地截断历史。
+`context_window` 属于 model profile，表示模型以 token 为单位的上下文容量。默认值为 1048576，配置值必须为正数。当提供商返回 usage 时，Dora 使用上一次调用的准确 `total_tokens`，再加上该响应之后产生的工具结果 token 估算；没有 usage 时则估算完整消息历史和工具 schema。提供商中立的估算规则约为每四个 ASCII 字节或每个非 ASCII 字符一个 token，并包含少量消息 framing 开销；该估算不估算视觉 token。当包含输出预留在内的预测用量达到上下文窗口的 80% 时，Dora 会请当前模型对对话的中间部分生成摘要。原始任务（最多占窗口的 5%）和最近的完整工具轮次（最多占 10%）会原文保留在摘要两侧，只有两者之间的内容被替换为不超过窗口 20% 的语义摘要，并进一步受 profile 可选的 `max_output_tokens` 裁剪。这个有效目标会作为单次请求的输出上限，覆盖普通请求的 `max_tokens`，避免提供商较小的默认值静默限制压缩。摘要调用不携带工具或 continuation。因输出上限被截断的摘要即使有内容也不会被采用，而是请求更短的摘要重试一次。当历史留给摘要的窗口空间不足时，超大的工具结果只会在摘要请求中被缩短，输出预算也会缩减到剩余空间。用于持久化的完整 Turn 保持不变，摘要失败时也不会回退到删除或本地截断历史。
 
-`thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium` 或 `high` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。
+上述预测只是启发式估算，因此提供商仍可能因请求过大而拒绝。Dora 能识别这种拒绝（HTTP 400/413/422 且错误码或消息表明超出上下文长度，或流中的 error 事件），会立即按窗口已满的假设进行压缩，并重试该请求一次。若重试仍失败，或该轮刚刚压缩过，则运行以提供商的错误结束。
+
+`thinking` 控制模型的"思考模式"推理强度。将其设置为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 之一。它没有默认值：省略时不会发送任何值，提供商使用自己的推理默认值。
 不同提供商的支持情况各异，不支持的值会被静默忽略而不是报错：
 
-- **openai**：在 Responses API 上会发送 `off`→`none`、`minimal`、`low`、`medium` 和 `high` 全部值；在 Chat Completions 上 `minimal`–`high` 会以 `reasoning_effort` 发送，但 `off` 不受支持（gpt-5 的下限是 `minimal`），并会被忽略。
-- **deepseek**：在两个 API 上都会发送 `low`/`medium`/`high`，`minimal` 不受支持并被忽略，而 `off` 在 Chat Completions 上以 `thinking.type: disabled` 发送，在 Responses 上以 `reasoning.effort: none` 发送。
+- **openai**：在 Responses API 上会发送全部值（`off` 变为 `none`）；在 Chat Completions 上 `minimal`–`max` 会以 `reasoning_effort` 发送，但 `off` 不受支持（gpt-5 的下限是 `minimal`），并会被忽略。
+- **deepseek**：在两个 API 上都会发送 `low` 到 `max`，`minimal` 不受支持并被忽略，而 `off` 在 Chat Completions 上以 `thinking.type: disabled` 发送，在 Responses 上以 `reasoning.effort: none` 发送。
 - **trust**：在两个 API 上都按尽力而为的方式处理，类似 OpenAI。
-- **openrouter**：在 Chat Completions 上将 `minimal`–`high` 作为 `reasoning_effort` 发送，并将 `off` 作为 `reasoning_effort: none` 发送。
+- **openrouter**：在 Chat Completions 上将 `minimal`–`max` 作为 `reasoning_effort` 发送，并将 `off` 作为 `reasoning_effort: none` 发送。
 
-由于一个设置可能被直接丢弃，请将 `thinking` 视为提示而非保证。对于一次性调用，`--thinking` 会用 `off`、`minimal`、`low`、`medium` 或 `high` 之一覆盖所选模型的设置：
+由于一个设置可能被直接丢弃，请将 `thinking` 视为提示而非保证。对于一次性调用，`--thinking` 会用 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 之一覆盖所选模型的设置：
 
 ```sh
 ./dora --thinking high "Solve a hard problem"
 ```
 
 `preserve_thinking` 是 profile 级开关（默认关闭），面向 Chat Completions 上的推理模型。开启后，此前工具调用轮次捕获的推理会回传到对应的 assistant 历史消息上：普通推理使用 `reasoning_content`；结构化 `reasoning_details` 会保持顺序和语义保存在 provider continuation 中，并在存在时优先回放。DeepSeek 和 OpenRouter 的内建 profile 已开启；忽略或拒绝回传推理的提供商（以及像 Qwen/DashScope 这样要求剔除的）保持关闭。
+
+一次调用中，`-m`/`--model` 可以用 `PROVIDER/PROFILE` 覆盖配置的对话模型，按名称选择 provider 以及可选的 profile。只写 `PROVIDER`（或带结尾斜杠）会选择该 provider 的默认 profile（第一个满足所需能力的 profile）。它不会修改配置文件：
+
+```sh
+./dora -m trust/deepseek-v4-flash "Explain this repository"
+./dora -m deepseek "Explain this repository"
+```
+
+`-m` 只影响文本对话模型，不影响图片模型和技能模型。如果名称在该 provider 下没有匹配的 profile，则把它当作未注册的模型 ID 直接使用。只有第一个 `/` 用来分隔 provider，因此 `-m openrouter/vendor/model-name` 发送的是 `vendor/model-name`。这个临时文本 profile 使用该 provider 的连接和 API 设置、`max_tokens: 32768` 和 `context_window: 1048576`，不会继承其他 profile 的参数。`--thinking` 仍然适用。
+
+已有的 profile 始终优先，包括它们的能力限制。未知的 provider、缺失的 API key 以及不兼容的已有 profile，仍然会得到 `router: no model satisfies the constraints`。未知的模型 ID（包括拼错的 profile 名称）交给提供商去拒绝。这个回退只适用于 `-m`/`--model`；policy 字段及其环境变量覆盖仍然要求已配置的 profile。
 
 Dora 默认每个片段最多运行 256 轮模型-工具循环。请保留这一安全机制，但在工具工作流异常冗长时进行调整：
 
@@ -262,7 +285,20 @@ agent:
   max_rounds: 96
 ```
 
-使用 `--max-rounds` 为一次调用覆盖它：
+模型响应必须明确给出正常的结束原因。空的最终答案，或缺失/未知的结束原因，都会让该 turn 失败，而不会被悄悄当作完成。输出被截断时，即使返回的工具调用参数看起来完整，也绝不会执行这些工具调用。
+
+对于普通 Agent 调用，Dora 会从最近一次完整交互处重试一次输出受限的响应，并把实际请求的输出预算翻倍（例如 32768 变为 65536）。它保留原有历史和 continuation，不假设提供商能够续写被截断的推理。重试受模型声明的输出容量、可用上下文以及可选的恢复上限约束。如果原始预算未知、无法再增加，或重试同样被截断，该 turn 会明确失败。取消和截止时间仍然生效。
+
+```yaml
+agent:
+  output_limit_recovery:
+    max_retries: 1          # 0 表示关闭输出受限恢复
+    max_output_tokens: 65536 # 可选的恢复上限
+```
+
+这个限制独立于传输层重试和 `max_rounds`。profile 的 `max_output_tokens` 声明的是硬容量，不会提高普通的 `max_tokens` 预算。提高恢复预算可能增加延迟和成本。
+
+使用 `--max-rounds` 为一次调用覆盖轮数上限：
 
 ```sh
 ./dora --max-rounds 96 "Complete a long task"
@@ -278,6 +314,8 @@ agent:
     你是 Acme 部署团队的终端助手。
     优先使用 /opt/acme 下的部署脚本。
 ```
+
+Dora 会在默认提示词和自定义提示词之后追加一个 `runtime_environment` 块，包含操作系统、架构以及 Agent 的本地启动日期（不含时间）。这份快照在 Agent 的整个生命周期（包括子任务）内保持不变，在启动时捕获。长时间运行的 Agent 不会在跨午夜时刷新日期。
 
 运行一次性提示，或将指令与管道输入结合：
 
@@ -300,9 +338,13 @@ git diff | ./dora "Review this change"
 ./dora "Write release notes" > release-notes.md
 ```
 
-进度颜色默认使用 `--color=auto`：当 stderr 是终端且未设置 `NO_COLOR` 时启用。使用 `--color=always` 可在 stderr 被重定向时仍保留 ANSI 颜色，使用 `--color=never` 可将其关闭。显式颜色模式会覆盖自动终端和环境检测；所有模式下进度仍显示在 stderr 上。瞬时的 `Thinking...` 占位符仅在 stderr 是终端时显示；重定向的进度会省略它，只保留模型、工具、信息和错误等实质内容。
+进度颜色默认使用 `--color=auto`：当 stderr 是终端且未设置 `NO_COLOR` 时启用。使用 `--color=always` 可在 stderr 被重定向时仍保留 ANSI 颜色，使用 `--color=never` 可将其关闭。显式颜色模式会覆盖自动终端和环境检测；所有模式下进度仍显示在 stderr 上。瞬时的 `Thinking...` 占位符仅在 stderr 是终端时显示；重定向的进度会省略它，只保留模型、工具、信息和错误等实质内容。执行之前，进度会以 `Model PROVIDER/PROFILE · thinking=VALUE` 标明解析后的对话模型；这些是经过 policy、自动可用性过滤和命令行覆盖之后的有效设置。`thinking=default` 表示没有向提供商显式发送 thinking 值。`--quiet` 会连同其它进度输出一并隐藏这一行。
 
 推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，在终端中替代 `Thinking...` 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
+
+当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前 SQLite 会话中，并由 history 工具返回；没有 `--session` 时，该数据库在内存中，随 Dora 退出而消失。
+
+如需机器可读的父 turn 记录，传入 `--trace-file PATH`。Dora 会写出与提供商无关的 JSON 记录，包含 system 和 user 消息、每个已完成的 assistant/tool 轮次（包括推理、工具输入、结果、图片和每次调用的用量），以及产生了最终响应时的最终响应。Trace schema **2** 还包含 `status`、`error`、`attempts` 和 `total_usage`。每次模型尝试都会记录其结束原因、提供商原始原因、实际输出预算（未知时为零）、恢复序号、处置方式、推理、文本、工具参数以及报告的用量。被丢弃的调用和压缩调用也包含在内。最终推理会被保留。`attempts` 只应累加一次：被采纳的响应同样出现在 `rounds`/`final` 中，不能重复计数。缺失的用量视为未知；总计只累加已报告的数量。子任务和图片工具的模型调用不会展开到父 trace 中。Harbor 适配器现在要求 schema 2，schema 1 会被拒绝。格式错误的提供商工具参数会以文本形式保留，不会妨碍记录失败的 turn。父目录必须已经存在，文件以 `0600` 权限创建。该选项仅支持一次性运行。Terminal-Bench 集成可以把这份稳定的父 turn 记录转换为基准测试的 ATIF 格式，而无需让核心 Agent 依赖 Harbor。
 
 使用 `--workdir` 可以指定工具解析相对路径时使用的基准目录：
 
@@ -312,20 +354,62 @@ git diff | ./dora "Review this change"
 
 该目录必须已经存在。Dora 会将它解析为绝对路径，但不会修改进程的当前目录，因此并发 Agent Run 可以安全地使用不同基准。它适用于命令工具，以及 `read`、`write`、`edit`、`grep`、`glob` 和 `view_image` 的相对路径；绝对路径不受影响。配置文件和 `--session` 路径仍相对于进程当前目录解析。`--workdir` 只是路径参照，并不是文件系统沙箱或额外的权限边界。
 
+### Azure OpenAI
+
+使用其 [v1 API](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle) 配置 Azure OpenAI。请显式把它添加到配置中：Azure 没有默认的资源端点或部署 catalog。将 `base_url` 设置为以 `/openai/v1` 结尾的资源 URL，并将 `model` 设置为你的 Azure 部署名称。
+
+```yaml
+providers:
+  - name: azure
+    base_url: https://YOUR-RESOURCE.openai.azure.com/openai/v1
+    profiles:
+      - name: gpt
+        model: YOUR-DEPLOYMENT
+        use_max_completion_tokens: true
+        capabilities: [text]
+        max_tokens: 32768
+policy:
+  text:
+    provider: azure
+    profile: gpt
+```
+
+在环境变量或配置的 `env` 中设置 `AZURE_API_KEY`。对于要求使用该参数的模型，设置 `use_max_completion_tokens: true`。这个 profile 设置适用于任何 provider 名称，默认为 false。它会在 Chat Completions 上把 `max_tokens` 预算以 `max_completion_tokens` 发送，包括压缩和输出受限恢复所用的单次请求上限；对 Responses API 无效。Azure 也接受 `api: responses`，此时发送 `max_output_tokens`。该集成面向 v1 端点；需要 `api-version` 查询参数的旧式部署 URL 不受支持。
+
+### 模型请求重试
+
+瞬时的模型故障，包括收到部分文本或推理后连接被重置，以及流式 JSON 不完整（`unexpected end of JSON input`），会重试当前的模型请求，总共最多六次尝试。其他 JSON 语法和类型错误不会重试。五次等待分别为 2、4、8、16 和 30 秒，外加最多 50% 的随机抖动；提供商给出的重试延迟优先，但最多采用两分钟；要求等待更久时，请求会立即失败并给出说明。速率限制失败保留其独立的五次尝试策略和提供商指定的延迟。
+
+除非设置了 `--quiet`，重试进度会在 stderr 上报告下一次尝试、延迟和错误。取消会中断等待。失败的尝试绝不会提交部分响应，也不会执行其中的工具调用；重试复用当前请求，不会重放已完成的工具轮次。已经显示的文本或推理无法撤回，重试后可能再次出现。只有成功的完整响应才会进入 turn 历史。
+
 ### 会话
 
-传入一个 SQLite 文件，可以跨多次 CLI 调用保留已完成的 turns：
+传入一个 SQLite 文件，可以跨多次 CLI 调用保留 turns：
 
 ```sh
 ./dora -s ./system-status.sqlite "Analyze this machine's system status"
 ./dora -s ./system-status.sqlite "Continue with the busiest processes"
 ```
 
-每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 从第一个 turn 开始就加入 `history` 工具：模型可以用 `list` 列出已保存的 turns 及各自的状态、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成、达到最大 rounds 或因其他错误失败的 turn 都会一次性原子追加；失败 turn 只保存错误和失败前完整完成的工具 rounds，不保存流式 partial output。Provider continuation 只在当前 turn 运行期间保存在内存中。
+每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 始终提供 `history` 工具，包括第一个 turn 之前：模型可以用 `list` 列出 turns 及各自的状态、错误、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空数据库会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成的 turn 会原子追加。因达到最大 rounds 而停止的 turn 也会以 `max_rounds` 状态保存，包含其错误和全部已完成的工具 rounds，但没有最终结果和最终响应 usage。Ctrl+C（`SIGINT`）和 `SIGTERM` 造成的取消以 `canceled` 状态保存；Dora 使用单独的短时提交上下文，使取消运行不会同时取消它的会话写入。其他失败的 turn 以 `failed` 状态保存。两者都会保留错误、完整的工具 rounds 以及单独的模型尝试审计记录，包括输出受限的响应。传输故障可能没有响应内容或 usage。确认交互式继续提示会继续使用同一个 Turn，不会保存中间的 `max_rounds` 记录。Provider continuation 只在该 turn 运行期间保留。
 
-指定 `--session` 时，SQLite schema version 6 包含 `turns` 和 `messages` 表，记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（schema version 5 及更早的数据库会被拒绝，请新建文件）。省略 `--session`/`-s` 时，Dora 会为当前进程创建内存 SQLite 数据库；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。持久化 Session 文件可能包含命令、工具输出及 token 使用信息，因此请将其视为敏感内容。
+使用 GNU `timeout` 时，请在强制终止前留出取消和会话存储的时间，例如：
 
-使用 `--config`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
+```sh
+timeout --kill-after=10s 300s dora --session session.sqlite "Your task"
+```
+
+最初的 `SIGTERM` 请求取消；额外的十秒用于在 `SIGKILL` 之前完成清理。父 turn 存储和每个子任务历史的写入各有五秒预算；后台 Task 的关闭也可能再等待五秒。取消缓慢或子任务历史清理可能需要更长的宽限期。`SIGKILL` 无法被处理，可能丢失当前 turn。只会保留完整的工具 rounds 和可用的模型尝试记录，不保留未完成的流式文本。
+
+指定 `--session` 时，SQLite schema version 11 包含 `turns`、`messages` 和 `model_attempts` 表，记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、附带的图片引用、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON、结束元数据、最终推理和报告的总用量。SQLite 存储的 `GetAttempts` API 与对话 rounds 分开，单独分页读取审计记录。新文件权限为 `0600`。旧命名 JSON session 格式、`--fresh` 以及自动迁移均不支持（schema version 10 及更早的数据库会被拒绝，请新建文件）。每个完整的工具 round 在 turn 运行期间就会保存，因此崩溃或强制退出时仍会保留已完成的 rounds；这样被打断的 turn 会停留在 `running` 状态，正在进行的那个 round 会丢失。Dora 不会恢复被中断的 turn。省略 `--session`/`-s` 时，Dora 会为当前进程创建内存 SQLite 数据库；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。Session 数据库可能包含命令、工具输出及 token 使用信息，因此请将持久化文件视为敏感内容。
+
+使用 `--config`、`-m`/`--model`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
+
+子任务 turn 保存在同一个数据库中，其 `parent_turn_id` 指向主 turn。`history list` 返回所有 turns，包括每个 turn 的最终结果、状态以及子任务的 `parent_turn_id`（主 turn 省略该字段）。它的总数和分页同时统计主 turn 和子 turn，因此相关的 turns 可能出现在不同页。`history get` 保持按 rounds 分页的格式：可以用任意 turn ID 查看该 turn 的工具 rounds。父 turn 的 usage 和 trace 输出不包含子任务的 usage。
+
+Task 完成时只在内存中收集终态 Turn，不等待 SQLite。收集到的子任务在一次 prompt 结束后以及会话关闭时保存。后台 Task 始终保留其原始父 turn，即使它在之后的 prompt 期间才结束；迟到的结果在下一次 prompt 结束或会话关闭的边界保存。失败、取消和达到最大轮数的子任务同样会被保存。子任务的写入失败会在清理时报告，但不会改变 Task 的结果。强制终止仍可能丢失尚未保存的子任务记录。
+
+Session 存储会精确保留工具参数的字节，包括格式错误的 JSON。`history get` 把每个工具调用的 `input` 作为包含原始参数文本的字符串返回，有效和无效 JSON 都是如此。对于无效的 UTF-8，还会包含 base64 编码的 `input_bytes`，使原始字节仍然可用。History 输出仍然使用现有的大小限制；结果被截断时请缩小分页范围。
 
 ### 技能（Skills）
 
@@ -381,47 +465,49 @@ git push origin v0.1.0
 tools:
   bash:
     enabled: false
-    timeout_seconds: 120
   powershell:
     enabled: true
-    timeout_seconds: 120
   task:
     enabled: false
 ```
 
 可执行文件不存在的自动工具会被跳过。用 `enabled: true` 显式启用的工具必须存在于 `PATH` 上，否则 Dora 会报告错误。目前发现机制仅检查可执行文件是否存在；它不会启动 shell 去探测其运行时环境。
 
-Bash 工具在 `--workdir` 指定的目录下运行 `bash -lc`；省略该参数时使用 Dora 进程的当前目录。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以 JSON 形式向模型返回退出码、stdout、stderr、超时和截断信息。每个流的输出限制为 1 MiB。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
+Bash 工具在 `--workdir` 指定的目录下运行 `bash -c`；省略该参数时使用 Dora 进程的当前目录。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以 JSON 形式向模型返回退出码、stdout 和 stderr。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
 
 独立的 `powershell` 工具优先使用 PowerShell Core（`pwsh`），并在不可用时回退到 Windows PowerShell（`powershell.exe`）。如果两个工具都被显式启用，它们会分开暴露，以便区分各自的命令语法。
 
 PowerShell 使用相同的工作目录规则，需要时可在命令内部使用 `Set-Location`。
 
-两个命令工具都接受可选的每次命令超时。它覆盖该次调用的配置默认值，且不能超过 3600 秒：
+两个命令工具都使用同一个 `wait_seconds` 参数。它是命令在被转入后台之前最多等待其结束的秒数；转入后台后命令继续运行（不会被终止），Dora 返回一个 `job_id`，job 工具可以用它来查看该命令。后台进程在 Dora 自身退出时同样不会被终止——它们会在会话结束后继续运行，需要时请用 job 工具的 kill 操作显式停止。在 Unix 上，kill 会终止命令的进程组；在 Windows 上，则终止进程树。这涵盖了诸如 `timeout 240 python3 ...` 之类的普通后代进程。在命令结果、转入后台的结果和 job 轮询中，stdout 和 stderr 各自每次结果上限为 32 KiB（保留头部和尾部，并以标记注明原始大小）；更大的输出请重定向到文件再查看。省略时（默认）Dora 等待 10 秒，取值 `0` 表示立即转入后台：
 
 ```json
 {
   "command": "go build ./...",
-  "timeout_seconds": 300
+  "wait_seconds": 300
 }
 ```
 
-省略时，`timeout_seconds` 来自对应的 YAML 工具设置；当该设置为零或缺失时，默认 120 秒。
+命令作业的 ID 以来源工具为前缀，并各自独立计数，例如 `bash_0` 和 `powershell_0`。公开的作业结果不包含单独的作业类型字段；由 ID 标识来源。
 
 ## 独立任务
 
-`task` 工具默认启用。它接收一条完整、自包含的 `instruction`，使用同一个
-Agent 和模型在全新的 Turn 中执行，并将最终文本返回父上下文。新 Turn
-不会继承父 Turn 的消息或 provider continuation；它会绑定同一个 Agent
-system prompt，并可使用父 Agent 的其他工具，但 `task` 会同时从子运行的
-工具声明和执行集合中移除，以防递归委派。
+`task` 工具默认启用。它接收一条完整、自包含的 `instruction`，使用同一个 Agent 和模型在全新的 `Turn` 中执行，并将该 turn 的最终文本返回给父对话。新 turn 不会继承父 turn 的消息或 provider continuation。它使用同一个不可变的 Agent system prompt，并可使用父 Agent 的其他所有工具，但 `task` 本身会同时从工具定义和可执行工具集合中移除，以防递归委派。
 
-同一模型响应中的多个 Task 调用遵循 Dora 的普通工具语义并发执行，没有
-额外的 Task 并发限制。子运行不向终端 Observer 发送过程事件，只显示父
-Agent 的消息以及 Task 完成摘要和耗时。
+同一模型响应中的多个 Task 调用并发执行（`task` 不是独占工具）。没有单独的 Task 并发限制。子任务的进度不会发送到终端 Observer，只渲染父级消息以及 Task 完成摘要和耗时。
 
-Task 的上下文隔离不是安全沙箱。父子运行共享进程、当前工作目录、文件
-系统、权限、模型客户端和具体工具实例。不需要委派时可以关闭：
+当父级应立即继续而不等待这个独立 turn 时，将 `background` 设为 `true`：
+
+```json
+{
+  "instruction": "Run the full test suite and summarize failures",
+  "background": true
+}
+```
+
+结果会立即包含一个 `task_N` 作业 ID。使用同一个 `job` 工具来列出、轮询或终止它；`job.poll.wait_seconds` 控制该次轮询的等待时长，而 Task 本身没有耗时估计。已完成的 Task 结果会保留，可重复轮询。与后台 shell 进程不同，后台 Task 运行在 Dora 内部，无法在进程退出后存活。在会话正常关闭时，Dora 会取消剩余的 Task，并最多等待五秒让它们返回，然后在关闭存储之前保存收集到的历史。超过这个宽限期仍忽略取消的 Task 可能丢失其历史。它们的嵌套进度始终保持隐藏，包括在后台运行时。终止 Task 会协作式地取消其上下文。作业在嵌套运行真正返回之前一直报告 `cancelling`，之后才报告 `killed`；因此忽略上下文取消的组件可能延迟终止。
+
+Task 的上下文隔离不是安全沙箱。父子运行共享进程、当前工作目录、文件系统、权限、模型客户端和具体工具实例。不需要委派时可以关闭：
 
 ```yaml
 tools:
