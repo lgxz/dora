@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/job"
 	"github.com/rivo/uniseg"
 )
 
@@ -113,50 +114,26 @@ func formatTaskCall(raw json.RawMessage) string {
 }
 
 func formatTaskResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
-	var result struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-	}
-	if json.Unmarshal([]byte(message.Content), &result) == nil && result.JobID != "" && result.Status == "running" {
+	if result := job.ParseResult(message.Content); result.Background && result.JobID != "" {
 		return "background " + result.JobID, outcomeWarning
 	}
 	return "done", outcomeSuccess
 }
 
 func formatCommandResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
-	var result struct {
-		ExitCode  *int   `json:"exit_code"`
-		Stdout    string `json:"stdout"`
-		Stderr    string `json:"stderr"`
-		TimedOut  bool   `json:"timed_out"`
-		Truncated bool   `json:"truncated"`
-		JobID     string `json:"job_id"`
-		Status    string `json:"status"`
-		Error     string `json:"error"`
-	}
-	if json.Unmarshal([]byte(message.Content), &result) != nil {
+	result := job.ParseResult(message.Content)
+	size := formatStreamSizes(len(result.Stdout), len(result.Stderr))
+	switch {
+	case result.Canceled:
+		return joinResult("canceled", size), outcomeFailure
+	case result.Background:
+		return joinResult("background job "+result.JobID, size), outcomeWarning
+	case result.ExitCode != 0:
+		return size, outcomeFailure
+	case size == "":
 		return "done", outcomeSuccess
 	}
-	if result.Error != "" {
-		return collapse(result.Error), outcomeFailure
-	}
-	outputSize := formatStreamSizes(len(result.Stdout), len(result.Stderr))
-	if result.TimedOut {
-		return joinResult("timed out", outputSize), outcomeFailure
-	}
-	if result.JobID != "" && result.Status == "running" {
-		return joinResult("background job "+result.JobID, outputSize), outcomeWarning
-	}
-	if result.ExitCode != nil && *result.ExitCode != 0 {
-		return outputSize, outcomeFailure
-	}
-	if result.Truncated {
-		return joinResult(outputSize, "output truncated"), outcomeWarning
-	}
-	if result.ExitCode == nil {
-		return "done", outcomeSuccess
-	}
-	return outputSize, outcomeSuccess
+	return size, outcomeSuccess
 }
 
 func formatReadCall(raw json.RawMessage) string {
@@ -357,35 +334,38 @@ func formatJobCall(raw json.RawMessage) string {
 }
 
 func formatJobResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
-	var result struct {
-		Error    string            `json:"error"`
-		Status   string            `json:"status"`
-		ExitCode *int              `json:"exit_code"`
-		Jobs     []json.RawMessage `json:"jobs"`
+	text := strings.TrimSpace(message.Content)
+	if rest, ok := strings.CutPrefix(text, "error: "); ok {
+		return collapse(rest), outcomeFailure
 	}
-	if json.Unmarshal([]byte(message.Content), &result) != nil {
-		return "done", outcomeSuccess
+	result := job.ParseResult(text)
+	if result.JobID == "" {
+		// A list ("a running\nb done"), a kill reply ("job a: cancelling")
+		// or an empty list.
+		if rest, ok := strings.CutPrefix(text, "job "); ok {
+			_, status, _ := strings.Cut(rest, ": ")
+			return status, jobOutcome(status)
+		}
+		if text == "(no jobs)" {
+			return "0 jobs", outcomeSuccess
+		}
+		return plural(lineCount(text), "job", "jobs"), outcomeSuccess
 	}
-	if result.Error != "" {
-		return collapse(result.Error), outcomeFailure
+	status := result.Status
+	if result.HasExit {
+		status = joinResult(status, fmt.Sprintf("exit %d", result.ExitCode))
 	}
-	if result.Jobs != nil {
-		return plural(len(result.Jobs), "job", "jobs"), outcomeSuccess
-	}
-	text := result.Status
-	if text == "" {
-		text = "done"
-	}
-	if result.ExitCode != nil {
-		text = joinResult(text, fmt.Sprintf("exit %d", *result.ExitCode))
-	}
-	switch result.Status {
+	return status, jobOutcome(result.Status)
+}
+
+func jobOutcome(status string) outcome {
+	switch status {
 	case "running", "cancelling":
-		return text, outcomeWarning
+		return outcomeWarning
 	case "failed", "timed_out":
-		return text, outcomeFailure
+		return outcomeFailure
 	default:
-		return text, outcomeSuccess
+		return outcomeSuccess
 	}
 }
 

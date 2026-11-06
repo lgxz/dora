@@ -819,7 +819,7 @@ func TestRunExecutesEnabledBashTool(t *testing.T) {
 		case 2:
 			messages := body["messages"].([]any)
 			toolMessage := messages[len(messages)-1].(map[string]any)
-			if toolMessage["role"] != "tool" || !strings.Contains(toolMessage["content"].(string), `"stdout":"dora"`) {
+			if toolMessage["role"] != "tool" || toolMessage["content"] != "dora" {
 				t.Fatalf("tool message = %#v", toolMessage)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"command worked"}}]}`), nil
@@ -985,7 +985,7 @@ func TestRunStartsBackgroundTaskAndPollsResult(t *testing.T) {
 			case 4:
 				toolMessage := messages[3].(map[string]any)
 				content := toolMessage["content"].(string)
-				if toolMessage["role"] != "tool" || !strings.Contains(content, `"job_id":"task_0"`) || !strings.Contains(content, `"status":"running"`) {
+				if toolMessage["role"] != "tool" || !strings.HasPrefix(content, "[background job task_0: ") {
 					t.Fatalf("background task result = %#v", toolMessage)
 				}
 				<-childStarted
@@ -994,7 +994,7 @@ func TestRunStartsBackgroundTaskAndPollsResult(t *testing.T) {
 			case 6:
 				toolMessage := messages[5].(map[string]any)
 				content := toolMessage["content"].(string)
-				if toolMessage["role"] != "tool" || !strings.Contains(content, `"status":"done"`) || !strings.Contains(content, `"result":"background result"`) || strings.Contains(content, `"kind"`) {
+				if toolMessage["role"] != "tool" || content != "[job task_0: done]\nbackground result" {
 					t.Fatalf("background task poll result = %#v", toolMessage)
 				}
 				return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"parent collected result"}}]}`), nil

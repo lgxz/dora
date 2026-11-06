@@ -66,14 +66,8 @@ func TestExecuteDefaultWaitUsesBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(output), &bg); err != nil {
-		t.Fatalf("decode background result: %v (output=%s)", err, output)
-	}
-	if bg.JobID != "test-command_0" || bg.Status != "running" {
+	bg := decodeResult(t, output)
+	if bg.JobID != "test-command_0" || !bg.Background {
 		t.Fatalf("expected job_id + running, got %#v", bg)
 	}
 
@@ -96,14 +90,8 @@ func TestExecuteZeroWaitAdoptsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(output), &bg); err != nil {
-		t.Fatalf("decode background result: %v (output=%s)", err, output)
-	}
-	if bg.JobID != "test-command_0" || bg.Status != "running" {
+	bg := decodeResult(t, output)
+	if bg.JobID != "test-command_0" || !bg.Background {
 		t.Fatalf("expected immediate job_id + running, got %#v", bg)
 	}
 	if !jm.HasActiveJobs() {
@@ -134,14 +122,8 @@ func TestExecuteNegativeWaitDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(output), &bg); err != nil {
-		t.Fatalf("decode background result: %v (output=%s)", err, output)
-	}
-	if bg.JobID != "test-command_0" || bg.Status != "running" {
+	bg := decodeResult(t, output)
+	if bg.JobID != "test-command_0" || !bg.Background {
 		t.Fatalf("expected job_id + running after negative wait, got %#v", bg)
 	}
 }
@@ -171,14 +153,8 @@ func TestExecuteTransitionsToBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(output), &bg); err != nil {
-		t.Fatalf("decode background result: %v (output=%s)", err, output)
-	}
-	if bg.JobID != "test-command_0" || bg.Status != "running" {
+	bg := decodeResult(t, output)
+	if bg.JobID != "test-command_0" || !bg.Background {
 		t.Fatalf("expected job_id + running, got %#v", bg)
 	}
 	if !jm.HasActiveJobs() {
@@ -247,11 +223,9 @@ func TestKillTerminatesCommandDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var background struct {
-		JobID string `json:"job_id"`
-	}
-	if err := json.Unmarshal([]byte(toolResult.Content), &background); err != nil {
-		t.Fatal(err)
+	background := decodeResult(t, toolResult.Content)
+	if !background.Background {
+		t.Fatalf("expected a background job, got %q", toolResult.Content)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -333,15 +307,8 @@ func TestExecuteCapsOutputOnBackgroundAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-		Stdout string `json:"stdout"`
-	}
-	if err := json.Unmarshal([]byte(toolResult.Content), &bg); err != nil {
-		t.Fatalf("decode background result: %v (output=%s)", err, toolResult.Content)
-	}
-	if bg.JobID == "" || bg.Status != "running" {
+	bg := decodeResult(t, toolResult.Content)
+	if bg.JobID == "" || !bg.Background {
 		t.Fatalf("expected job_id + running, got %#v", bg)
 	}
 	if !strings.HasPrefix(bg.Stdout, "HEAD-MARKER\n") || !strings.Contains(bg.Stdout, "bytes total") {
@@ -437,8 +404,8 @@ func TestExecuteCancelDuringForegroundWaitKillsProcessTree(t *testing.T) {
 			t.Fatalf("Execute took %s to notice cancellation, want it prompt", elapsed)
 		}
 		result := decodeResult(t, got.result.Content)
-		if !result.Canceled || result.ExitCode != -1 {
-			t.Fatalf("result = %#v, want canceled with exit code -1", result)
+		if !result.Canceled {
+			t.Fatalf("result = %#v, want canceled", result)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Execute did not return after cancellation (wait_seconds was 600)")
@@ -545,11 +512,9 @@ func TestExecuteCancelAfterAdoptionLeavesBackgroundJobRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bg struct {
-		JobID string `json:"job_id"`
-	}
-	if err := json.Unmarshal([]byte(toolResult.Content), &bg); err != nil || bg.JobID == "" {
-		t.Fatalf("background result = %s, err = %v", toolResult.Content, err)
+	bg := decodeResult(t, toolResult.Content)
+	if bg.JobID == "" || !bg.Background {
+		t.Fatalf("background result = %s", toolResult.Content)
 	}
 	cancel()
 	done, ok := jm.Poll(bg.JobID, 15*time.Second)
@@ -598,13 +563,9 @@ func newTestTool(t *testing.T, cfg Config) *Tool {
 	return tool
 }
 
-func decodeResult(t *testing.T, output string) commandResult {
+func decodeResult(t *testing.T, output string) job.Result {
 	t.Helper()
-	var result commandResult
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatal(err)
-	}
-	return result
+	return job.ParseResult(output)
 }
 
 func TestCommandHelper(t *testing.T) {
@@ -717,7 +678,7 @@ func TestCommandHelper(t *testing.T) {
 // Include Go-only escapes, JSON escapes, Unicode, and HTML-sensitive characters.
 const escapedOutput = "\x1b[31mred\x1b[0m\x00\a\v\n\t\r\b\f\"\\中文<&>"
 
-func TestCommandOutputJSONEscaping(t *testing.T) {
+func TestCommandOutputIsVerbatim(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(fmt.Sprint("background=", background), func(t *testing.T) {
 			jm := job.New()
@@ -736,29 +697,19 @@ func TestCommandOutputJSONEscaping(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var decoded struct {
-				JobID    string `json:"job_id"`
-				Status   string `json:"status"`
-				ExitCode int    `json:"exit_code"`
-				Stdout   string `json:"stdout"`
-				Stderr   string `json:"stderr"`
-			}
-			if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-				t.Fatalf("decode result: %v", err)
-			}
-			if background {
-				t.Cleanup(func() { _, _ = jm.Kill("test-command_0") })
-				if decoded.JobID != "test-command_0" || decoded.Status != "running" {
-					t.Fatalf("background result = %#v", decoded)
-				}
-			}
-			if decoded.Stdout != escapedOutput || decoded.Stderr != escapedOutput {
-				t.Fatalf("result = %#v", decoded)
-			}
+			// The model must see the bytes as printed: no JSON escaping.
+			body := escapedOutput + "\n[stderr]\n" + escapedOutput
 			if !background {
+				if result.Content != body {
+					t.Fatalf("result = %q, want %q", result.Content, body)
+				}
 				return
 			}
-			raw, err = json.Marshal(map[string]any{"action": "poll", "job_id": decoded.JobID, "wait_seconds": 5})
+			t.Cleanup(func() { _, _ = jm.Kill("test-command_0") })
+			if !strings.HasSuffix(result.Content, "\n"+body) || !strings.HasPrefix(result.Content, "[background job test-command_0:") {
+				t.Fatalf("background result = %q", result.Content)
+			}
+			raw, err = json.Marshal(map[string]any{"action": "poll", "job_id": "test-command_0", "wait_seconds": 5})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -766,11 +717,8 @@ func TestCommandOutputJSONEscaping(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-				t.Fatalf("decode poll: %v", err)
-			}
-			if decoded.Status != "done" || decoded.ExitCode != 0 || decoded.Stdout != escapedOutput || decoded.Stderr != escapedOutput {
-				t.Fatalf("poll result = %#v", decoded)
+			if want := "[job test-command_0: done, exit code 0]\n" + body; result.Content != want {
+				t.Fatalf("poll result = %q, want %q", result.Content, want)
 			}
 		})
 	}

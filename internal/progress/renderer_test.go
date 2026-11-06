@@ -402,7 +402,7 @@ func TestRendererAlignsCommandResultColumns(t *testing.T) {
 	for _, call := range calls {
 		renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: call})
 		renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: call, Message: dora.Message{
-			Role: dora.RoleTool, ToolCallID: call.ID, Content: `{"exit_code":0,"stdout":"ok"}`,
+			Role: dora.RoleTool, ToolCallID: call.ID, Content: "ok",
 		}})
 	}
 
@@ -445,14 +445,14 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "command success",
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"go   test ./..."}`)},
-			message:     dora.Message{Content: `{"exit_code":0,"stdout":"ok","stderr":"","timed_out":false,"truncated":false}`},
+			message:     dora.Message{Content: "ok"},
 			wantSummary: "go test ./...",
 			wantResult:  "2B/0B",
 		},
 		{
 			name:        "command failure",
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"false"}`)},
-			message:     dora.Message{Content: `{"exit_code":1,"stderr":"failed"}`},
+			message:     dora.Message{Content: "[exit code 1]\n[stderr]\nfailed"},
 			wantSummary: "false",
 			wantResult:  "0B/6B",
 			wantOutcome: outcomeFailure,
@@ -460,25 +460,49 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "command combines stream sizes",
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"mixed-output"}`)},
-			message:     dora.Message{Content: `{"exit_code":0,"stdout":"hello","stderr":"warn"}`},
+			message:     dora.Message{Content: "hello\n[stderr]\nwarn"},
 			wantSummary: "mixed-output",
 			wantResult:  "5B/4B",
 		},
 		{
-			name:        "command timeout",
+			name:        "command canceled",
 			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"sleep 10"}`)},
-			message:     dora.Message{Content: `{"exit_code":-1,"timed_out":true}`},
+			message:     dora.Message{Content: "[canceled]\npartial"},
 			wantSummary: "sleep 10",
-			wantResult:  "timed out",
+			wantResult:  "canceled, 7B/0B",
 			wantOutcome: outcomeFailure,
 		},
 		{
-			name:        "command truncated",
-			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"generate-output"}`)},
-			message:     dora.Message{Content: `{"exit_code":0,"truncated":true}`},
-			wantSummary: "generate-output",
-			wantResult:  "output truncated",
+			name:        "command background",
+			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"make"}`)},
+			message:     dora.Message{Content: "[background job bash_0: still running after 10s; use the job tool to poll or kill it]\nbuilding"},
+			wantSummary: "make",
+			wantResult:  "background job bash_0, 8B/0B",
 			wantOutcome: outcomeWarning,
+		},
+		{
+			name:        "command without output",
+			call:        dora.ToolCall{Name: "bash", Input: json.RawMessage(`{"command":"true"}`)},
+			message:     dora.Message{Content: "(no output)"},
+			wantSummary: "true",
+			wantResult:  "done",
+		},
+		{
+			name:        "job list",
+			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"list"}`)},
+			message:     dora.Message{Content: "bash_0 running\nbash_1 done"},
+			wantName:    "job",
+			wantSummary: "list",
+			wantResult:  "2 jobs",
+		},
+		{
+			name:        "job finished with exit code",
+			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"bash_0"}`)},
+			message:     dora.Message{Content: "[job bash_0: failed, exit code 2]\nboom"},
+			wantName:    "job",
+			wantSummary: "poll bash_0",
+			wantResult:  "failed, exit 2",
+			wantOutcome: outcomeFailure,
 		},
 		{
 			name:        "read range",
@@ -583,7 +607,7 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "task background",
 			call:        dora.ToolCall{Name: "task", Input: json.RawMessage(`{"instruction":"inspect independently","background":true}`)},
-			message:     dora.Message{Content: `{"job_id":"task_0","status":"running"}`},
+			message:     dora.Message{Content: "[background job task_0: still running; use the job tool to poll or kill it]"},
 			wantName:    "task",
 			wantSummary: "inspect independently",
 			wantResult:  "background task_0",
@@ -592,7 +616,7 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "job error",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"status","job_id":"missing"}`)},
-			message:     dora.Message{Content: `{"error":"job not found"}`},
+			message:     dora.Message{Content: "error: job not found"},
 			wantName:    "job",
 			wantSummary: "status missing",
 			wantResult:  "job not found",
@@ -601,16 +625,16 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "job running",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"bash_0"}`)},
-			message:     dora.Message{Content: `{"job_id":"bash_0","status":"running","exit_code":0}`},
+			message:     dora.Message{Content: "[job bash_0: running]"},
 			wantName:    "job",
 			wantSummary: "poll bash_0",
-			wantResult:  "running, exit 0",
+			wantResult:  "running",
 			wantOutcome: outcomeWarning,
 		},
 		{
 			name:        "job cancelling",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"kill","job_id":"bash_0"}`)},
-			message:     dora.Message{Content: `{"job_id":"bash_0","status":"cancelling"}`},
+			message:     dora.Message{Content: "job bash_0: cancelling"},
 			wantName:    "job",
 			wantSummary: "kill bash_0",
 			wantResult:  "cancelling",
@@ -619,7 +643,7 @@ func TestToolPresentations(t *testing.T) {
 		{
 			name:        "task job done",
 			call:        dora.ToolCall{Name: "job", Input: json.RawMessage(`{"action":"poll","job_id":"task_0"}`)},
-			message:     dora.Message{Content: `{"job_id":"task_0","status":"done","result":"independent result"}`},
+			message:     dora.Message{Content: "[job task_0: done]\nindependent result"},
 			wantName:    "job",
 			wantSummary: "poll task_0",
 			wantResult:  "done",
@@ -692,7 +716,7 @@ func TestRendererClassifiesSemanticAndToolFailures(t *testing.T) {
 	command := dora.ToolCall{ID: "command", Name: "bash", Input: json.RawMessage(`{"command":"false"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{command}}})
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: command})
-	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: command, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: `{"exit_code":1,"stderr":"failed"}`}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: command, Message: dora.Message{Role: dora.RoleTool, ToolCallID: command.ID, Content: "[exit code 1]\n[stderr]\nfailed"}})
 
 	read := dora.ToolCall{ID: "read", Name: "read", Input: json.RawMessage(`{"path":"missing.go"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateMessageReceived, Message: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{read}}})
@@ -719,7 +743,7 @@ func TestRendererDistinguishesToolFinishedSuccessAndError(t *testing.T) {
 	// A tool that succeeds with empty result renders a success line.
 	ok := dora.ToolCall{ID: "ok", Name: "bash", Input: json.RawMessage(`{"command":"pwd"}`)}
 	renderer.Observe(dora.Update{Kind: dora.UpdateToolStarted, ToolCall: ok})
-	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: ok, Message: dora.Message{Role: dora.RoleTool, ToolCallID: ok.ID, Content: `{"exit_code":0,"stdout":"ok"}`}})
+	renderer.Observe(dora.Update{Kind: dora.UpdateToolFinished, ToolCall: ok, Message: dora.Message{Role: dora.RoleTool, ToolCallID: ok.ID, Content: "ok"}})
 
 	// A tool that failed at the process level renders a red failure line via
 	// presentToolFailure, without inspecting the result content.

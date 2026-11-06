@@ -798,7 +798,7 @@ the shell to probe its runtime environment.
 The Bash tool runs `bash -c` in the directory selected by `--workdir`, or in
 Dora's process working directory when the option is omitted. The model can use
 `cd` inside a command when it needs another directory. The tool returns exit
-code, stdout, and stderr to the model as JSON. This tool grants the model the
+code, stdout, and stderr to the model as plain text. This tool grants the model the
 same filesystem and process permissions as the `dora` process, so disable it
 unless you trust the environment in which Dora runs.
 

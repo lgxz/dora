@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/lgxz/dora"
+	"github.com/lgxz/dora/internal/job"
 )
 
 // Name is the tool name exposed to models. Callers can use it when excluding
@@ -93,16 +94,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		if err != nil {
 			return dora.ToolResult{}, fmt.Errorf("task: start background: %w", err)
 		}
-		content, _ := json.Marshal(struct {
-			JobID   string `json:"job_id"`
-			Status  string `json:"status"`
-			Message string `json:"message"`
-		}{
-			JobID:   jobID,
-			Status:  "running",
-			Message: "Task is running in the background. Use the job tool to check status before exit.",
-		})
-		return dora.ToolResult{Content: string(content)}, nil
+		return dora.ToolResult{Content: job.FormatBackgroundTask(jobID)}, nil
 	}
 	result, err := t.runner(ctx, input.Instruction)
 	if err != nil {

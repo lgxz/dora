@@ -77,8 +77,9 @@ func (t *Tool) Spec() dora.ToolSpec {
 	}
 }
 
-// Execute implements dora.Tool. Command failures are returned as structured
-// output so the model can inspect stderr and decide how to proceed.
+// Execute implements dora.Tool. Command failures are returned as text output
+// (see job.FormatFinished) so the model can inspect stderr and decide how to
+// proceed.
 func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
 	input, err := decodeInput(t.name, raw)
 	if err != nil {
@@ -148,28 +149,20 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 	case runErr := <-done:
 		procCancel()
 		stdout, stderr := out.Drain()
-		result := commandResult{
-			Stdout: job.CapOutput(stdout),
-			Stderr: job.CapOutput(stderr),
-		}
+		exitCode := 0
 		switch {
 		case runErr == nil, errors.Is(runErr, exec.ErrWaitDelay):
 			// ErrWaitDelay means the process exited successfully but an
 			// orphaned child (for example `server &`) still holds the output
 			// pipes; the command itself succeeded.
-			result.ExitCode = 0
 		default:
 			var exitError *exec.ExitError
 			if !errors.As(runErr, &exitError) {
 				return dora.ToolResult{}, fmt.Errorf("%s: execute command: %w", t.name, runErr)
 			}
-			result.ExitCode = exitError.ExitCode()
+			exitCode = exitError.ExitCode()
 		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
-		}
-		return t.result(string(encoded)), nil
+		return t.result(job.FormatFinished(exitCode, job.CapOutput(stdout), job.CapOutput(stderr), false)), nil
 
 	case <-ctx.Done():
 		return t.cancelForeground(procCancel, done, out)
@@ -184,30 +177,14 @@ func (t *Tool) executeWithBackground(ctx context.Context, input input, waitSecon
 		// The Wait() goroutine above fills `done`; Adopt reaps it.
 		j := t.jobManager.AdoptCommand(t.name, cmd, procCancel, input.Command, out, done)
 		stdout, stderr := out.Drain()
-		encoded, err := json.Marshal(struct {
-			JobID   string `json:"job_id"`
-			Status  string `json:"status"`
-			Stdout  string `json:"stdout"`
-			Stderr  string `json:"stderr"`
-			Message string `json:"message"`
-		}{
-			JobID:   j.ID,
-			Status:  "running",
-			Stdout:  job.CapOutput(stdout),
-			Stderr:  job.CapOutput(stderr),
-			Message: fmt.Sprintf("Command did not finish within %s. It is now running in the background. Use the job tool to check status.", waitDuration),
-		})
-		if err != nil {
-			return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
-		}
-		return t.result(string(encoded)), nil
+		return t.result(job.FormatBackground(j.ID, waitDuration, job.CapOutput(stdout), job.CapOutput(stderr))), nil
 	}
 }
 
 // cancelForeground stops a command that was canceled before being adopted: it
 // kills the whole process tree, waits a bounded time for the process to be
 // reaped, and reports the output captured so far. The result is a normal tool
-// result with canceled set rather than an error, so the partial output is kept
+// result with a [canceled] header rather than an error, so the partial output is kept
 // in the saved transcript.
 func (t *Tool) cancelForeground(procCancel context.CancelFunc, done <-chan error, out *job.OutputBuffer) (dora.ToolResult, error) {
 	procCancel()
@@ -218,16 +195,7 @@ func (t *Tool) cancelForeground(procCancel context.CancelFunc, done <-chan error
 	case <-grace.C:
 	}
 	stdout, stderr := out.Drain()
-	encoded, err := json.Marshal(commandResult{
-		ExitCode: -1,
-		Stdout:   job.CapOutput(stdout),
-		Stderr:   job.CapOutput(stderr),
-		Canceled: true,
-	})
-	if err != nil {
-		return dora.ToolResult{}, fmt.Errorf("%s: encode result: %w", t.name, err)
-	}
-	return t.result(string(encoded)), nil
+	return t.result(job.FormatFinished(-1, job.CapOutput(stdout), job.CapOutput(stderr), true)), nil
 }
 
 func (t *Tool) result(content string) dora.ToolResult {
@@ -257,15 +225,6 @@ func decodeInput(name string, raw json.RawMessage) (input, error) {
 		return input{}, fmt.Errorf("%s: decode input: %w", name, err)
 	}
 	return value, nil
-}
-
-type commandResult struct {
-	ExitCode int    `json:"exit_code"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	// Canceled reports that the run was canceled while the command was still in
-	// its foreground wait; the process tree was killed and the output is partial.
-	Canceled bool `json:"canceled,omitempty"`
 }
 
 var _ dora.Tool = (*Tool)(nil)

@@ -135,9 +135,10 @@ func (a *Agent) compactContext(ctx context.Context, history []Message, lastUsage
 		return result, nil
 	}
 
-	// The occupancy estimate includes the output reserve and the tool schemas;
-	// the summary request carries neither. Never go below the local estimate
-	// of the history itself.
+	// The occupancy estimate includes the output reserve and the tool schemas.
+	// The summary request carries the schemas too (see
+	// generateContextSummaryFrom) but not the reserve; the schemas are added
+	// back below. Never go below the local estimate of the history itself.
 	baseInput := predictedBefore - a.outputReserve() - estimateToolSpecTokens(specs)
 	if local := estimateTokens(history); baseInput < local {
 		baseInput = local
@@ -157,7 +158,8 @@ func (a *Agent) compactContext(ctx context.Context, history []Message, lastUsage
 	if local := estimateTokens(middle); middleInput < local {
 		middleInput = local
 	}
-	summary, err := a.generateContextSummaryFrom(ctx, middle, result.TargetTokens, middleInput)
+	middleInput += estimateToolSpecTokens(specs)
+	summary, err := a.generateContextSummaryFrom(ctx, middle, specs, result.TargetTokens, middleInput)
 	result.SummaryTokens = summary.tokens
 	result.Attempts = summary.attempts
 	result.TrimmedToolResults = summary.trimmed
@@ -300,7 +302,7 @@ func (a *Agent) predictedTokens(history []Message, lastUsage *Usage, specs []Too
 }
 
 func (a *Agent) generateContextSummary(ctx context.Context, history []Message, targetTokens int) (summaryResult, error) {
-	return a.generateContextSummaryFrom(ctx, history, targetTokens, estimateTokens(history))
+	return a.generateContextSummaryFrom(ctx, history, nil, targetTokens, estimateTokens(history))
 }
 
 // summaryPrompt builds the instruction for one attempt. The retry asks for half
@@ -316,7 +318,7 @@ func summaryPrompt(limitTokens, attempt int) string {
 		}
 	}
 	return fmt.Sprintf(
-		"%s%s The replacement summary must be at most approximately %d tokens. Return only the summary.",
+		"%s%s The replacement summary must be at most approximately %d tokens. Return only the summary and do not call any tools.",
 		compactionPrompt,
 		strictness,
 		limitTokens,
@@ -396,7 +398,15 @@ func shortenToolResults(messages []Message, maxBytes int) ([]Message, int) {
 	return shortened, count
 }
 
-func (a *Agent) generateContextSummaryFrom(ctx context.Context, history []Message, targetTokens, baseInput int) (summaryResult, error) {
+// generateContextSummaryFrom asks the model to summarize history. The request
+// carries the same tool schemas as normal requests: the history is then a
+// prefix of what the provider has just processed, so a server-side prompt cache
+// can serve nearly all of it, whereas a request without the schemas differs
+// from the first token on (chat templates render them into the system prompt)
+// and is recomputed from scratch. baseInput must already include the schemas'
+// tokens. The model is told not to call tools; if it does anyway the attempt is
+// retried.
+func (a *Agent) generateContextSummaryFrom(ctx context.Context, history []Message, specs []ToolSpec, targetTokens, baseInput int) (summaryResult, error) {
 	var result summaryResult
 	plan := a.planSummaryRequest(history, targetTokens, baseInput)
 	result.trimmed = plan.trimmed
@@ -409,6 +419,7 @@ func (a *Agent) generateContextSummaryFrom(ctx context.Context, history []Messag
 		messages = append(messages, Message{Role: RoleUser, Content: summaryPrompt(limit, attempt)})
 		response, err := a.generateWithRetry(context.WithValue(ctx, attemptPurposeKey{}, "compaction"), Request{
 			Messages:        messages,
+			Tools:           specs,
 			MaxOutputTokens: &limit,
 		}, nil, nil)
 		if err != nil && !replanned && errors.Is(err, ErrContextLength) {
@@ -447,7 +458,9 @@ func (a *Agent) generateContextSummaryFrom(ctx context.Context, history []Messag
 			}
 		}
 		if len(response.ToolCalls) > 0 {
-			return result, errors.New("summary response unexpectedly requested tools")
+			result.tokens = 0
+			lastError = errors.New("summary response requested tools instead of a summary")
+			continue
 		}
 		result.content = strings.TrimSpace(response.Content)
 		if result.content == "" {

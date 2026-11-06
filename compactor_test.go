@@ -61,8 +61,10 @@ func TestEnsureContextCapacitySummarizesAtomically(t *testing.T) {
 	if !result.Compacted {
 		t.Fatal("expected context compaction")
 	}
-	if len(request.Tools) != 0 || request.Continuation != "" {
-		t.Fatalf("summary request leaked tools or continuation: %#v", request)
+	// The summary request carries the normal tool schemas so the provider's
+	// prompt cache can serve the shared prefix; it must not carry a continuation.
+	if len(request.Tools) != 1 || request.Tools[0].Name != "run" || request.Continuation != "" {
+		t.Fatalf("summary request tools/continuation = %#v", request)
 	}
 	if request.MaxOutputTokens == nil || *request.MaxOutputTokens != result.TargetTokens {
 		t.Fatalf("summary output limit = %v, target = %d", request.MaxOutputTokens, result.TargetTokens)
@@ -135,9 +137,41 @@ func TestGenerateContextSummaryRejectsToolCalls(t *testing.T) {
 		[]Message{{Role: RoleUser, Content: "task"}},
 		20,
 	)
-	if err == nil || !strings.Contains(err.Error(), "unexpectedly requested tools") {
+	if err == nil || !strings.Contains(err.Error(), "requested tools instead of a summary") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestGenerateContextSummaryRetriesAfterToolCalls(t *testing.T) {
+	calls := 0
+	a := &Agent{
+		model: modelFunc(func(_ context.Context, request Request) (Response, error) {
+			calls++
+			if len(request.Tools) != 1 {
+				t.Fatalf("tools = %#v", request.Tools)
+			}
+			if calls == 1 {
+				return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{ID: "c1", Name: "run"}}}, nil
+			}
+			return Response{FinishReason: FinishStop, Content: "short"}, nil
+		}),
+		contextWindow: 1000,
+	}
+	summary, err := a.generateContextSummaryFrom(context.Background(), []Message{{Role: RoleUser, Content: "task"}},
+		[]ToolSpec{{Name: "run"}}, 50, 20)
+	if err != nil || summary.content != "short" || calls != 2 {
+		t.Fatalf("summary = %#v, err = %v, calls = %d", summary, err, calls)
+	}
+}
+
+// isSummaryRequest reports whether request asks for a context summary: its last
+// message is the compaction instruction.
+func isSummaryRequest(request Request) bool {
+	if len(request.Messages) == 0 {
+		return false
+	}
+	last := request.Messages[len(request.Messages)-1]
+	return last.Role == RoleUser && strings.HasPrefix(last.Content, compactionPrompt)
 }
 
 func TestEnsureContextCapacityRejectsRequestThatStillDoesNotFit(t *testing.T) {
@@ -225,7 +259,7 @@ func TestAgentRunCompactsAndClearsContinuation(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			if len(request.Tools) != 0 || request.Continuation != "" {
+			if len(request.Tools) != 1 || request.Continuation != "" || !isSummaryRequest(request) {
 				t.Fatalf("summary request = %#v", request)
 			}
 			return Response{FinishReason: FinishStop,
@@ -322,7 +356,7 @@ func TestSummaryStreamingDeltasAreNotObserved(t *testing.T) {
 	calls := 0
 	model := streamingModelFunc(func(_ context.Context, request Request, emit func(ModelEvent)) (Response, error) {
 		calls++
-		if len(request.Tools) == 0 {
+		if isSummaryRequest(request) {
 			emit(ModelEvent{Kind: ModelEventContentDelta, Delta: "hidden summary delta"})
 			return Response{FinishReason: FinishStop, Content: "concise state"}, nil
 		}

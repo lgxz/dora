@@ -651,7 +651,13 @@ var (
 	ErrModelBlocked         = errors.New("model response was blocked")
 )
 
+// outputLimitHint is appended to the request of an output-limit retry.
+const outputLimitHint = "Your previous reply was cut off because it reached the output limit before it finished, and was discarded. " +
+	"Keep your reasoning brief this time and move on: call a tool or answer directly. " +
+	"If you were working something out step by step (parsing bytes, doing arithmetic), run a command or script to get the answer instead."
+
 func (a *Agent) generateWithRecovery(ctx context.Context, request Request, emit func(ModelEvent), observer Observer) (Response, error) {
+	hinted := false
 	for retry := 0; ; retry++ {
 		attemptCtx := context.WithValue(ctx, attemptRecoveryKey{}, retry)
 		response, err := a.generateWithRetry(attemptCtx, request, emit, observer)
@@ -704,6 +710,13 @@ func (a *Agent) generateWithRecovery(ctx context.Context, request Request, emit 
 			return response, err
 		}
 		request.MaxOutputTokens = &next
+		if !hinted {
+			// A truncated reply is usually runaway reasoning, and a larger budget
+			// alone lets the model run away again. Tell it, for this request only
+			// (the turn history does not contain the note).
+			request.Messages = append(append([]Message(nil), request.Messages...), Message{Role: RoleUser, Content: outputLimitHint})
+			hinted = true
+		}
 		notify(observer, Update{Kind: UpdateInfo, Info: fmt.Sprintf("Model output truncated; retrying from the last complete exchange with output budget %d -> %d (%d/%d)", budget, next, retry+1, a.outputRecovery.MaxRetries)})
 	}
 }

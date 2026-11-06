@@ -289,7 +289,7 @@ func TestSummaryRequestOverflowIsReplannedOnce(t *testing.T) {
 	// By the heuristic this fits without trimming (~3.5k tokens).
 	history := testHistory("task", testRound("c1", 14_000))
 
-	summary, err := a.generateContextSummaryFrom(context.Background(), history, 4000, estimateTokens(history))
+	summary, err := a.generateContextSummaryFrom(context.Background(), history, nil, 4000, estimateTokens(history))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestSummaryRequestOverflowTwiceFails(t *testing.T) {
 		}),
 		contextWindow: 20_000,
 	}
-	_, err := a.generateContextSummaryFrom(context.Background(), testHistory("task", testRound("c1", 400)), 4000, 500)
+	_, err := a.generateContextSummaryFrom(context.Background(), testHistory("task", testRound("c1", 400)), nil, 4000, 500)
 	if !errors.Is(err, ErrContextLength) || calls != 2 {
 		t.Fatalf("err = %v, calls = %d; want ErrContextLength after 2 calls", err, calls)
 	}
@@ -337,7 +337,7 @@ func overflowAgent(t *testing.T, rejectAll bool, log *[]string, normal *[]Reques
 		execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil },
 	}
 	agent, err := New(modelFunc(func(_ context.Context, request Request) (Response, error) {
-		if len(request.Tools) == 0 {
+		if isSummaryRequest(request) {
 			*log = append(*log, "summary")
 			return Response{FinishReason: FinishStop, Content: "the summary"}, nil
 		}
@@ -425,7 +425,7 @@ func TestAgentReportsAFailedCompactionAfterOverflow(t *testing.T) {
 	tool := stubTool{spec: ToolSpec{Name: "run"}, execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil }}
 	agent, err := New(modelFunc(func(_ context.Context, request Request) (Response, error) {
 		calls++
-		if len(request.Tools) == 0 {
+		if isSummaryRequest(request) {
 			return Response{}, errors.New("summarizer down")
 		}
 		return Response{}, &ContextLengthError{Err: errors.New("too long")}

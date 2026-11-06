@@ -78,7 +78,7 @@ func TestExecuteStartsBackgroundTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if instruction != "inspect" || !strings.Contains(result.Content, `"job_id":"task_0"`) || !strings.Contains(result.Content, `"status":"running"`) {
+	if instruction != "inspect" || !strings.HasPrefix(result.Content, "[background job task_0: ") {
 		t.Fatalf("instruction = %q, result = %q", instruction, result.Content)
 	}
 }
@@ -97,7 +97,7 @@ func TestExecutePassesContextToBackgroundStarter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `"job_id":"task_0"`) {
+	if !strings.HasPrefix(result.Content, "[background job task_0: ") {
 		t.Fatalf("result = %q", result.Content)
 	}
 }

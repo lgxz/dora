@@ -68,23 +68,12 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 	case "kill":
 		snapshot, err := t.manager.Kill(input.JobID)
 		if err != nil {
-			return t.result(map[string]string{"error": err.Error()})
+			return t.result("error: " + err.Error())
 		}
-		return t.result(map[string]string{"job_id": snapshot.ID, "status": string(snapshot.Status)})
+		return t.result(fmt.Sprintf("job %s: %s", snapshot.ID, snapshot.Status))
 
 	case "list":
-		jobs := t.manager.List()
-		type jobInfo struct {
-			ID     string `json:"job_id"`
-			Status string `json:"status"`
-		}
-		infos := make([]jobInfo, 0, len(jobs))
-		for _, j := range jobs {
-			infos = append(infos, jobInfo{ID: j.ID, Status: string(j.Status)})
-		}
-		return t.result(struct {
-			Jobs []jobInfo `json:"jobs"`
-		}{Jobs: infos})
+		return t.result(job.FormatJobList(t.manager.List()))
 
 	case "poll":
 		waitSeconds := defaultPollSeconds
@@ -93,44 +82,17 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		}
 		snapshot, ok := t.manager.Poll(input.JobID, time.Duration(waitSeconds)*time.Second)
 		if !ok {
-			return t.result(map[string]string{"error": "job not found"})
+			return t.result("error: job not found")
 		}
-		if snapshot.Kind == job.KindTask {
-			type taskResult struct {
-				JobID  string `json:"job_id"`
-				Status string `json:"status"`
-				Result string `json:"result,omitempty"`
-				Error  string `json:"error,omitempty"`
-			}
-			return t.result(taskResult{
-				JobID:  snapshot.ID,
-				Status: string(snapshot.Status),
-				Result: snapshot.Result,
-				Error:  snapshot.Error,
-			})
-		}
-		return t.result(struct {
-			JobID    string `json:"job_id"`
-			Status   string `json:"status"`
-			ExitCode int    `json:"exit_code"`
-			Stdout   string `json:"stdout"`
-			Stderr   string `json:"stderr"`
-		}{
-			JobID: snapshot.ID, Status: string(snapshot.Status), ExitCode: snapshot.ExitCode,
-			Stdout: snapshot.Stdout, Stderr: snapshot.Stderr,
-		})
+		return t.result(job.FormatSnapshot(snapshot))
 
 	default:
 		return dora.ToolResult{}, fmt.Errorf("job: unknown action %q", input.Action)
 	}
 }
 
-func (t *Tool) result(value any) (dora.ToolResult, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return dora.ToolResult{}, fmt.Errorf("job: encode result: %w", err)
-	}
-	return dora.ToolResult{Content: string(data)}, nil
+func (t *Tool) result(text string) (dora.ToolResult, error) {
+	return dora.ToolResult{Content: text}, nil
 }
 
 type input struct {

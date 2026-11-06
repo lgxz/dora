@@ -39,8 +39,22 @@ func TestOutputLimitRecoveryDiscardsPartialCallsAndPreservesHistory(t *testing.T
 	if len(requests) != 3 || executed != 1 {
 		t.Fatalf("calls=%d tools=%d", len(requests), executed)
 	}
-	if !reflect.DeepEqual(requests[0].Messages, requests[1].Messages) || requests[1].Continuation != "" {
+	// The retry sees the same history plus a note about the truncation; the
+	// discarded response itself never leaks, and the note is not kept.
+	retryMessages := requests[1].Messages
+	if n := len(retryMessages); n != len(requests[0].Messages)+1 ||
+		!reflect.DeepEqual(requests[0].Messages, retryMessages[:n-1]) ||
+		retryMessages[n-1].Role != RoleUser || retryMessages[n-1].Content != outputLimitHint ||
+		requests[1].Continuation != "" {
+		t.Fatalf("retry messages = %+v", retryMessages)
+	}
+	if !reflect.DeepEqual(requests[0].Messages, requests[2].Messages[:len(requests[0].Messages)]) {
 		t.Fatal("discarded response leaked into history")
+	}
+	for _, message := range requests[2].Messages {
+		if message.Content == outputLimitHint {
+			t.Fatal("output-limit note was recorded in the turn history")
+		}
 	}
 	if requests[1].MaxOutputTokens == nil || *requests[1].MaxOutputTokens != 65536 || requests[2].MaxOutputTokens != nil {
 		t.Fatal("incorrect recovery budgets")

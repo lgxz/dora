@@ -481,7 +481,7 @@ tools:
 
 可执行文件不存在的自动工具会被跳过。用 `enabled: true` 显式启用的工具必须存在于 `PATH` 上，否则 Dora 会报告错误。目前发现机制仅检查可执行文件是否存在；它不会启动 shell 去探测其运行时环境。
 
-Bash 工具在 `--workdir` 指定的目录下运行 `bash -c`；省略该参数时使用 Dora 进程的当前目录。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以 JSON 形式向模型返回退出码、stdout 和 stderr。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
+Bash 工具在 `--workdir` 指定的目录下运行 `bash -c`；省略该参数时使用 Dora 进程的当前目录。当模型需要其他目录时，可以在命令内部使用 `cd`。该工具以纯文本形式向模型返回输出：stdout 原样返回，stderr 位于 `[stderr]` 行之后，非零退出码以 `[exit code N]` 开头。此工具授予模型与 `dora` 进程相同的文件系统和进程权限，因此除非你信任 Dora 运行的环境，否则请禁用它。
 
 独立的 `powershell` 工具优先使用 PowerShell Core（`pwsh`），并在不可用时回退到 Windows PowerShell（`powershell.exe`）。如果两个工具都被显式启用，它们会分开暴露，以便区分各自的命令语法。
 

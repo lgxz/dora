@@ -35,16 +35,8 @@ func TestExecuteReturnsCommandOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result struct {
-		ExitCode int    `json:"exit_code"`
-		Stdout   string `json:"stdout"`
-		Stderr   string `json:"stderr"`
-	}
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.ExitCode != 0 || strings.TrimSpace(result.Stdout) != "hello" || result.Stderr != "" {
-		t.Fatalf("result = %#v", result)
+	if strings.TrimSpace(output) != "hello" {
+		t.Fatalf("output = %q, want plain stdout", output)
 	}
 }
 

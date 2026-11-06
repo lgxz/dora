@@ -3,25 +3,13 @@ package jobtool
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/lgxz/dora/internal/job"
 )
 
-func TestResultReturnsContent(t *testing.T) {
-	tool := New(job.New())
-	result, err := tool.result(map[string]string{"stdout": "hello"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Content != `{"stdout":"hello"}` {
-		t.Fatalf("content = %q", result.Content)
-	}
-}
-
-func TestPollTaskReturnsPersistentResultWithoutKind(t *testing.T) {
+func TestPollTaskReturnsPersistentResult(t *testing.T) {
 	manager := job.New()
 	background := manager.StartTask("task", "inspect", func(context.Context) (string, error) {
 		return "analysis", nil
@@ -33,11 +21,8 @@ func TestPollTaskReturnsPersistentResultWithoutKind(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(result.Content, `"job_id":"task_0"`) ||
-			!strings.Contains(result.Content, `"status":"done"`) ||
-			!strings.Contains(result.Content, `"result":"analysis"`) ||
-			strings.Contains(result.Content, `"kind"`) {
-			t.Fatalf("result = %q", result.Content)
+		if want := "[job task_0: done]\nanalysis"; result.Content != want {
+			t.Fatalf("result = %q, want %q", result.Content, want)
 		}
 	}
 }
@@ -51,12 +36,12 @@ func TestPollTaskFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `"status":"failed"`) || !strings.Contains(result.Content, `"error":"context deadline exceeded"`) {
-		t.Fatalf("result = %q", result.Content)
+	if want := "[job task_0: failed]\nerror: context deadline exceeded"; result.Content != want {
+		t.Fatalf("result = %q, want %q", result.Content, want)
 	}
 }
 
-func TestListUsesIDsWithoutKind(t *testing.T) {
+func TestListShowsIDAndStatus(t *testing.T) {
 	manager := job.New()
 	background := manager.StartTask("task", "wait", func(ctx context.Context) (string, error) {
 		select {
@@ -71,7 +56,7 @@ func TestListUsesIDsWithoutKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content, `"job_id":"task_0"`) || strings.Contains(result.Content, `"kind"`) {
+	if result.Content != "task_0 running" {
 		t.Fatalf("result = %q", result.Content)
 	}
 }
@@ -91,11 +76,7 @@ func TestKillReturnsCurrentState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded map[string]string
-	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if decoded["status"] != "cancelling" {
+	if result.Content != "job task_0: cancelling" {
 		t.Fatalf("kill result = %q", result.Content)
 	}
 	close(release)
@@ -113,11 +94,7 @@ func TestKillCompletedJobReturnsTerminalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded map[string]string
-	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if decoded["status"] != "done" {
+	if result.Content != "job task_0: done" {
 		t.Fatalf("kill result = %q", result.Content)
 	}
 }
