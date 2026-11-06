@@ -106,6 +106,15 @@ their original installation method. Re-run the latest installer once to enable
 self-update on an older installation. Release archives and checksums remain
 available on the GitHub Releases page for manual installation and verification.
 
+To install an exact release instead of the latest, including an older one to roll
+back, pass its version (with or without the leading `v`):
+
+```sh
+dora -update -to 0.3.0
+```
+
+The release must exist and passes the same checksum and executable validation.
+
 To replace an unmanaged or development build (for example, one installed with
 `make install`) with the latest release, bypassing the standalone-install
 marker and version checks:

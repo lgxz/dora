@@ -20,6 +20,7 @@ type options struct {
 	showVersion  bool
 	update       bool
 	forceUpdate  bool
+	updateTo     string
 	setup        bool
 	noSkills     bool
 	quiet        bool
@@ -49,6 +50,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	})
 	flags.BoolVar(&opts.showVersion, "version", false, "print version information")
 	flags.BoolVar(&opts.update, "update", false, "update a standalone installation")
+	flags.StringVar(&opts.updateTo, "to", "", "with -update, install this exact release version (may be older) instead of the latest")
 	flags.BoolVar(&opts.forceUpdate, "force", false, "force update, bypassing the standalone-install marker and version checks")
 	flags.BoolVar(&opts.setup, "setup", false, "interactively configure a model provider and API key")
 	flags.BoolVar(&opts.noSkills, "no-skills", false, "disable all skills")
@@ -83,6 +85,9 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 }
 
 func handleImmediate(ctx context.Context, opts options, streams IO) (bool, error) {
+	if opts.updateTo != "" && !opts.update {
+		return true, errors.New("-to requires -update")
+	}
 	if opts.setup {
 		if opts.showVersion || opts.update {
 			return true, errors.New("--setup cannot be combined with --version or --update")
@@ -111,6 +116,7 @@ func handleImmediate(ctx context.Context, opts options, streams IO) (bool, error
 		service = update.New(update.Config{
 			CurrentVersion: streams.BuildVersion,
 			HTTPClient:     streams.HTTPClient,
+			TargetVersion:  opts.updateTo,
 			Force:          opts.forceUpdate,
 		})
 	}

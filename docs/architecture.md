@@ -262,7 +262,7 @@ The capacity check returns a `CompactionResult` containing the selected history,
 
 `internal/cli.Run` is the composition root and drives the terminal frontend:
 
-1. Parse arguments; `--version`, `-update`, and `--setup` complete and exit before reading runtime configuration or the prompt. Setup updates only the selected YAML file's `env` and `policy.text`, validates the complete result, and preserves other fields and comments.
+1. Parse arguments; `--version`, `-update` (optionally `-to VERSION` for an exact, possibly older release), and `--setup` complete and exit before reading runtime configuration or the prompt. Setup updates only the selected YAML file's `env` and `policy.text`, validates the complete result, and preserves other fields and comments.
 2. Resolve and load the default or explicit configuration and validate one-shot model/thinking/round overrides.
 3. Normal CLI mode requires the model router immediately.
 4. For a normal Agent run, validate `--workdir` and compose the user prompt from command arguments and standard input.

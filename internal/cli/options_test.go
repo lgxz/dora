@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,27 @@ func TestParseOptionsWorkdir(t *testing.T) {
 	}
 	if opts.workdir != "project" || len(opts.promptArgs) != 1 || opts.promptArgs[0] != "hello" {
 		t.Fatalf("options = %#v", opts)
+	}
+}
+
+func TestParseOptionsUpdateTo(t *testing.T) {
+	opts, err := parseOptions([]string{"-update", "-to", "v1.2.3"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.update || opts.updateTo != "v1.2.3" {
+		t.Fatalf("options = %#v", opts)
+	}
+}
+
+func TestToRequiresUpdate(t *testing.T) {
+	opts, err := parseOptions([]string{"-to", "1.2.3"}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := handleImmediate(context.Background(), opts, IO{})
+	if !handled || err == nil || !strings.Contains(err.Error(), "-to requires -update") {
+		t.Fatalf("handled = %v, err = %v", handled, err)
 	}
 }
 

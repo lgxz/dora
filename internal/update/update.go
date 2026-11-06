@@ -51,6 +51,9 @@ type Config struct {
 	OS             string
 	Arch           string
 	AllowInsecure  bool
+	// TargetVersion selects an exact release instead of the latest one. It may
+	// be older than the running version (a downgrade). Empty means latest.
+	TargetVersion string
 	// Force bypasses the standalone-install marker and version checks so an
 	// unmanaged or development build can be replaced with the latest release.
 	Force bool
@@ -97,8 +100,17 @@ type installMarker struct {
 	Repository string `json:"repository"`
 }
 
-// Update installs the latest stable release when it is newer than the running version.
+// Update installs the latest stable release when it is newer than the running
+// version, or the exact release named by Config.TargetVersion when it differs
+// from the running version.
 func (s *Service) Update(ctx context.Context) (Result, error) {
+	target := ""
+	if s.config.TargetVersion != "" {
+		var err error
+		if target, err = normalizeVersion(s.config.TargetVersion); err != nil {
+			return Result{}, fmt.Errorf("invalid target version %q", s.config.TargetVersion)
+		}
+	}
 	current, currentErr := normalizeVersion(s.config.CurrentVersion)
 	if currentErr != nil && !s.config.Force {
 		return Result{}, fmt.Errorf("self-update is unavailable for build %q", s.config.CurrentVersion)
@@ -118,17 +130,24 @@ func (s *Service) Update(ctx context.Context) (Result, error) {
 		}
 	}
 
-	rel, err := s.latestRelease(ctx)
+	rel, err := s.fetchRelease(ctx, target)
 	if err != nil {
 		return Result{}, err
 	}
 	latest, err := normalizeVersion(rel.TagName)
 	if err != nil {
-		return Result{}, fmt.Errorf("latest release has invalid version %q", rel.TagName)
+		return Result{}, fmt.Errorf("release has invalid version %q", rel.TagName)
+	}
+	if target != "" && semver.Compare(latest, target) != 0 {
+		return Result{}, fmt.Errorf("release %s does not match requested version %s", rel.TagName, target)
 	}
 	result := Result{Current: strings.TrimPrefix(s.config.CurrentVersion, "v"), Latest: strings.TrimPrefix(latest, "v")}
-	if currentErr == nil && semver.Compare(current, latest) >= 0 {
-		return result, nil
+	if currentErr == nil {
+		// Without a target only a newer release is installed; with one, any
+		// different version is, so an explicit request can also downgrade.
+		if cmp := semver.Compare(current, latest); cmp == 0 || (target == "" && cmp > 0) {
+			return result, nil
+		}
 	}
 
 	archiveName, binaryName, err := artifactNames(s.config.OS, s.config.Arch)
@@ -171,19 +190,25 @@ func (s *Service) Update(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func (s *Service) latestRelease(ctx context.Context) (release, error) {
+// fetchRelease queries the latest stable release, or the release tagged target.
+func (s *Service) fetchRelease(ctx context.Context, target string) (release, error) {
 	endpoint := strings.TrimRight(s.config.APIBaseURL, "/") + "/repos/" + s.config.Repository + "/releases/latest"
+	what := "latest release"
+	if target != "" {
+		endpoint = strings.TrimRight(s.config.APIBaseURL, "/") + "/repos/" + s.config.Repository + "/releases/tags/" + url.PathEscape(target)
+		what = "release " + target
+	}
 	data, err := s.download(ctx, endpoint, maxReleaseBytes)
 	if err != nil {
-		return release{}, fmt.Errorf("query latest release: %w", err)
+		return release{}, fmt.Errorf("query %s: %w", what, err)
 	}
 	var rel release
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&rel); err != nil {
-		return release{}, fmt.Errorf("decode latest release: %w", err)
+		return release{}, fmt.Errorf("decode %s: %w", what, err)
 	}
 	if rel.TagName == "" {
-		return release{}, errors.New("latest release is missing a tag")
+		return release{}, fmt.Errorf("%s is missing a tag", what)
 	}
 	return rel, nil
 }

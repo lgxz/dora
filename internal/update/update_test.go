@@ -336,3 +336,160 @@ func updateResponse(body []byte) *http.Response {
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
 }
+
+// releaseServer serves the given tagged releases (tag -> executable version)
+// and records every request path.
+func releaseServer(t *testing.T, releases map[string]string, paths *[]string) *http.Client {
+	t.Helper()
+	archiveName := fmt.Sprintf("dora-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	notFound := func() *http.Response {
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("not found"))}
+	}
+	return &http.Client{Transport: updateRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		*paths = append(*paths, request.URL.Path)
+		path := request.URL.Path
+		if tag, ok := strings.CutPrefix(path, "/repos/lgxz/dora/releases/tags/"); ok {
+			if _, found := releases[tag]; !found {
+				return notFound(), nil
+			}
+			var body bytes.Buffer
+			_ = json.NewEncoder(&body).Encode(map[string]any{
+				"tag_name": tag,
+				"assets": []map[string]string{
+					{"name": archiveName, "browser_download_url": "https://api.test/" + tag + "/" + archiveName},
+					{"name": "checksums.txt", "browser_download_url": "https://api.test/" + tag + "/checksums.txt"},
+				},
+			})
+			return updateResponse(body.Bytes()), nil
+		}
+		for tag, version := range releases {
+			archive := testTarGzip(t, "dora", testExecutable(version))
+			switch path {
+			case "/" + tag + "/" + archiveName:
+				return updateResponse(archive), nil
+			case "/" + tag + "/checksums.txt":
+				return updateResponse([]byte(fmt.Sprintf("%x  %s\n", sha256.Sum256(archive), archiveName))), nil
+			}
+		}
+		return notFound(), nil
+	})}
+}
+
+func skipUnlessUnixRelease(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("test fixture is a Unix shell executable")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skip("release artifacts do not support this architecture")
+	}
+}
+
+func TestUpdateToExactVersionCanDowngrade(t *testing.T) {
+	skipUnlessUnixRelease(t)
+	for _, target := range []string{"1.0.0", "v1.0.0"} {
+		t.Run(target, func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "dora")
+			writeTestExecutable(t, executable, "1.2.0")
+			writeTestMarker(t, directory)
+			var paths []string
+			result, err := New(Config{
+				CurrentVersion: "1.2.0",
+				TargetVersion:  target,
+				HTTPClient:     releaseServer(t, map[string]string{"v1.0.0": "1.0.0", "v1.3.0": "1.3.0"}, &paths),
+				APIBaseURL:     "https://api.test",
+				ExecutablePath: func() (string, error) { return executable, nil },
+			}).Update(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result != (Result{Current: "1.2.0", Latest: "1.0.0", Updated: true}) {
+				t.Fatalf("result = %#v", result)
+			}
+			output, err := exec.Command(executable, "--version").CombinedOutput()
+			if err != nil || !strings.HasPrefix(string(output), "dora 1.0.0 ") {
+				t.Fatalf("version output = %q, err = %v", output, err)
+			}
+			for _, path := range paths {
+				if strings.HasSuffix(path, "/releases/latest") {
+					t.Fatalf("queried the latest release despite a target version: %v", paths)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateToCurrentVersionDownloadsNothing(t *testing.T) {
+	skipUnlessUnixRelease(t)
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "dora")
+	writeTestExecutable(t, executable, "1.1.0")
+	writeTestMarker(t, directory)
+	var paths []string
+	result, err := New(Config{
+		CurrentVersion: "1.1.0",
+		TargetVersion:  "1.1.0",
+		HTTPClient:     releaseServer(t, map[string]string{"v1.1.0": "1.1.0"}, &paths),
+		APIBaseURL:     "https://api.test",
+		ExecutablePath: func() (string, error) { return executable, nil },
+	}).Update(context.Background())
+	if err != nil || result != (Result{Current: "1.1.0", Latest: "1.1.0"}) {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("requests = %v, want only the release lookup", paths)
+	}
+}
+
+func TestUpdateToRejectsBadOrUnknownVersions(t *testing.T) {
+	skipUnlessUnixRelease(t)
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "dora")
+	writeTestExecutable(t, executable, "1.1.0")
+	writeTestMarker(t, directory)
+	for _, test := range []struct{ target, want string }{
+		{"latest", "invalid target version"},
+		{"1.x", "invalid target version"},
+		{"9.9.9", "HTTP status 404"},
+	} {
+		t.Run(test.target, func(t *testing.T) {
+			var paths []string
+			_, err := New(Config{
+				CurrentVersion: "1.1.0",
+				TargetVersion:  test.target,
+				HTTPClient:     releaseServer(t, map[string]string{"v1.0.0": "1.0.0"}, &paths),
+				APIBaseURL:     "https://api.test",
+				ExecutablePath: func() (string, error) { return executable, nil },
+			}).Update(context.Background())
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			output, runErr := exec.Command(executable, "--version").CombinedOutput()
+			if runErr != nil || !strings.HasPrefix(string(output), "dora 1.1.0 ") {
+				t.Fatalf("executable changed: %q, %v", output, runErr)
+			}
+		})
+	}
+}
+
+func TestUpdateToRejectsMismatchedReleaseTag(t *testing.T) {
+	skipUnlessUnixRelease(t)
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "dora")
+	writeTestExecutable(t, executable, "1.1.0")
+	writeTestMarker(t, directory)
+	client := &http.Client{Transport: updateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return updateResponse([]byte(`{"tag_name":"v2.0.0"}`)), nil
+	})}
+	_, err := New(Config{
+		CurrentVersion: "1.1.0",
+		TargetVersion:  "1.0.0",
+		HTTPClient:     client,
+		APIBaseURL:     "https://api.test",
+		ExecutablePath: func() (string, error) { return executable, nil },
+	}).Update(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "does not match requested version") {
+		t.Fatalf("error = %v", err)
+	}
+}
