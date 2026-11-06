@@ -6,7 +6,7 @@
 # 示例：run_tb.sh -m trust/hy4-preview -n 2
 # -m/--model 可选，默认 deepseek/deepseek-v4-pro；由本脚本消费，不透传给 Harbor。
 # --trace 开启 ATIF 轨迹导出，默认关闭。开启后 aipymini 会向沙箱内二进制传
-# --trace-file 并生成 trajectory.json，Harbor 结果才包含 token 统计。
+# --session 并把其中的父 turn 转成 trajectory.json，Harbor 结果才包含 token 统计。
 # --max-rounds 可选，覆盖沙箱内二进制每段的最大模型-工具轮数（正整数）；
 # 不提供时使用二进制内置默认值。
 #

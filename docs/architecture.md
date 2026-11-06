@@ -116,7 +116,7 @@ and carries `RawFinishReason` and the effective `OutputBudget`. Zero budget mean
 unknown. Custom Model implementations must adopt this contract; empty/unknown
 reasons are not inferred from response content.
 
-`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional `InputTokenDetails`/`OutputTokenDetails` breakdowns). Input details include cached and audio tokens; output details include reasoning, audio, and accepted/rejected prediction tokens. It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Usage is carried by the `UpdateMessageReceived` observer event on every complete round, retained on the corresponding `Round` or final `Turn`, persisted by session storage, and used by the compactor as the previous round's `total_tokens` occupancy baseline (falling back to a token estimate when usage is nil). The renderer does not display it. For one-shot CLI runs, `--trace-file` writes the provider-neutral parent Turn—messages, reasoning, tool calls/results, images, and per-call usage—so integrations can translate it to external trajectory formats and aggregate usage without coupling the kernel to them.
+`Response` also carries an optional `Usage *Usage` payload describing the tokens a single model call consumed (input, output, and total, plus optional `InputTokenDetails`/`OutputTokenDetails` breakdowns). Input details include cached and audio tokens; output details include reasoning, audio, and accepted/rejected prediction tokens. It is provider-neutral, populated by the adapters, and is `nil` when a provider reports no usage or is not asked for it. Usage is carried by the `UpdateMessageReceived` observer event on every complete round, retained on the corresponding `Round` or final `Turn`, persisted by session storage, and used by the compactor as the previous round's `total_tokens` occupancy baseline (falling back to a token estimate when usage is nil). The renderer does not display it. The session file records the messages, reasoning, tool calls/results, images, and per-call usage, so integrations can translate it to external trajectory formats and aggregate usage without coupling the kernel to them.
 
 `dora` provides `InputTokens`/`TotalTokens` as pure-function exits for accounting context usage from a `dora.Usage` (provider-neutral and nil safe); normalization conversion from provider wire formats remains in the adapters' private helpers.
 
@@ -258,7 +258,7 @@ The capacity check returns a `CompactionResult` containing the selected history,
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
-9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`.
 10. The terminal frontend writes completed text to stdout.
 
 The process entry point converts both `SIGINT` and `SIGTERM` into context
@@ -290,12 +290,12 @@ have unavailable output/usage; unreported usage is not a measured zero.
 usage, and `Turn.FinalResponse` retains the successful final reasoning/metadata.
 Child task/image calls are not expanded in the parent attempt stream.
 
-Trace schema 2 adds status/error, attempts, total usage, and final finish metadata
-and reasoning. Harbor consumes attempts for accounting and only attaches actual
-tool observations to accepted tool attempts; rejected tool calls remain audit
-metadata. Schema 1 traces are rejected. The session store persists attempts in
-`model_attempts`, exposes paginated `GetAttempts` through `session.AttemptReader`,
-and stores total usage separately from final-call usage on `turns`.
+The session store persists attempts as `attempt` records, exposes paginated
+`GetAttempts` through `session.AttemptReader`, and stores total usage separately
+from final-call usage on the `end` record. The Terminal-Bench adapter
+(`scripts/eval/aipymini.py`) converts a one-shot session file to ATIF: it
+consumes attempts for accounting and only attaches actual tool observations to
+accepted tool attempts; rejected tool calls remain audit metadata.
 
 ### Chat Completions
 
@@ -515,7 +515,7 @@ results wait for the next such boundary. Children retain their original parent
 ID, including across later prompts. All four terminal statuses reuse the
 existing turn serialization. Child persistence errors are returned as cleanup
 diagnostics, never substituted for task execution results. No Observer or
-kernel change is required, and the parent trace/usage remain parent-only.
+kernel change is required, and the parent usage remains parent-only.
 
 Multiple Task calls returned in one response follow the Agent's normal
 unbounded concurrent tool execution. Nested runs use no Observer, preventing
@@ -596,8 +596,8 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - The Agent loop is single-goroutine, but the tool calls within one model response are executed concurrently in batches: ordinary tools overlap, and `ExclusiveTool` calls (`write`, `edit`, `bash`, `powershell`) run alone in the model's call order (results are collected by index and stored in order).
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
-- Session history is append-only. A turn is saved round by round while it runs and finalized once when it stops; the round in flight when the process dies, and any streaming text, are not saved. Saved turns are for inspection (the history tool, traces); Dora has no resume feature, and the provider continuation is not stored.
-- Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, persisted to session history, and included in a one-shot `--trace-file`, but are not rendered. Child task execution is intentionally not expanded into this record.
+- Session history is append-only. A turn is saved round by round while it runs and finalized once when it stops; the round in flight when the process dies, and any streaming text, are not saved. Saved turns are for inspection (the history tool, the session file); Dora has no resume feature, and the provider continuation is not stored.
+- Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, and persisted to session history, but are not rendered. Child task execution is intentionally not expanded into this record.
 - The session file is held with an exclusive lock for the life of the process (flock on Unix, no write sharing on Windows), so a second Dora process cannot open it. Each save is one write; a failed write is cut back so the save can be retried, and a torn last line from a crash is discarded on the next open.
 - The CLI remains the configuration and tool composition root; `internal/app`
   owns only frontend-neutral execution and persistence, not provider discovery.

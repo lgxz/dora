@@ -25,8 +25,8 @@ Confirmed design decisions (agreed with the user)
    process — it never hard-codes a key.
 3. **No session / DORA_POLICY_* needed to test.**
    Inside the container dora runs with progress enabled
-   (``dora -m <model_spec>``). The adapter sets no ``DORA_POLICY_*``, does
-   not manage the session database, and does not ship skills. The model is
+   (``dora -m <model_spec>``). The adapter sets no ``DORA_POLICY_*`` and does
+   not ship skills; it keeps no session unless trajectory export is enabled. The model is
    selected from Harbor's ``model_name`` and passed to dora's
    ``--model PROVIDER/PROFILE`` flag. The same value supplies Hub metadata.
    The legacy ``kwargs.model`` / ``--ak model`` entry point is not supported.
@@ -51,9 +51,10 @@ completion, failure, or interruption notification through the Telegram Bot API.
 
 The local Linux binary path is given via the host ``AIPYMINI_BINARY``
 environment variable (or the constructor kwarg ``aipymini_binary``). The ATIF
-trace dump is opt-in: by default dora runs without ``--trace-file``, so no
+trajectory export is opt-in: by default dora runs without ``--session``, so no
 ``trajectory.json`` and no Harbor token accounting is produced. Enable it with
-``run_tb.sh --trace`` or by exporting ``AIPYMINI_TRACE=1`` on the host. The
+``run_tb.sh --trace`` or by exporting ``AIPYMINI_TRACE=1`` on the host; dora then
+writes its JSON Lines session file and the adapter converts the parent turn. The
 per-segment model-tool round budget is likewise optional: ``run_tb.sh
 --max-rounds N`` (or the host ``AIPYMINI_MAX_ROUNDS``) forwards the binary's
 ``--max-rounds`` flag, and leaving it unset keeps the binary's built-in
@@ -70,6 +71,7 @@ class is actually used).
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -110,9 +112,86 @@ else:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 BINARY_PATH = "/installed-agent/aipymini"
-TRACE_PATH = "/logs/agent/trace.json"
+SESSION_PATH = "/logs/agent/session.jsonl"
 TRAJECTORY_PATH = "/logs/agent/trajectory.json"
 TOOLING_LOG_PATH = "/tmp/aipymini-tooling-install.log"
+
+
+def _trace_message_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+    calls = []
+    for call in message.get("tool_calls") or []:
+        raw = base64.b64decode(call.get("input_bytes") or "")
+        calls.append({"id": call["id"], "name": call["name"], "input": raw.decode("utf-8", "replace")})
+    return calls
+
+
+def _trace_from_session(text: str) -> dict[str, Any]:
+    """Rebuild the parent turn from a dora JSON Lines session file.
+
+    The file is a ``header`` line followed by ``turn``, ``round``, ``attempt``
+    and ``end`` records. Only the first turn without a parent is converted;
+    child task turns are not expanded. A turn without an ``end`` record was
+    interrupted and is reported as ``incomplete``. A torn last line (a crash in
+    the middle of a write) is ignored, as dora itself does when it opens the file.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    records: list[dict[str, Any]] = []
+    for number, line in enumerate(lines, 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            if number == len(lines) and number > 1:
+                break
+            raise
+        if not isinstance(record, dict):
+            raise ValueError("session record must be a JSON object")
+        records.append(record)
+    if not records or records[0].get("t") != "header" or records[0].get("v") != 1:
+        raise ValueError("not a dora session file (unsupported header)")
+    turn = next((r for r in records if r.get("t") == "turn" and not r.get("parent")), None)
+    if turn is None:
+        raise ValueError("session has no parent turn")
+    rounds: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    end: dict[str, Any] | None = None
+    for record in records:
+        if record.get("turn") != turn["id"]:
+            continue
+        kind = record.get("t")
+        if kind == "round":
+            assistant = record["assistant"]
+            rounds.append({
+                "assistant": {
+                    "content": assistant.get("content", ""),
+                    "reasoning": assistant.get("reasoning", ""),
+                    "tool_calls": _trace_message_calls(assistant),
+                },
+                "tools": [
+                    {
+                        "tool_call_id": tool.get("tool_call_id", ""),
+                        "content": tool.get("content", ""),
+                        "images": tool.get("images"),
+                    }
+                    for tool in record.get("tools") or []
+                ],
+                "usage": record.get("usage"),
+            })
+        elif kind == "attempt":
+            attempts.append(record["record"])
+        elif kind == "end":
+            end = record
+    if end is None:
+        status = "incomplete"
+    else:
+        status = "completed" if end.get("status") == "completed" else "failed"
+    return {
+        "schema_version": 2,
+        "status": status,
+        "system": (end or {}).get("system") or turn.get("system", ""),
+        "user": turn["user"],
+        "rounds": rounds,
+        "attempts": attempts,
+    }
 
 
 def _optional_token_count(metrics: dict[str, Any], key: str) -> int | None:
@@ -211,9 +290,9 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
                 "model_name is required; set agents[].model_name in the Harbor "
                 "job config or pass Harbor -m."
             )
-        # The ATIF trace dump is opt-in (run_tb.sh --trace, or the host
+        # The ATIF trajectory export is opt-in (run_tb.sh --trace, or the host
         # AIPYMINI_TRACE environment variable). A mismatched dora binary and
-        # adapter pair only surfaces through the trace conversion, so the
+        # adapter pair only surfaces through the session conversion, so the
         # default run stays free of that coupling.
         self._trace_enabled = (
             str(os.environ.get("AIPYMINI_TRACE", "")).strip().lower()
@@ -433,10 +512,10 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         instruction_env_var = instruction_shell_var.upper()
         run_env[instruction_env_var] = instruction
 
-        # Opt-in trace dump: without it the binary writes no trace file and
+        # Opt-in export: without it the binary writes no session file and
         # populate_context_post_run has nothing to convert.
         trace_flags = (
-            f"--trace-file {shlex.quote(TRACE_PATH)} " if self._trace_enabled else ""
+            f"--session {shlex.quote(SESSION_PATH)} " if self._trace_enabled else ""
         )
         # Optional round budget: without it the binary keeps its default.
         rounds_flags = (
@@ -466,7 +545,7 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
     def populate_context_post_run(self, context: AgentContext) -> None:
         """Create ATIF output and populate Harbor's aggregate token fields."""
         if not self._trace_enabled:
-            # Trace dump is disabled: there is no trace file to convert and
+            # Export is disabled: there is no session file to convert and
             # the token fields are intentionally left unset.
             return
         trajectory = self._write_trajectory()
@@ -478,9 +557,9 @@ class AIPyMiniAgent(BaseInstalledAgent):  # type: ignore[misc,valid-type]
         context.n_cache_tokens = trajectory.final_metrics.total_cached_tokens
 
     def _write_trajectory(self) -> Trajectory | None:
-        trace_path = self.logs_dir / Path(TRACE_PATH).name
+        trace_path = self.logs_dir / Path(SESSION_PATH).name
         try:
-            trace = json.loads(trace_path.read_text(encoding="utf-8"))
+            trace = _trace_from_session(trace_path.read_text(encoding="utf-8"))
             trajectory = self._trajectory_from_trace(trace)
             output = self.logs_dir / Path(TRAJECTORY_PATH).name
             output.write_text(

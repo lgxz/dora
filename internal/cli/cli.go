@@ -130,7 +130,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}
 	result, promptErr := appSession.Prompt(ctx, prompt, promptOptions)
-	traceErr := writeTraceFile(opts.tracePath, result.Turn)
 	if promptErr != nil {
 		if app.IsPersistenceError(promptErr) {
 			// The model may have finished and only saving the turn failed.
@@ -140,15 +139,9 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			if result.Completed {
 				answerErr = writeAnswer(streams, result.Content)
 			}
-			return errors.Join(promptErr, traceErr, answerErr)
-		}
-		if traceErr != nil {
-			return errors.Join(promptErr, traceErr)
+			return errors.Join(promptErr, answerErr)
 		}
 		return promptErr
-	}
-	if traceErr != nil {
-		return traceErr
 	}
 	if !result.Completed {
 		return nil

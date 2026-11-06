@@ -26,7 +26,6 @@ type options struct {
 	color        string
 	reasoning    bool
 	sessionPath  string
-	tracePath    string
 	workdir      string
 	promptArgs   []string
 	usage        func()
@@ -65,7 +64,6 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	})
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
 	flags.StringVar(&opts.sessionPath, "session", "", "JSONL file used to store and query saved turns")
-	flags.StringVar(&opts.tracePath, "trace-file", "", "write the parent turn trace as JSON")
 	flags.StringVar(&opts.workdir, "workdir", "", "working directory used to resolve relative tool paths")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "A tiny, extensible, and efficient LLM agent.\n\n")

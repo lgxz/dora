@@ -76,11 +76,9 @@ policy:
 	if err := writeTestConfig(t, configPath, configContents); err != nil {
 		t.Fatal(err)
 	}
-	tracePath := filepath.Join(t.TempDir(), "trace.json")
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := Run(context.Background(), []string{"--config", configPath, "--trace-file", tracePath, "hello"}, IO{
+	err := Run(context.Background(), []string{"--config", configPath, "hello"}, IO{
 		Stdin:            strings.NewReader(""),
 		Stdout:           &stdout,
 		Stderr:           &stderr,
@@ -99,23 +97,6 @@ policy:
 	}
 	if !strings.Contains(stderr.String(), "Model openai/fast") {
 		t.Fatalf("stderr = %q", stderr.String())
-	}
-	traceContents, err := os.ReadFile(tracePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var trace turnTrace
-	if err := json.Unmarshal(traceContents, &trace); err != nil {
-		t.Fatal(err)
-	}
-	if trace.SchemaVersion != turnTraceSchemaVersion || trace.User != "hello" {
-		t.Fatalf("trace = %#v", trace)
-	}
-	if trace.Final == nil || trace.Final.Content != "hello from model" {
-		t.Fatalf("trace final = %#v", trace.Final)
-	}
-	if trace.Final.Usage == nil || trace.Final.Usage.TotalTokens != 15 {
-		t.Fatalf("trace final usage = %#v", trace.Final.Usage)
 	}
 }
 

@@ -344,7 +344,7 @@ git diff | ./dora "Review this change"
 
 当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前会话中，并由 history 工具返回；没有 `--session` 时，会话在内存中，随 Dora 退出而消失。
 
-如需机器可读的父 turn 记录，传入 `--trace-file PATH`。Dora 会写出与提供商无关的 JSON 记录，包含 system 和 user 消息、每个已完成的 assistant/tool 轮次（包括推理、工具输入、结果、图片和每次调用的用量），以及产生了最终响应时的最终响应。Trace schema **2** 还包含 `status`、`error`、`attempts` 和 `total_usage`。每次模型尝试都会记录其结束原因、提供商原始原因、实际输出预算（未知时为零）、恢复序号、处置方式、推理、文本、工具参数以及报告的用量。被丢弃的调用和压缩调用也包含在内。最终推理会被保留。`attempts` 只应累加一次：被采纳的响应同样出现在 `rounds`/`final` 中，不能重复计数。缺失的用量视为未知；总计只累加已报告的数量。子任务和图片工具的模型调用不会展开到父 trace 中。Harbor 适配器现在要求 schema 2，schema 1 会被拒绝。格式错误的提供商工具参数会以文本形式保留，不会妨碍记录失败的 turn。父目录必须已经存在，文件以 `0600` 权限创建。该选项仅支持一次性运行。Terminal-Bench 集成可以把这份稳定的父 turn 记录转换为基准测试的 ATIF 格式，而无需让核心 Agent 依赖 Harbor。
+如需机器可读的运行记录，传入 `--session PATH`：该 JSON Lines 文件包含 system 和 user 消息、每个已完成的轮次，以及每次模型尝试及其用量（见下文“会话”）。子任务和图片工具的模型调用保存为独立的子 turn。
 
 使用 `--workdir` 可以指定工具解析相对路径时使用的基准目录：
 
@@ -405,7 +405,7 @@ timeout --kill-after=10s 300s dora --session session.jsonl "Your task"
 
 使用 `--config`、`-m`/`--model`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
-子任务 turn 保存在同一个文件中，其 `parent_turn_id` 指向主 turn。`history list` 返回所有 turns，包括每个 turn 的最终结果、状态以及子任务的 `parent_turn_id`（主 turn 省略该字段）。它的总数和分页同时统计主 turn 和子 turn，因此相关的 turns 可能出现在不同页。`history get` 保持按 rounds 分页的格式：可以用任意 turn ID 查看该 turn 的工具 rounds。父 turn 的 usage 和 trace 输出不包含子任务的 usage。
+子任务 turn 保存在同一个文件中，其 `parent_turn_id` 指向主 turn。`history list` 返回所有 turns，包括每个 turn 的最终结果、状态以及子任务的 `parent_turn_id`（主 turn 省略该字段）。它的总数和分页同时统计主 turn 和子 turn，因此相关的 turns 可能出现在不同页。`history get` 保持按 rounds 分页的格式：可以用任意 turn ID 查看该 turn 的工具 rounds。父 turn 的 usage 不包含子任务的 usage。
 
 Task 完成时只在内存中收集终态 Turn，不等待存储写入。收集到的子任务在一次 prompt 结束后以及会话关闭时保存。后台 Task 始终保留其原始父 turn，即使它在之后的 prompt 期间才结束；迟到的结果在下一次 prompt 结束或会话关闭的边界保存。失败、取消和达到最大轮数的子任务同样会被保存。子任务的写入失败会在清理时报告，但不会改变 Task 的结果。强制终止仍可能丢失尚未保存的子任务记录。
 

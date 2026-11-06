@@ -551,25 +551,7 @@ terminal renderer does not print usage. Per-round usage and the final response
 usage are saved in the active session and returned by the history tool;
 without `--session`, the session is in memory and disappears when Dora exits.
 
-For a machine-readable parent-turn transcript, pass `--trace-file PATH`. Dora
-writes a provider-neutral JSON record containing the system and user messages,
-each completed assistant/tool round (including reasoning, tool inputs, results,
-images, and per-call usage), and the final response when one was produced.
-Trace schema **2** also includes `status`, `error`, `attempts`, and `total_usage`.
-Each model attempt records its finish reason, raw provider reason, actual output
-budget (zero if unknown), recovery index, disposition, reasoning, text, tool
-arguments, and reported usage. Discarded calls and compaction calls are included.
-Final reasoning is retained. Sum attempts once: accepted responses are also
-represented in `rounds`/`final` and must not be counted again. Missing usage is
-unknown; totals sum only reported counts. Child task and image-tool model calls
-are not expanded into the parent trace. The Harbor adapter now requires schema
-2; schema 1 is rejected.
-Malformed provider tool arguments are preserved as text rather than preventing
-a failed turn from being recorded. The parent directory must already exist and
-the file is created with `0600` permissions. This option is only supported for
-one-shot runs. Terminal-Bench integrations can translate
-this stable parent-turn record into the benchmark's ATIF format without making
-the core Agent depend on Harbor.
+For a machine-readable record of a run, pass `--session PATH`: the JSON Lines file holds the system and user messages, every completed round, and each model attempt with its usage (see Sessions below). Child task and image-tool model calls are stored as separate child turns.
 
 Use `--workdir` to choose the base directory for relative paths used by tools:
 
@@ -698,8 +680,7 @@ at the main turn. `history list` returns all turns, including each turn's final
 result, status, and `parent_turn_id` for child tasks (omitted for main turns).
 Its total and pagination count both main and child turns, so related turns may
 appear on different pages. `history get` keeps its round-page format: use any
-turn ID to inspect that turn's tool rounds. Parent usage and trace output do
-not include child usage.
+turn ID to inspect that turn's tool rounds. Parent usage does not include child usage.
 
 Task completion only collects the terminal Turn in memory, without waiting for
 storage. Collected children are saved after a prompt finishes and during session

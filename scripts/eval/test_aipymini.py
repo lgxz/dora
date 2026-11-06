@@ -4,6 +4,7 @@ Use the Python environment containing Harbor. No containers or model calls run.
 """
 
 import asyncio
+import base64
 import json
 import shlex
 import subprocess
@@ -21,9 +22,10 @@ from harbor.models.trajectories import Trajectory
 from aipymini import (
     AIPyMiniAgent,
     BINARY_PATH,
+    SESSION_PATH,
     TOOLING_LOG_PATH,
-    TRACE_PATH,
     TRAJECTORY_PATH,
+    _trace_from_session,
 )
 
 
@@ -40,6 +42,41 @@ def trace_v2(trace):
     return dict(trace, status="completed" if "final" in trace else "failed", attempts=attempts)
 
 
+def session_jsonl(trace):
+    """Render a trace fixture as the JSON Lines session file dora writes."""
+    def encode_calls(calls):
+        return [dict(id=c["id"], name=c["name"],
+                     input_bytes=base64.b64encode(c["input"].encode()).decode()) for c in calls]
+
+    lines = [
+        {"t": "header", "v": 1},
+        {"t": "turn", "id": 1, "system": trace.get("system", ""), "user": trace["user"], "at": "2026-01-01T00:00:00Z"},
+    ]
+    for index, round_data in enumerate(trace["rounds"]):
+        assistant = round_data["assistant"]
+        lines.append({
+            "t": "round", "turn": 1, "i": index, "usage": round_data.get("usage"),
+            "assistant": dict(role="assistant", content=assistant.get("content", ""),
+                              reasoning=assistant.get("reasoning", ""),
+                              tool_calls=encode_calls(assistant.get("tool_calls", []))),
+            "tools": [dict(role="tool", **tool) for tool in round_data["tools"]],
+        })
+    for index, attempt in enumerate(trace["attempts"]):
+        lines.append({"t": "attempt", "turn": 1, "i": index, "record": attempt})
+    if trace["status"] == "completed":
+        lines.append({"t": "end", "turn": 1, "status": "completed", "at": "2026-01-01T00:00:01Z"})
+    elif trace["status"] == "failed":
+        lines.append({"t": "end", "turn": 1, "status": "failed", "error": "boom", "at": "2026-01-01T00:00:01Z"})
+    # A child task turn is stored in the same file and must not leak into the
+    # parent trajectory or its token totals.
+    lines.append({"t": "turn", "id": 2, "parent": 1, "user": "child", "at": "2026-01-01T00:00:02Z"})
+    lines.append({"t": "attempt", "turn": 2, "i": 0, "record": dict(
+        purpose="agent", recovery=0, disposition="final", content="child",
+        usage=dict(input_tokens=999, output_tokens=999, total_tokens=1998))})
+    lines.append({"t": "end", "turn": 2, "status": "completed", "at": "2026-01-01T00:00:03Z"})
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
 class AIPyMiniModelSelectionTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="aipymini-tb-test-")
@@ -48,6 +85,9 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def agent(self, **kwargs):
         return AIPyMiniAgent(logs_dir=self.logs_dir, version="test", **kwargs)
+
+    def write_session(self, trace):
+        (self.logs_dir / Path(SESSION_PATH).name).write_text(session_jsonl(trace), encoding="utf-8")
 
     def trace_agent(self, **kwargs):
         """Agent with the opt-in trace dump enabled, as run_tb.sh --trace does."""
@@ -153,15 +193,15 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                 agent.model_name,
             ],
         )
-        self.assertNotIn("--trace-file", aipymini_argv)
+        self.assertNotIn("--session", aipymini_argv)
         self.assertIn("> /logs/agent/run.txt 2>&1", command)
 
     def test_trace_dump_is_opt_in(self):
         for env_value, expected in (
             (None, []),
             ("0", []),
-            ("1", ["--trace-file", TRACE_PATH]),
-            ("true", ["--trace-file", TRACE_PATH]),
+            ("1", ["--session", SESSION_PATH]),
+            ("true", ["--session", SESSION_PATH]),
         ):
             with self.subTest(env_value=env_value):
                 if env_value is None:
@@ -174,7 +214,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                 command = agent.exec_as_agent.call_args.kwargs["command"]
                 aipymini_argv = shlex.split(command.split(" | ", 1)[1].split(" > ", 1)[0])
                 self.assertEqual(
-                    [arg for arg in aipymini_argv if arg in ("--trace-file", TRACE_PATH)],
+                    [arg for arg in aipymini_argv if arg in ("--session", SESSION_PATH)],
                     expected,
                 )
 
@@ -279,7 +319,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         agent.logger = MagicMock()
 
         self.assertIsNone(agent._write_trajectory())
-        (self.logs_dir / Path(TRACE_PATH).name).write_text("{")
+        (self.logs_dir / Path(SESSION_PATH).name).write_text("{")
         self.assertIsNone(agent._write_trajectory())
 
         self.assertEqual(agent.logger.debug.call_count, 2)
@@ -287,7 +327,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_populates_harbor_context_from_trace(self):
         agent = self.trace_agent(model_name="trust/hy4-preview")
-        (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
+        self.write_session(trace_v2({
             "schema_version": 2,
             "user": "test",
             "rounds": [],
@@ -300,7 +340,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                     "input_details": {"cached_tokens": 25},
                 },
             },
-        })))
+        }))
         context = AgentContext()
 
         agent.populate_context_post_run(context)
@@ -312,8 +352,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_converts_parent_trace_to_valid_atif(self):
         agent = self.trace_agent(model_name="trust/hy4-preview")
-        trace_path = self.logs_dir / Path(TRACE_PATH).name
-        trace_path.write_text(json.dumps(trace_v2({
+        self.write_session(trace_v2({
             "schema_version": 2,
             "system": "Use tools carefully.",
             "user": "Inspect the repository",
@@ -346,7 +385,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                     "total_tokens": 135,
                 },
             },
-        })), encoding="utf-8")
+        }))
 
         agent.populate_context_post_run(AgentContext())
 
@@ -374,7 +413,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_invalid_tool_arguments_are_preserved_in_atif(self):
         agent = self.trace_agent(model_name="trust/hy4-preview")
-        (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
+        self.write_session(trace_v2({
             "schema_version": 2,
             "user": "test",
             "rounds": [{
@@ -383,7 +422,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                 }]},
                 "tools": [{"tool_call_id": "call-1", "content": "failed"}],
             }],
-        })), encoding="utf-8")
+        }))
 
         agent.populate_context_post_run(AgentContext())
 
@@ -419,6 +458,30 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema_version"):
             self.agent(model_name="deepseek/deepseek-v4-pro")._trajectory_from_trace(dict(schema_version=1))
 
+    def test_session_conversion_edge_cases(self):
+        def lines(*records):
+            return "".join(json.dumps(r) + "\n" for r in records)
+
+        header = {"t": "header", "v": 1}
+        turn = {"t": "turn", "id": 1, "user": "go", "at": "2026-01-01T00:00:00Z"}
+        round_record = {"t": "round", "turn": 1, "i": 0, "assistant": {
+            "role": "assistant",
+            "tool_calls": [{"id": "c1", "name": "bash", "input_bytes": base64.b64encode(b"\xff{").decode()}]},
+            "tools": [{"role": "tool", "tool_call_id": "c1", "content": "out"}]}
+        # No end record: the run was interrupted.
+        trace = _trace_from_session(lines(header, turn, round_record))
+        self.assertEqual(trace["status"], "incomplete")
+        self.assertEqual(trace["rounds"][0]["assistant"]["tool_calls"][0]["input"], "\ufffd{")
+        # A torn last line is ignored.
+        torn = lines(header, turn, round_record) + '{"t":"attempt","turn":1,"i":0,"rec'
+        self.assertEqual(len(_trace_from_session(torn)["rounds"]), 1)
+        # A terminal error end is reported as failed; a changed system prompt wins.
+        failed = _trace_from_session(lines(header, dict(turn, system="old"), dict(t="end", turn=1, status="canceled", error="x", system="new")))
+        self.assertEqual((failed["status"], failed["system"]), ("failed", "new"))
+        for bad in ("", lines({"t": "header", "v": 2}), lines(header), '{"version":5}\n{"x":1}\n', "garbage\nmore\n"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                _trace_from_session(bad)
+
     def test_missing_trace_leaves_context_empty(self):
         agent = self.trace_agent(model_name="trust/hy4-preview")
         context = AgentContext()
@@ -427,7 +490,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
 
     def test_trace_disabled_skips_trajectory_and_token_accounting(self):
         agent = self.agent(model_name="trust/hy4-preview")
-        (self.logs_dir / Path(TRACE_PATH).name).write_text(json.dumps(trace_v2({
+        self.write_session(trace_v2({
             "schema_version": 2,
             "user": "test",
             "rounds": [],
@@ -435,7 +498,7 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
                 "content": "done",
                 "usage": {"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
             },
-        })))
+        }))
         context = AgentContext()
 
         agent.populate_context_post_run(context)
