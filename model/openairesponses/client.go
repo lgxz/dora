@@ -412,12 +412,16 @@ func readStream(reader io.Reader, emit func(dora.ModelEvent), onActivity func())
 			if message == "" {
 				message = event.Type
 			}
-			return errors.New(message)
+			if event.Response.Error.Code != "" && !provider.MentionsContextLength(message) {
+				// The code alone (context_length_exceeded) identifies overflow.
+				message = event.Response.Error.Code + ": " + message
+			}
+			return provider.StreamError(message)
 		case "error":
 			if event.Message == "" {
 				return errors.New("stream returned an error")
 			}
-			return errors.New(event.Message)
+			return provider.StreamError(event.Message)
 		}
 		return nil
 	}
@@ -592,6 +596,7 @@ type responsesResponse struct {
 	Output []json.RawMessage `json:"output"`
 	Error  struct {
 		Message string `json:"message"`
+		Code    string `json:"code"`
 	} `json:"error"`
 	Usage *responsesUsage `json:"usage"`
 }

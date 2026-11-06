@@ -523,6 +523,15 @@ func TestToolPresentations(t *testing.T) {
 			wantOutcome: outcomeWarning,
 		},
 		{
+			name:        "edit ambiguous match",
+			call:        dora.ToolCall{Name: "edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"a","new_string":"bb"}`)},
+			message:     dora.Message{Content: "old_string appears 3 times in the file, so it is ambiguous; include more surrounding context to make it unique, or set replace_all to replace every occurrence"},
+			wantName:    "edit",
+			wantSummary: "agent.go",
+			wantResult:  "old_string is ambiguous (3 matches)",
+			wantOutcome: outcomeWarning,
+		},
+		{
 			name:        "edit replacements",
 			call:        dora.ToolCall{Name: "edit", Input: json.RawMessage(`{"path":"agent.go","old_string":"a","new_string":"bb","replace_all":true}`)},
 			message:     dora.Message{Content: "replacements: 2, bytes_changed: 2"},

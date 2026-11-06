@@ -189,3 +189,55 @@ func TestRetryableWrappers(t *testing.T) {
 		t.Errorf("errors.Is(r2, base) = false, want true via Unwrap")
 	}
 }
+func TestAPIErrorClassifiesContextLength(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"openai code", http.StatusBadRequest, `{"error":{"message":"too big","code":"context_length_exceeded"}}`, true},
+		{"openai message", http.StatusBadRequest, `{"error":{"message":"This model's maximum context length is 8192 tokens.","type":"invalid_request_error"}}`, true},
+		{"anthropic style", http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}`, true},
+		{"plain text 413", http.StatusRequestEntityTooLarge, `Request exceeds the context window of this model`, true},
+		{"unprocessable", http.StatusUnprocessableEntity, `{"error":{"message":"input is too long for the model"}}`, true},
+		{"numeric code ignored", http.StatusBadRequest, `{"error":{"message":"bad param","code":400}}`, false},
+		{"unrelated 400", http.StatusBadRequest, `{"error":{"message":"bad param"}}`, false},
+		{"rate limit mentioning tokens", http.StatusTooManyRequests, `{"error":{"message":"maximum context length reached for your tokens per minute"}}`, false},
+		{"server error", http.StatusInternalServerError, `{"error":{"message":"context window exceeded"}}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := APIError("pfx", tt.status, http.Header{}, []byte(tt.body))
+			if got := errors.Is(err, dora.ErrContextLength); got != tt.want {
+				t.Fatalf("errors.Is(ErrContextLength) = %v, want %v (err %v)", got, tt.want, err)
+			}
+			var retryable *dora.RetryableError
+			if tt.want && errors.As(err, &retryable) {
+				t.Fatalf("context-length error must not be retryable as-is: %v", err)
+			}
+			if tt.want && !strings.HasPrefix(err.Error(), "pfx: API returned HTTP") {
+				t.Fatalf("message lost the provider prefix: %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestStreamErrorClassifiesContextLength(t *testing.T) {
+	if err := StreamError("Your input exceeds the context window of this model"); !errors.Is(err, dora.ErrContextLength) {
+		t.Fatalf("err = %v, want ErrContextLength", err)
+	}
+	err := StreamError("server is overloaded")
+	if errors.Is(err, dora.ErrContextLength) || err.Error() != "server is overloaded" {
+		t.Fatalf("err = %v, want plain error", err)
+	}
+}
+
+func TestParseRetryAfterHugeValueDoesNotOverflow(t *testing.T) {
+	for _, value := range []string{"99999999999", "9223372036854775807"} {
+		got := ParseRetryAfter(http.Header{"Retry-After": {value}})
+		if got <= 0 || got > 366*24*time.Hour {
+			t.Fatalf("Retry-After %s parsed as %v, want a large positive clamp", value, got)
+		}
+	}
+}

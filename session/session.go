@@ -1,5 +1,5 @@
-// Package session defines persistent storage for completed and terminally
-// stopped Dora turns.
+// Package session defines persistent storage for Dora turns, saved
+// incrementally while they run and finalized when they stop.
 package session
 
 import (
@@ -12,10 +12,14 @@ import (
 
 var ErrNotFound = errors.New("session turn not found")
 
-// TurnStatus describes why a saved turn stopped.
+// TurnStatus describes the state of a saved turn: still running, or why it stopped.
 type TurnStatus string
 
 const (
+	// TurnStatusRunning marks a turn whose completed rounds are saved but which
+	// has not reached a terminal state. A row that stays running was interrupted
+	// by a crash or forced exit (or belongs to a process still working on it).
+	TurnStatusRunning   TurnStatus = "running"
 	TurnStatusCompleted TurnStatus = "completed"
 	TurnStatusMaxRounds TurnStatus = "max_rounds"
 	TurnStatusFailed    TurnStatus = "failed"
@@ -74,15 +78,34 @@ type Reader interface {
 	GetRounds(context.Context, int64, RoundOptions) (RoundPage, error)
 }
 
-// Store appends completed and terminally stopped turns and provides saved-turn
-// history queries.
+// TurnWriter incrementally persists one main Turn. It is used from a single
+// goroutine: Sync from the Agent's round callback, then Finish once.
+//
+// Sync and Finish are idempotent about content: each saves every round and
+// model attempt the writer has not saved yet, so a failed Sync is repaired by
+// the next Sync or by Finish without losing or duplicating anything.
+type TurnWriter interface {
+	// ID returns the saved turn's ID, or zero before the first successful save.
+	ID() int64
+	// Sync saves the complete rounds and finalized model attempts added since the
+	// previous save. The first save with at least one round creates the turn with
+	// status running. Sync is a no-op when there is nothing new to save.
+	Sync(ctx context.Context) error
+	// Finish saves any remaining rounds and attempts and records the terminal
+	// status in one transaction, returning the turn ID. status must be one of the
+	// four terminal statuses and cause must match it (nil for completed).
+	Finish(ctx context.Context, status TurnStatus, cause error) (int64, error)
+}
+
+// Store saves Dora turns and provides saved-turn history queries. Main turns
+// are written through a TurnWriter; a child turn is saved once, after its
+// parent exists, by CommitChild.
 type Store interface {
 	Reader
-	CommitTurn(context.Context, *dora.Turn) (int64, error)
+	// BeginTurn returns a writer for turn. It performs no storage work; the turn
+	// is created on the first save.
+	BeginTurn(turn *dora.Turn) TurnWriter
 	CommitChild(context.Context, int64, *dora.Turn, error) (int64, error)
-	CommitMaxRounds(context.Context, *dora.Turn, error) (int64, error)
-	CommitFailed(context.Context, *dora.Turn, error) (int64, error)
-	CommitCanceled(context.Context, *dora.Turn, error) (int64, error)
 	Close() error
 }
 

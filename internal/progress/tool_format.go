@@ -248,6 +248,11 @@ func formatEditResult(_ dora.ToolCall, message dora.Message) (string, outcome) {
 	if strings.TrimSpace(message.Content) == "old_string not found in file" {
 		return "old_string not found", outcomeWarning
 	}
+	// The edit tool refuses to guess which of several matches was meant.
+	var matches int
+	if _, err := fmt.Sscanf(strings.TrimSpace(message.Content), "old_string appears %d times in the file", &matches); err == nil {
+		return fmt.Sprintf("old_string is ambiguous (%s)", plural(matches, "match", "matches")), outcomeWarning
+	}
 	var replacements, changed int
 	if _, err := fmt.Sscanf(message.Content, "replacements: %d, bytes_changed: %d", &replacements, &changed); err != nil {
 		return "done", outcomeSuccess

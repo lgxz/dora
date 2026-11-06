@@ -74,7 +74,7 @@ Key constraints on dependency direction:
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
 | `session` | Defines saved-turn history contracts and query records | `Reader`, `Store` |
-| `session/sqlite` | Appends completed, maximum-round, failed, and canceled turns to a user-selected SQLite file | `Open`, `Store.CommitTurn`, `Store.CommitMaxRounds`, `Store.CommitFailed`, `Store.CommitCanceled`, `Store.ListTurns`, `Store.GetRounds` |
+| `session/sqlite` | Saves turns to a user-selected SQLite file as they run (`running`) and finalizes them as completed, maximum-round, failed, or canceled | `Open`, `Store.BeginTurn` (`TurnWriter.Sync`, `TurnWriter.Finish`), `Store.CommitChild`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
 | `internal/progress` | Renders semantic run events as terminal output | `New`, `Renderer.Observe` |
 | `model/provider` | Shared HTTP transport, retry, SSE, and error infrastructure for model adapters | `New`, `Provider.PostStream` |
@@ -136,6 +136,8 @@ type ToolResult struct {
 
 `Spec` exposes the name, description, and JSON Schema to the model. `Execute` receives only the model-generated JSON arguments and returns content for the resulting tool message. The core Agent does not know the concrete type of a tool and does not parse tool-specific output conventions or access image files.
 
+A tool may also implement the optional `ExclusiveTool` interface (`Exclusive() bool`) to say that its calls change state which other calls of the same model response can observe or depend on, such as files or processes. The built-in `write`, `edit`, `bash` and `powershell` tools are exclusive; read-only and independent tools (`read`, `grep`, `glob`, `history`, `job`, `task`, `skill`, `view_image`, the event tools) are not. See the Agent loop for how exclusive calls are scheduled.
+
 Within the same Agent, tool names must be non-empty and unique. Tool definitions are copied when the Agent is constructed, preventing the caller from later modifying their JSON Schemas.
 
 `RunObservedWithOptions` accepts per-run `RunOptions`. Its `ExcludeTools`
@@ -147,6 +149,13 @@ command tools use it as the base for relative paths. `Run` and `RunObserved`
 retain their original APIs and delegate with empty options. Options are local
 to a run and never mutate the Agent, so independent Turns may use different
 tool sets and working directories concurrently.
+
+`RunOptions.OnRound` is an optional synchronous callback invoked on the Agent's
+goroutine after each complete tool round is appended to the Turn and before the
+next model request. It lets a caller persist progress incrementally; it is not
+called for the final response, which completes the Turn. The callback may read
+the Turn but must not mutate it. The core Agent knows nothing about storage:
+`internal/app` wires this hook to a `session.TurnWriter`.
 
 ### Observer
 
@@ -227,14 +236,16 @@ Current execution semantics:
 - A run may exclude tools without mutating the Agent; excluded tools are neither advertised nor executable for that run.
 - Input messages, tool calls, and output state are all defensively copied.
 - Tool packages translate tool-specific output conventions into `ToolResult`; the Agent only forwards its content and images into the provider-neutral message history.
-- When the model returns multiple tool calls, they are executed concurrently, but their results and Observer events are emitted in the returned order. Tools must be safe for concurrent use; the built-in command and skill tools are.
+- When the model returns multiple tool calls, they are planned into batches in the returned order. Consecutive calls to ordinary tools form one batch and run concurrently. A call to an `ExclusiveTool` is a batch of its own: it starts only after every earlier call has finished and no later call starts until it has finished. So independent reads overlap, while a `write` followed by a `bash` that runs the file, or two `edit`s that depend on each other, run in the order the model wrote them. Within a batch, `UpdateToolStarted` events are emitted in call order and `UpdateToolFinished` events as results arrive; a call is reported started when it really begins, so a later batch's started events follow the earlier batch's finished events. Tool messages are always stored in the returned order. A panic or an error in one call (including an unknown tool or invalid arguments) never blocks the batches after it. Ordinary tools must be safe for concurrent use; the built-in command and skill tools are. Commands from one response therefore no longer overlap; a long-running command should use `wait_seconds` to move to the background.
 - Content from both APIs can be displayed as it is received, but tools must wait until the entire model response has finished before execution begins.
-- Both model adapters classify incomplete stream JSON (`unexpected end of JSON input`) as retryable; other JSON syntax and type errors remain non-retryable. Retryable model failures restart the current request even after content or reasoning deltas have been emitted. Generic failures allow six total attempts, with base delays of 2, 4, 8, 16, and 30 seconds plus up to 50% jitter. Rate-limit failures retain five total attempts and their existing delay policy; a positive provider retry delay overrides local backoff. Normal request retries emit `UpdateInfo` with the next attempt, wait, and error; internal compaction requests have no observer. Cancellation stops retries and interrupts waits. Only a complete successful response is committed or allowed to execute tools, so prior completed tool rounds are not replayed. Already emitted presentation deltas cannot be retracted and may be repeated after recovery.
+- Both model adapters classify incomplete stream JSON (`unexpected end of JSON input`) as retryable; other JSON syntax and type errors remain non-retryable. Retryable model failures restart the current request even after content or reasoning deltas have been emitted. Generic failures allow six total attempts, with base delays of 2, 4, 8, 16, and 30 seconds plus up to 50% jitter. Rate-limit failures retain five total attempts and their existing delay policy; a positive provider retry delay overrides local backoff, but only up to two minutes: a longer `Retry-After` (an exhausted quota, an hour-long wait) fails the request at once with an error stating the requested wait, instead of silently stalling the run. `ParseRetryAfter` clamps absurd values to one year so the duration cannot overflow. Normal request retries emit `UpdateInfo` with the next attempt, wait, and error; internal compaction requests have no observer. Cancellation stops retries and interrupts waits. Only a complete successful response is committed or allowed to execute tools, so prior completed tool rounds are not replayed. Already emitted presentation deltas cannot be retracted and may be repeated after recovery.
 - Output-limited responses are retained only in `Turn.Attempts`, never in conversation history. `AgentConfig.OutputLimitRecovery == nil` enables one additional request with twice the effective output budget, clamped to configured/model capacity and remaining context. An explicit zero-retry policy disables recovery. Unknown budgets, no room to increase, exhausted retries, empty final text, blocked output, or unknown finish reasons return identifiable errors. Retry history and continuation remain at the last complete exchange. Cancellation also stops recovery. The adapter maps Chat `length` and Responses `incomplete/max_output_tokens` to `output_limit`; `[DONE]` alone is not a successful semantic finish.
-- A tool execution error, an unknown tool, or invalid JSON tool arguments does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
+- A tool execution error, an unknown tool, invalid JSON tool arguments, or a panic inside a tool (recovered and reported as `tool "name" panicked: ...`) does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Continuing does not persist an intermediate record. Declining, a non-interactive failure, or an event-daemon failure persists the Turn with status `max_rounds` when a session is configured; non-interactive runs still report the error directly.
 - The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The CLI appends a `runtime_environment` block with `runtime.GOOS`, `runtime.GOARCH`, and the local Agent start date (`YYYY-MM-DD`, without time) to either prompt. It captures the date at CLI/event startup or ACP session creation and keeps it fixed for the Agent lifetime, including child tasks; it does not refresh across midnight. Environment collection remains outside the kernel. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
-- Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, but with no tools and no opaque continuation. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized or empty summary gets one stricter retry, while any output-limited summary is rejected. Only a validated summary atomically replaces the model-visible history, as the original system message followed by one user summary message. The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, and the number of summary attempts. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
+- Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, but with no tools and no opaque continuation. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized, empty or output-limited (cut off) summary gets one stricter retry that asks for half the budget while the hard output cap stays unchanged, because a too-long summary normally shows up as being cut off at the cap; any other invalid response is rejected at once. The summary request is also sized against the context window: the calibrated input estimate, a prompt allowance and a 5% margin are subtracted from the window, and when the target does not fit, tool results larger than a cap are shortened (head and tail with a marker; 32, 16, 8, 4, 2 then 1 KiB, stopping at the first cap that makes room) in a copy used only for that request, and the output budget is lowered to the room that remains but not below the lesser of the target and 1024 tokens. The request is never refused locally on these heuristics; the provider decides with exact counts. The history itself is never modified, and the compaction notice says how many tool results were shortened for the request. Only a validated summary atomically replaces the model-visible history. The result is the leading system messages, one user message holding the original task verbatim followed by the summary, and then the most recent rounds verbatim. The task is capped at 5% of the window (head and tail around a marker; the summarizer still sees all of it) and is taken from the `Turn`, not from the first message of the current model-visible history, so repeated compactions never nest an earlier summary message; task images are carried over. The verbatim tail is built from whole rounds, newest first, while they fit 10% of the window: an assistant message is never separated from its tool results, the oldest round is never part of the tail so something always remains to summarize, and a newest round larger than the budget is summarized instead of kept. The summary request contains everything before the tail, and the tail's estimate is subtracted from the request's input estimate. **Context overflow recovery.** `provider.APIError` classifies a 400, 413 or 422 whose error code/type or message carries a known context-window phrase (`context_length_exceeded`, "maximum context length", "prompt is too long", ...) as `dora.ContextLengthError`, which matches `dora.ErrContextLength` through `errors.Is` and is not retryable as-is; the Responses client classifies `response.failed` and `error` stream events the same way (`provider.StreamError`). Rate limits and server errors are never classified, even when their text mentions tokens. When a normal request fails with `ErrContextLength` in a round that was not just compacted, the Agent runs a forced compaction (no trigger check; the history is assumed to fill the window, so the tool-result shortening ladder applies to the summary request), clears the continuation, emits an `UpdateInfo` notice, and retries the request exactly once. If the summary request itself is rejected as too large it is re-planned once with a pessimistic input estimate (50% higher, at least the window) without consuming a summary attempt. A failed forced compaction reports both the provider error and the compaction error; a second overflow, or an overflow right after a proactive compaction, ends the run with the provider's error.
+
+The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, the number of summary attempts, the number of messages kept verbatim, and whether the task was shortened. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
 
 ## CLI Run Flow
 
@@ -249,14 +260,14 @@ frontend or ACP:
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
-9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. On success it appends `completed`; maximum rounds append `max_rounds`; context cancellation appends `canceled`; other errors append `failed`. Every commit runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`. ACP has already streamed the answer to the client by then and reports the error. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
 10. The terminal frontend writes completed text to stdout or continues its event loop.
 
 The process entry point converts both `SIGINT` and `SIGTERM` into context
 cancellation, allowing the application to save a canceled Turn before exiting.
 Callers such as GNU `timeout` must allow time for the Agent to return and the
 detached five-second commit before escalating to `SIGKILL`; forced termination
-cannot run this cleanup. This does not add incremental persistence.
+cannot run this cleanup. Because every complete round is already saved while the turn runs, a forced exit (`SIGKILL`, a crash, or an out-of-memory kill) keeps the rounds finished so far; only the round in flight and the final status are lost, and the row stays `running`.
 
 The CLI's standard output carries only the final result; run progress and errors are written to standard error. TTY output is consistent with piped and redirected output, so results can still be safely used in scripts. Progress color defaults to automatic terminal and environment detection; `--color=always|never` overrides it without changing the renderer's terminal-only in-place updates. The transient `Thinking...` placeholder and its live repaint are omitted when stderr is not a terminal, while substantive progress lines remain append-only. Reasoning deltas reach the Observer on every run (capture, persistence, and provider resend do not depend on display), but the renderer streams them only when `--reasoning` is passed, one complete line at a time with a size cap for newline-free lines: terminal writes run on the Agent's goroutine, and per-token writes slow the model stream on slow terminals.
 
@@ -402,13 +413,17 @@ driver's busy timeout there is no cross-process coordination, so concurrent
 dora processes sharing one session file can fail their commits when the
 timeout expires.
 
-The database uses schema version 10 and three tables:
+The database uses schema version 11 and three tables:
 
 - `turns`: one row per saved invocation, with nullable `parent_turn_id` referencing
-  the parent row (NULL for main turns), including `status` (`completed`,
+  the parent row (NULL for main turns), including `status` (`running`, `completed`,
   `max_rounds`, `failed`, or `canceled`), optional error, plain-text `system`,
-  `user`, final `result`, round count, final-response `usage_json`, reported `total_usage_json`, and commit
-  time. All non-completed rows have an error and empty result/final usage;
+  `user`, final `result`, round count, final-response `usage_json`, reported `total_usage_json`, and the
+  time of the latest save. `running` and `completed` rows have no error; every
+  non-completed row has an empty result and no final usage; the failed,
+  canceled, and max-round rows also have an error. A row that stays `running`
+  was interrupted before it finished (or belongs to a live process still
+  working on it; Dora does not try to tell the two apart);
 - `messages`: intermediate assistant/tool messages keyed by `turn_id`,
   `round_index`, and `position`. Tool calls use a JSON column; each call stores its arguments as base64
   `input_bytes` rather than embedded JSON, preserving all original bytes, including
@@ -421,14 +436,27 @@ The database uses schema version 10 and three tables:
   attempt index, including discarded responses and final reasoning. Provider
   continuation remains ephemeral and is not included in audit records.
 
-`CommitTurn` inserts a completed turn, messages, and per-call usage in one
-transaction (no backend metadata). `CommitMaxRounds` stores all complete rounds
-plus the limit error, while `CommitFailed` and `CommitCanceled` store all
-complete rounds plus the terminal run error. All commit paths also store model
-attempts, including complete streams that ended at an output limit; interrupted
-transport streams may have unavailable response data. Provider continuation is
-intentionally not stored. SQLite allocates the turn ID and foreign keys bind every message to
-its turn. Schema version 9 and older databases are rejected rather than migrated.
+A main turn is saved through a `session.TurnWriter` obtained from
+`Store.BeginTurn`, which does no storage work itself. `Sync` runs in one
+transaction and appends the complete rounds and finalized model attempts the
+writer has not stored yet; the first `Sync` with at least one round also
+creates the row as `running`, and a `Sync` with nothing new is a no-op. `Finish`
+appends whatever is still missing and records the terminal status, result,
+final usage, total usage, and system prompt in the same transaction, using an
+`UPDATE ... WHERE status = 'running'` so a row cannot be finalized twice. The
+writer advances its counters only after a transaction commits, so a failed
+`Sync` is repaired by the next `Sync` or by `Finish` without losing or
+duplicating rows. A turn that completes no round before it ends is created by
+`Finish` alone. Failed, canceled, and max-round turns store all complete rounds
+plus the terminal run error. All save paths also store model attempts,
+including complete streams that ended at an output limit; interrupted transport
+streams may have unavailable response data. `CommitTurn`, `CommitMaxRounds`,
+`CommitFailed`, and `CommitCanceled` remain on the concrete SQLite store as
+single-shot wrappers over the same writer for callers that only hold a finished
+Turn; a child turn is saved once by `CommitChild`. Provider continuation is
+intentionally not stored. SQLite allocates the turn ID and foreign keys bind
+every message to its turn. Schema version 10 and older databases are rejected
+rather than migrated.
 
 History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also
@@ -470,12 +498,26 @@ The tool execution result contains the skill's absolute directory and the comple
 Bash is enabled automatically on Linux and macOS and disabled automatically on other platforms. When it is auto-enabled but the `bash` executable cannot be found, the CLI skips the tool; `enabled: true` can explicitly enable it on any platform, in which case a missing executable causes startup to fail. Discovery currently only checks `PATH` and does not launch a shell to probe the runtime environment. When the tool is available, each invocation executes via `bash -c` in the run's working directory, falling back to Dora's process working directory when none is set; when the model needs to change directories, it uses `cd` within the command. The tool has the following boundaries:
 
 - a single `wait_seconds` knob that waits up to that many seconds for completion before moving the command to the background (default 10; `0` moves it to the background immediately);
-- context cancellation does not terminate an adopted background process (it uses its own lifetime), and adopted processes also keep running after the Dora process exits;
+- cancellation is honored while the command is still in its foreground wait (before adoption): the whole process tree is killed, the process is reaped within a short bound, and the call returns a normal result with `exit_code: -1`, `canceled: true`, and the stdout/stderr captured so far, so a canceled run never waits out `wait_seconds` and the interrupted round stays in the saved transcript; a request that is already canceled does not start the command (the call returns the context error); once a command has been adopted as a background job its lifetime is independent of the run that started it, so canceling that run does not terminate it (the `job` tool does), and adopted processes also keep running after the Dora process exits;
 - the result returns the exit code, stdout, and stderr as JSON; a moved-to-background result returns a source-prefixed `job_id` such as `bash_0`;
 - stdout and stderr are each capped at 32 KiB per result (head+tail with a marker naming the original size) in the command result, in the background-adoption result, and in job tool polls, so a single oversized command cannot overflow the model request;
+- the output buffer is bounded on the write side too: each stream keeps only the first 24 KiB and the last ~7.75 KiB written since the last read (the rest is counted and discarded), so memory stays constant however much a command prints, including a background job nobody polls. Drained output carries one marker with the true byte total, and writes never fail or short-write, so the child process is unaffected;
 - a non-zero command exit is a tool result the model can handle; infrastructure errors such as startup failures are returned as Go errors.
 
 Bash is not a security sandbox. Enabling it is equivalent to allowing the model to execute commands with the system privileges of the Dora process.
+
+## File Tools
+
+`tool/file` provides `read`, `write`, `edit`, `grep` and `glob`. Relative paths resolve against the per-run working directory (`runpath`). Both `write` and `edit` are exclusive tools (see the Agent loop), so within one model response they never overlap with the other calls and run in the order the model wrote them. They are additionally built to be safe against other writers, such as subagents running in parallel, and against interruption:
+
+- **Per-file lock.** `write` and `edit` hold a lock for the file across the whole read-modify-write cycle. Locks are matched by file identity (`os.SameFile`), so a symlink, a hard link or a differently-cased spelling shares the lock with the file itself; for a file that does not exist yet the symlink-resolved path is used. Entries are reference counted and dropped when unused. Concurrent edits of one file are therefore applied one after another, each on top of the previous result, instead of overwriting each other. The lock is in-process only: `bash`, other Dora processes and editors do not honor it.
+- **Atomic replacement.** New content is written to a temporary file in the same directory, synced, and renamed over the target, so a crash, a kill, a full disk or a concurrent reader sees either the complete old file or the complete new file, never a truncated one. Symlinks are followed (the link stays a link) and permission bits are kept; ownership and hard links are not preserved. If atomic replacement is impossible (the target is not a regular file, or the directory is not writable) the write falls back to in place. `append` keeps using `O_APPEND`.
+- **Unique match.** Without `replace_all`, `edit` refuses a `old_string` that occurs more than once and returns the match count so the model can add context; it never silently edits the first of several matches. An identical replacement is reported as `bytes_changed: 0` and does not rewrite the file.
+- **External change detection.** `edit` reads the file from one handle and, immediately before committing, compares identity, size and modification time with what it read. If something else changed the file in between, the edit fails with a retryable error instead of overwriting that change. A very small window between that check and the rename remains.
+
+`read` bounds its result because tool results are stored in the turn and resent with every later request. A result is limited to 32 KiB; when the next line would not fit, the output ends with a note naming the lines shown and the `offset` to continue from, so following it neither skips nor repeats a line. A line longer than 8 KiB is cut on a UTF-8 boundary and marked with its exact original length, and lines are read with a cap, so a multi-megabyte minified line neither fails the read nor sits in memory. `limit` itself is not capped.
+
+The per-file lock and the change check matter beyond one response: parallel `task` subagents and background jobs are not ordered by the Agent, and they all go through the same lock.
 
 ## PowerShell Tool
 
@@ -584,10 +626,10 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 
 ## Current Boundaries
 
-- The Agent loop is single-goroutine, but the tool calls within one model response are executed concurrently (results are collected by index and emitted in order).
+- The Agent loop is single-goroutine, but the tool calls within one model response are executed concurrently in batches: ordinary tools overlap, and `ExclusiveTool` calls (`write`, `edit`, `bash`, `powershell`) run alone in the model's call order (results are collected by index and stored in order).
 - HTTP request asynchrony is determined by the caller's goroutine; the core has no task scheduler.
 - Both Chat Completions and Responses support streaming text display, but completed tool calls are not yet executed early while the stream is still running.
-- Session history is append-only at the turn level; individual turns are committed once after completion or terminal failure.
+- Session history is append-only. A turn is saved round by round while it runs and finalized once when it stops; the round in flight when the process dies, and any streaming text, are not saved. Saved turns are for inspection (the history tool, traces); Dora has no resume feature, and the provider continuation is not stored.
 - Model `Usage` payloads are carried by `UpdateMessageReceived`, retained on `Round`/`Turn`, persisted to session history, and included in a one-shot `--trace-file`, but are not rendered. Child task execution is intentionally not expanded into this record.
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI remains the configuration and tool composition root; `internal/app`

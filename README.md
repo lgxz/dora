@@ -45,8 +45,11 @@ https://hub.harborframework.com/jobs/747f9a67-ed3a-498b-a70e-6786a70eb8a5
 
 The kernel supports optional model streaming events while keeping its baseline
 `Model` interface synchronous. Tool calls are deliberately executed only after
-the current model response completes, and multiple tool calls in one response
-are executed concurrently (results are emitted in the returned order). There is
+the current model response completes. Multiple tool calls in one response run
+concurrently, except that tools which change files or processes (`write`,
+`edit`, `bash`, `powershell`) implement the optional `ExclusiveTool` interface
+and run alone, in the order the model wrote them, so a call that depends on an
+earlier one sees its effect. Results are stored in the returned order. There is
 no built-in memory, policy engine, middleware, or provider SDK.
 
 ## CLI
@@ -356,14 +359,22 @@ history and tool schemas. The provider-neutral estimate treats about four
 ASCII bytes or one non-ASCII rune as a token and includes a small per-message
 framing allowance; it does not estimate vision tokens. When predicted usage,
 including an output reserve, reaches 80% of the context window, Dora asks the
-active model to replace the model-visible history with a semantic summary of
-at most 20% of the window, further capped by the profile's optional
+active model to summarize the middle of the conversation. The original task
+(up to 5% of the window) and the most recent complete tool rounds (up to 10%)
+stay verbatim around the summary, and only what lies between them is replaced
+by a semantic summary of at most 20% of the window, further capped by the profile's optional
 `max_output_tokens`. That effective target is sent as a request-specific output
 limit, overriding the ordinary `max_tokens` value so a provider's smaller
 default cannot silently constrain compaction. The summary call has no tools or
-continuation. A summary truncated at the output limit is rejected, even when it contains text. The
+continuation. A summary truncated at the output limit is never used, even when it contains text; it is retried once asking for a shorter one. When the history leaves too little room in the window, oversized tool results are shortened in the summary request only and the output budget shrinks to the remaining room. The
 complete Turn remains unchanged for persistence, and a failed summary never
 falls back to deleting or locally truncating history.
+
+The prediction is a heuristic, so the provider can still reject a request as too
+large. Dora recognizes that rejection (HTTP 400/413/422 with a context-length
+code or message, or an error event inside a stream), compacts immediately as if
+the window were full, and retries the request once. If that fails too, or the
+round was compacted already, the run ends with the provider's error.
 
 `thinking` controls the model's "thinking mode" reasoning effort. Set it to one
 of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. It has no default: when
@@ -612,8 +623,9 @@ reasoning has arrived and incomplete stream JSON (`unexpected end of JSON input`
 retry the current model request up to six total attempts. Other JSON syntax and
 type errors are not retried.
 The five waits use 2, 4, 8, 16, and 30 seconds plus up to 50% random jitter;
-a provider-supplied retry delay takes precedence. Rate-limit failures retain
-their separate five-attempt policy and provider-directed delay.
+a provider-supplied retry delay takes precedence, up to two minutes; a longer
+requested wait fails the request immediately with a message saying so. Rate-limit
+failures retain their separate five-attempt policy and provider-directed delay.
 
 Retry progress reports the next attempt, delay, and error on stderr unless
 `--quiet` is set. Cancellation interrupts the wait. Failed attempts never
@@ -663,14 +675,14 @@ seconds. Slow cancellation or child-history cleanup may need a longer grace peri
 cannot be handled and may lose the current turn. Only complete tool rounds and
 available model-attempt records are retained, not unfinished streaming text.
 
-With `--session`, SQLite schema version 10 contains `turns`, `messages`, and `model_attempts` tables and records the
+With `--session`, SQLite schema version 11 contains `turns`, `messages`, and `model_attempts` tables and records the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, attached image references, reasoning captured on round assistant messages, and each model
 call's usage JSON, finish metadata, final reasoning, and reported total usage.
 The SQLite store's `GetAttempts` API pages through audit records separately from
 conversation rounds. Newly created files use `0600` permissions. The old named
 JSON session format, `--fresh`, and automatic migration are not supported
-(schema version 9 and earlier databases are rejected; start a new file). When
+(schema version 10 and earlier databases are rejected; start a new file). Each complete tool round is saved while the turn runs, so a crash or forced exit keeps the rounds finished so far; such an interrupted turn stays in status `running` and the round in flight is lost. Dora does not resume interrupted turns. When
 `--session`/`-s` is omitted, Dora uses an in-memory SQLite database for the
 process lifetime. This allows long-running modes to retain earlier turns while
 keeping ordinary CLI invocations ephemeral. Session databases can contain
@@ -880,8 +892,8 @@ immutable Agent system prompt and can use every other
 tool available to the parent, but `task` itself is removed from both the tool
 definitions and executable tool set to prevent recursive delegation.
 
-Multiple task calls in one model response run concurrently, following Dora's
-normal tool execution semantics. There is no separate task concurrency limit.
+Multiple task calls in one model response run concurrently (`task` is not an
+exclusive tool). There is no separate task concurrency limit.
 Child progress is not sent to the terminal Observer; only the parent message
 and the completed task summary and duration are rendered.
 

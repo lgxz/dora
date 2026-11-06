@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1231,4 +1232,142 @@ func TestAgentIgnoresNonPositiveMaxOutputTokens(t *testing.T) {
 
 func noopGenerate(context.Context, Request) (Response, error) {
 	return Response{FinishReason: FinishStop, Content: "done"}, nil
+}
+
+func TestRunRecoversFromToolPanic(t *testing.T) {
+	var calls int
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{
+				{ID: "call-1", Name: "boom", Input: json.RawMessage(`{}`)},
+				{ID: "call-2", Name: "fine", Input: json.RawMessage(`{}`)},
+			}}, nil
+		case 2:
+			if len(request.Messages) != 4 {
+				t.Fatalf("message count = %d, want 4", len(request.Messages))
+			}
+			panicked, ok := request.Messages[2], request.Messages[3]
+			if panicked.ToolCallID != "call-1" || !strings.Contains(panicked.Content, `tool "boom" panicked: kaboom`) {
+				t.Fatalf("panicking tool message = %#v", panicked)
+			}
+			if ok.ToolCallID != "call-2" || ok.Content != "fine result" {
+				t.Fatalf("sibling tool message = %#v", ok)
+			}
+			return Response{FinishReason: FinishStop, Content: "survived"}, nil
+		default:
+			t.Fatal("model called too many times")
+			return Response{}, nil
+		}
+	})
+	boom := stubTool{
+		spec:    ToolSpec{Name: "boom"},
+		execute: func(context.Context, json.RawMessage) (string, error) { panic("kaboom") },
+	}
+	fine := stubTool{
+		spec:    ToolSpec{Name: "fine"},
+		execute: func(context.Context, json.RawMessage) (string, error) { return "fine result", nil },
+	}
+	agent, err := New(model, boom, fine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var finishedErrs []error
+	observer := ObserverFunc(func(update Update) {
+		if update.Kind == UpdateToolFinished {
+			finishedErrs = append(finishedErrs, update.Err)
+		}
+	})
+	result, err := runAgentObserved(agent, context.Background(), nil, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "survived" || calls != 2 {
+		t.Fatalf("result = %#v, calls = %d", result, calls)
+	}
+	// Finished events arrive in completion order, so only count them.
+	failed := 0
+	for _, err := range finishedErrs {
+		if err != nil {
+			failed++
+		}
+	}
+	if len(finishedErrs) != 2 || failed != 1 {
+		t.Fatalf("tool finished errors = %v, want exactly one failure of two", finishedErrs)
+	}
+}
+
+func TestRunCallsOnRoundAfterEachToolRound(t *testing.T) {
+	var calls int
+	var roundCounts []int
+	model := modelFunc(func(_ context.Context, _ Request) (Response, error) {
+		calls++
+		// OnRound for every earlier round must have run before the next request.
+		if len(roundCounts) != calls-1 {
+			t.Fatalf("OnRound calls before model call %d = %d, want %d", calls, len(roundCounts), calls-1)
+		}
+		if calls <= 2 {
+			return Response{FinishReason: FinishToolCalls, ToolCalls: []ToolCall{{
+				ID: fmt.Sprintf("call-%d", calls), Name: "inspect", Input: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
+	})
+	tool := stubTool{
+		spec:    ToolSpec{Name: "inspect"},
+		execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil },
+	}
+	agent, err := New(model, tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn := NewTurn("go")
+	err = agent.RunObservedWithOptions(context.Background(), turn, nil, RunOptions{
+		OnRound: func(turn *Turn) {
+			if turn.Completed() {
+				t.Fatal("OnRound called for a completed turn")
+			}
+			roundCounts = append(roundCounts, len(turn.Rounds()))
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{1, 2}; len(roundCounts) != 2 || roundCounts[0] != want[0] || roundCounts[1] != want[1] {
+		t.Fatalf("round counts seen by OnRound = %v, want %v (final response must not trigger it)", roundCounts, want)
+	}
+}
+
+func TestRetryAfterOverTheLimitFailsFastWithoutWaiting(t *testing.T) {
+	for _, kind := range []RetryableErrorKind{RetryableGeneric, RetryableRateLimit} {
+		calls := 0
+		agent, err := New(modelFunc(func(context.Context, Request) (Response, error) {
+			calls++
+			return Response{}, &RetryableError{Err: errors.New("quota exhausted"), RetryAfter: time.Hour, Kind: kind}
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		err = agent.Run(context.Background(), NewTurn("hi"))
+		if calls != 1 || time.Since(started) > 5*time.Second {
+			t.Fatalf("kind=%v calls=%d elapsed=%v; must fail at once", kind, calls, time.Since(started))
+		}
+		var retryable *RetryableError
+		if err == nil || !errors.As(err, &retryable) || !strings.Contains(err.Error(), "quota exhausted") ||
+			!strings.Contains(err.Error(), "asked to wait 1h0m0s") || !strings.Contains(err.Error(), "not retrying") {
+			t.Fatalf("err = %v", err)
+		}
+	}
+}
+
+func TestRetryAfterAtTheLimitIsStillHonored(t *testing.T) {
+	// The boundary itself is allowed; only retryBackoff's value is checked so
+	// the test does not sleep.
+	if got := retryBackoff(0, maxRetryAfter, RetryableRateLimit); got != maxRetryAfter {
+		t.Fatalf("delay = %v", got)
+	}
 }

@@ -2,7 +2,6 @@
 package job
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lgxz/dora/internal/capstr"
 )
@@ -76,10 +76,16 @@ type Snapshot struct {
 
 // OutputBuffer is a concurrency-safe output buffer that is drained (read and
 // cleared) after each read, so it only holds unread output.
+//
+// Memory is bounded on the write side: each stream keeps only the first
+// capHeadBytes and the last outputTailBytes (plus a bounded slack) of the
+// output written since the last Drain, however much the process produces. A
+// background job whose output is never polled therefore cannot grow without
+// limit.
 type OutputBuffer struct {
 	mu     sync.Mutex
-	stdout bytes.Buffer
-	stderr bytes.Buffer
+	stdout cappedStream
+	stderr cappedStream
 }
 
 // StdoutWriter returns an io.Writer that appends to the stdout buffer.
@@ -97,24 +103,112 @@ type bufferWriter struct {
 	stderr bool
 }
 
+// Write never fails and never short-writes: discarded bytes are accounted for
+// but still reported as written, so the child process keeps running and its
+// pipe never blocks or breaks.
 func (w *bufferWriter) Write(p []byte) (int, error) {
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()
 	if w.stderr {
-		return w.b.stderr.Write(p)
+		w.b.stderr.write(p)
+	} else {
+		w.b.stdout.write(p)
 	}
-	return w.b.stdout.Write(p)
+	return len(p), nil
 }
 
-// Drain returns the current stdout and stderr and clears the buffer.
+// Drain returns the current stdout and stderr and clears the buffer. Each
+// string is already bounded to MaxResultBytes: when more output arrived than
+// the buffer retains, it is the retained head and tail around a marker that
+// names the true byte count.
 func (b *OutputBuffer) Drain() (stdout, stderr string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := b.stdout.String()
-	err := b.stderr.String()
-	b.stdout.Reset()
-	b.stderr.Reset()
-	return out, err
+	return b.stdout.take(), b.stderr.take()
+}
+
+// outputTruncMarker is inserted between the kept head and tail of truncated
+// output. Its only argument is the total output size in bytes.
+const outputTruncMarker = "\n... [truncated: %d bytes total, showing head+tail; redirect output to a file to inspect all of it] ...\n"
+
+// outputMarkerReserve is room kept under MaxResultBytes for outputTruncMarker,
+// so drained output never exceeds the result cap and CapOutput leaves it as is.
+const outputMarkerReserve = 256
+
+// outputTailBytes is the tail retained from each stream.
+const outputTailBytes = MaxResultBytes - capHeadBytes - outputMarkerReserve
+
+// cappedStream keeps the head and tail of a byte stream in bounded memory.
+// The tail slice may grow to twice outputTailBytes before it is compacted, so
+// compaction is amortized instead of copying on every write.
+type cappedStream struct {
+	head  []byte
+	tail  []byte
+	total int64 // bytes written since the last take
+}
+
+func (c *cappedStream) write(p []byte) {
+	c.total += int64(len(p))
+	if room := capHeadBytes - len(c.head); room > 0 {
+		n := len(p)
+		if n > room {
+			n = room
+		}
+		c.head = append(c.head, p[:n]...)
+		p = p[n:]
+	}
+	if len(p) == 0 {
+		return
+	}
+	if len(p) >= outputTailBytes {
+		// This write alone supersedes everything held in the tail.
+		c.tail = append(c.tail[:0], p[len(p)-outputTailBytes:]...)
+		return
+	}
+	c.tail = append(c.tail, p...)
+	if len(c.tail) > 2*outputTailBytes {
+		c.tail = append(c.tail[:0], c.tail[len(c.tail)-outputTailBytes:]...)
+	}
+}
+
+// take returns the retained output and resets the stream.
+func (c *cappedStream) take() string {
+	tail := c.tail
+	if len(tail) > outputTailBytes {
+		tail = tail[len(tail)-outputTailBytes:]
+	}
+	dropped := c.total - int64(len(c.head)) - int64(len(tail))
+	var s string
+	if dropped == 0 {
+		s = string(c.head) + string(tail)
+	} else {
+		s = string(trimIncompleteRune(c.head)) +
+			fmt.Sprintf(outputTruncMarker, c.total) +
+			string(skipPartialRune(tail))
+	}
+	c.head, c.tail, c.total = nil, nil, 0
+	return s
+}
+
+// trimIncompleteRune drops a rune cut in half at the end of b.
+func trimIncompleteRune(b []byte) []byte {
+	i := len(b) - 1
+	for k := 0; k < utf8.UTFMax && i >= 0 && !utf8.RuneStart(b[i]); k++ {
+		i--
+	}
+	if i >= 0 && !utf8.FullRune(b[i:]) {
+		return b[:i]
+	}
+	return b
+}
+
+// skipPartialRune drops the continuation bytes of a rune cut in half at the
+// start of b.
+func skipPartialRune(b []byte) []byte {
+	for k := 0; k < utf8.UTFMax-1 && len(b) > 0 && !utf8.RuneStart(b[0]); k++ {
+		b = b[1:]
+	}
+	return b
 }
 
 // Manager tracks background jobs.
@@ -157,9 +251,6 @@ func (m *Manager) AdoptCommand(
 			// orphaned child still holds the output pipes.
 			job.status = StatusDone
 			job.exitCode = 0
-		case errors.Is(cmd.Err, context.Canceled):
-			job.status = StatusKilled
-			job.exitCode = -1
 		default:
 			job.status = StatusFailed
 			if ee, ok := err.(*exec.ExitError); ok {
@@ -189,7 +280,7 @@ func (m *Manager) StartTaskContext(parent context.Context, source, description s
 	job := m.register(source, KindTask, description, cancel, nil)
 	go func() {
 		defer close(job.done)
-		result, err := run(ctx)
+		result, err := runRecovered(ctx, run)
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		job.finishedAt = time.Now()
@@ -205,6 +296,18 @@ func (m *Manager) StartTaskContext(parent context.Context, source, description s
 		}
 	}()
 	return job
+}
+
+// runRecovered runs a background task and converts a panic into an ordinary
+// task failure. Background tasks run on goroutines the Agent loop does not
+// supervise, so an unrecovered panic here would terminate the whole process.
+func runRecovered(ctx context.Context, run func(context.Context) (string, error)) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = "", fmt.Errorf("task panicked: %v", r)
+		}
+	}()
+	return run(ctx)
 }
 
 func (m *Manager) register(source string, kind Kind, description string, cancel context.CancelFunc, out *OutputBuffer) *Job {
@@ -350,8 +453,7 @@ const capHeadBytes = 24 << 10
 // CapOutput truncates command output to at most MaxResultBytes (plus the
 // marker), keeping the head and tail.
 func CapOutput(s string) string {
-	return capstr.HeadTail(s, MaxResultBytes, capHeadBytes,
-		"\n... [truncated: %d bytes total, showing head+tail; redirect output to a file to inspect all of it] ...\n")
+	return capstr.HeadTail(s, MaxResultBytes, capHeadBytes, outputTruncMarker)
 }
 
 // HasActiveJobs reports whether any job is still running.

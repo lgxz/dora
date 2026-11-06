@@ -15,6 +15,11 @@ const defaultMaxRounds = 256
 // maxModelAttempts includes the initial request and all generic retries.
 const maxModelAttempts = 6
 
+// maxRetryAfter bounds a server-suggested retry delay. A longer request (an
+// exhausted daily quota, a Retry-After of an hour) is not waited out silently:
+// the request fails at once with a message saying so.
+const maxRetryAfter = 2 * time.Minute
+
 // maxRateLimitAttempts bounds the number of times a single model call is
 // retried after a rate-limit failure, which typically resolves with a longer
 // wait.
@@ -71,9 +76,17 @@ type OutputLimitRecovery struct {
 // the base directory built-in tools use to resolve relative paths; an empty
 // value preserves a directory already carried by ctx, or the process working
 // directory when ctx has none.
+//
+// OnRound, when non-nil, is called synchronously on the Agent's goroutine after
+// each complete tool round has been appended to the Turn, before the next model
+// request. It lets a caller persist progress incrementally. The callback may
+// read the Turn through its accessors but must not mutate it, and it should
+// return quickly because the run waits for it. It is not called for the final
+// response, which completes the Turn instead.
 type RunOptions struct {
 	ExcludeTools     []string
 	WorkingDirectory string
+	OnRound          func(*Turn)
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -187,6 +200,15 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 	// compaction replaces that history, so the old continuation must be cleared
 	// at the same time instead of being read repeatedly from the complete Turn.
 	modelContinuation := turn.Continuation()
+	// task is the original user request. Every compaction re-attaches it
+	// verbatim, including later ones where modelHistory no longer holds it as
+	// a message of its own.
+	var task *Message
+	if all := turn.Messages(); firstNonSystem(all) < len(all) {
+		first := cloneMessage(all[firstNonSystem(all)])
+		task = &first
+	}
+	compaction := compactOptions{Task: task}
 
 	// lastUsage is the real token usage of the most recently completed model call
 	// in this run. It stays local to the loop (never stored on the immutable
@@ -199,39 +221,54 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		}
 		notify(observer, Update{Kind: UpdateThinking})
 
-		capacity, compactionErr := a.ensureContextCapacity(ctx, modelHistory, lastUsage, specs)
+		capacity, compactionErr := a.compactContext(ctx, modelHistory, lastUsage, specs, compaction)
 		if compactionErr != nil {
 			return fmt.Errorf("compact context: %w", compactionErr)
 		}
 		if capacity.Compacted {
 			modelContinuation = ""
-			notify(observer, Update{
-				Kind: UpdateInfo,
-				Info: fmt.Sprintf(
-					"Context compacted: %d -> %d predicted tokens",
-					capacity.PredictedTokensBefore,
-					capacity.PredictedTokensAfter,
-				),
-			})
-		}
-		request := Request{
-			Messages:     capacity.Messages,
-			Tools:        specs,
-			Continuation: modelContinuation,
+			notify(observer, Update{Kind: UpdateInfo, Info: compactionInfo(capacity, "Context compacted")})
 		}
 		var response Response
 		var err error
-		if _, ok := a.model.(StreamingModel); ok {
-			response, err = a.generateWithRecovery(ctx, request, func(event ModelEvent) {
-				switch event.Kind {
-				case ModelEventContentDelta:
-					notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
-				case ModelEventReasoningDelta:
-					notify(observer, Update{Kind: UpdateReasoningDelta, Delta: event.Delta})
-				}
-			}, observer)
-		} else {
-			response, err = a.generateWithRecovery(ctx, request, nil, observer)
+		for overflowRetried := false; ; {
+			request := Request{
+				Messages:     capacity.Messages,
+				Tools:        specs,
+				Continuation: modelContinuation,
+			}
+			if _, ok := a.model.(StreamingModel); ok {
+				response, err = a.generateWithRecovery(ctx, request, func(event ModelEvent) {
+					switch event.Kind {
+					case ModelEventContentDelta:
+						notify(observer, Update{Kind: UpdateContentDelta, Delta: event.Delta})
+					case ModelEventReasoningDelta:
+						notify(observer, Update{Kind: UpdateReasoningDelta, Delta: event.Delta})
+					}
+				}, observer)
+			} else {
+				response, err = a.generateWithRecovery(ctx, request, nil, observer)
+			}
+			// The provider says the request does not fit although the local
+			// estimate allowed it. Compact now and retry once. A round that was
+			// just compacted is not compacted again: the summary is small, so
+			// a second overflow means something else is too large.
+			if err == nil || overflowRetried || capacity.Compacted || !errors.Is(err, ErrContextLength) {
+				break
+			}
+			overflowRetried = true
+			forcedOptions := compaction
+			forcedOptions.Force = true
+			forced, forcedErr := a.compactContext(ctx, modelHistory, lastUsage, specs, forcedOptions)
+			if forcedErr != nil {
+				return fmt.Errorf("compact context after the provider rejected the request as too large (%v): %w", err, forcedErr)
+			}
+			if !forced.Compacted {
+				break
+			}
+			capacity = forced
+			modelContinuation = ""
+			notify(observer, Update{Kind: UpdateInfo, Info: compactionInfo(forced, "Provider reported the context window exceeded; context compacted")})
 		}
 		if err != nil {
 			return fmt.Errorf("generate response: %w", err)
@@ -257,11 +294,16 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 			return nil
 		}
 
-		// Execute all tool calls in parallel. Started events are emitted in the
-		// model's call order before any finished event; finished events are then
-		// emitted as results arrive, so a fast tool is displayed without waiting
-		// for slower tools. Observer calls remain serialized on this goroutine,
-		// while tool messages are stored by index to preserve model call order.
+		// Execute the tool calls. Calls run concurrently, except that a tool
+		// implementing ExclusiveTool is a barrier: it starts only after every
+		// earlier call in the model's order has finished, and no later call
+		// starts until it has finished. Independent reads and commands overlap,
+		// while a write and whatever depends on it keep the order the model
+		// wrote them in. Within one batch, Started events are emitted in the
+		// model's call order and Finished events as results arrive, so a fast
+		// tool is displayed without waiting for slower ones. Observer calls
+		// remain serialized on this goroutine, while tool messages are stored by
+		// index to preserve model call order.
 		type toolExecution struct {
 			result ToolResult
 			err    error
@@ -273,66 +315,79 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 			index     int
 			execution toolExecution
 		}
-		completed := make(chan completedTool, len(response.ToolCalls))
 		toolMessages := make([]Message, len(response.ToolCalls))
-		for i, call := range response.ToolCalls {
-			startedAt := time.Now()
-			notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: startedAt})
-			go func(i int, call ToolCall) {
-				var execution toolExecution
-				tool, ok := tools[call.Name]
-				if !ok {
-					execution.err = fmt.Errorf("tool %q not found", call.Name)
-					completed <- completedTool{index: i, execution: execution}
-					return
-				}
-				if !json.Valid(call.Input) {
-					execution.err = fmt.Errorf("arguments are not valid JSON: %s", call.Input)
-					execution.invalidJSON = true
-					completed <- completedTool{index: i, execution: execution}
-					return
-				}
-				result, err := tool.Execute(ctx, cloneBytes(call.Input))
-				if err != nil {
-					execution.err = fmt.Errorf("execute tool %q: %w", call.Name, err)
-				} else {
-					execution.result = result
-				}
-				completed <- completedTool{index: i, execution: execution}
-			}(i, call)
-		}
+		for _, batch := range planToolBatches(response.ToolCalls, tools) {
+			completed := make(chan completedTool, len(batch))
+			for _, i := range batch {
+				call := response.ToolCalls[i]
+				startedAt := time.Now()
+				notify(observer, Update{Kind: UpdateToolStarted, ToolCall: call, StartedAt: startedAt})
+				go func(i int, call ToolCall) {
+					var execution toolExecution
+					// A panicking tool must not take the whole process, and with it
+					// the unsaved Turn, down. The panic becomes an ordinary tool
+					// error the model can react to. The result is always delivered
+					// from this deferred function so the collector never blocks.
+					defer func() {
+						if r := recover(); r != nil {
+							execution = toolExecution{err: fmt.Errorf("tool %q panicked: %v", call.Name, r)}
+						}
+						completed <- completedTool{index: i, execution: execution}
+					}()
+					tool, ok := tools[call.Name]
+					if !ok {
+						execution.err = fmt.Errorf("tool %q not found", call.Name)
+						return
+					}
+					if !json.Valid(call.Input) {
+						execution.err = fmt.Errorf("arguments are not valid JSON: %s", call.Input)
+						execution.invalidJSON = true
+						return
+					}
+					result, err := tool.Execute(ctx, cloneBytes(call.Input))
+					if err != nil {
+						execution.err = fmt.Errorf("execute tool %q: %w", call.Name, err)
+					} else {
+						execution.result = result
+					}
+				}(i, call)
+			}
 
-		for range response.ToolCalls {
-			done := <-completed
-			call := response.ToolCalls[done.index]
-			result := done.execution
-			var toolMessage Message
-			if result.err != nil {
-				// A failed tool still reports its error message on the finish
-				// event: that message is the one appended to toolMessages and
-				// later persisted to the conversation, so the Observer sees the
-				// exact same text the model will.
-				if result.invalidJSON {
-					toolMessage = Message{
-						Role:       RoleTool,
-						ToolCallID: call.ID,
-						Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
+			for range batch {
+				done := <-completed
+				call := response.ToolCalls[done.index]
+				result := done.execution
+				var toolMessage Message
+				if result.err != nil {
+					// A failed tool still reports its error message on the finish
+					// event: that message is the one appended to toolMessages and
+					// later persisted to the conversation, so the Observer sees the
+					// exact same text the model will.
+					if result.invalidJSON {
+						toolMessage = Message{
+							Role:       RoleTool,
+							ToolCallID: call.ID,
+							Content:    fmt.Sprintf("Error: the arguments for tool %q were not valid JSON: %s. Please provide valid JSON.", call.Name, call.Input),
+						}
+					} else {
+						toolMessage = toolErrorMessage(call, result.err)
 					}
 				} else {
-					toolMessage = toolErrorMessage(call, result.err)
+					toolMessage = Message{
+						Role:       RoleTool,
+						Content:    result.result.Content,
+						ToolCallID: call.ID,
+					}
 				}
-			} else {
-				toolMessage = Message{
-					Role:       RoleTool,
-					Content:    result.result.Content,
-					ToolCallID: call.ID,
-				}
+				toolMessages[done.index] = toolMessage
+				notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 			}
-			toolMessages[done.index] = toolMessage
-			notify(observer, Update{Kind: UpdateToolFinished, ToolCall: call, Message: toolMessage, Err: result.err})
 		}
 		if err := turn.AppendRound(Round{Assistant: assistant, Tools: toolMessages, Usage: response.Usage}, response.Continuation); err != nil {
 			return err
+		}
+		if opts.OnRound != nil {
+			opts.OnRound(turn)
 		}
 		// Advance the model-visible snapshot from exactly what was sent. Turn keeps
 		// the full round independently, while future compaction and lastUsage stay
@@ -343,6 +398,30 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 	}
 
 	return fmt.Errorf("%w (limit %d)", ErrMaxRounds, a.maxRounds)
+}
+
+// planToolBatches groups the indexes of one response's tool calls into batches
+// that run one after another. Consecutive calls to ordinary tools share a batch
+// and run concurrently; a call to an ExclusiveTool is a batch of its own.
+// Unknown tools are ordinary: they fail immediately and need no ordering.
+func planToolBatches(calls []ToolCall, tools map[string]Tool) [][]int {
+	var batches [][]int
+	var concurrent []int
+	for i, call := range calls {
+		if exclusive, ok := tools[call.Name].(ExclusiveTool); ok && exclusive.Exclusive() {
+			if len(concurrent) > 0 {
+				batches = append(batches, concurrent)
+				concurrent = nil
+			}
+			batches = append(batches, []int{i})
+			continue
+		}
+		concurrent = append(concurrent, i)
+	}
+	if len(concurrent) > 0 {
+		batches = append(batches, concurrent)
+	}
+	return batches
 }
 
 func (a *Agent) toolsForRun(opts RunOptions) (map[string]Tool, []ToolSpec) {
@@ -406,6 +485,10 @@ func (a *Agent) generateWithRetry(ctx context.Context, request Request, emit fun
 		}
 		if attempt >= limit-1 {
 			return response, err
+		}
+		if retryable.RetryAfter > maxRetryAfter {
+			return response, fmt.Errorf("%w (the server asked to wait %s, over the %s limit; not retrying)",
+				err, retryable.RetryAfter.Round(time.Second), maxRetryAfter)
 		}
 		wait := retryBackoff(attempt, retryable.RetryAfter, retryable.Kind)
 		notify(observer, Update{
@@ -623,4 +706,28 @@ func (a *Agent) generateWithRecovery(ctx context.Context, request Request, emit 
 		request.MaxOutputTokens = &next
 		notify(observer, Update{Kind: UpdateInfo, Info: fmt.Sprintf("Model output truncated; retrying from the last complete exchange with output budget %d -> %d (%d/%d)", budget, next, retry+1, a.outputRecovery.MaxRetries)})
 	}
+}
+
+// compactionInfo describes one compaction for the observer.
+func compactionInfo(capacity CompactionResult, prefix string) string {
+	info := fmt.Sprintf(
+		"%s: %d -> %d predicted tokens",
+		prefix,
+		capacity.PredictedTokensBefore,
+		capacity.PredictedTokensAfter,
+	)
+	if capacity.KeptMessages > 0 {
+		info += fmt.Sprintf(", kept the task and the last %d messages verbatim", capacity.KeptMessages)
+	}
+	if capacity.TaskTruncated {
+		info += ", task shortened"
+	}
+	if capacity.TrimmedToolResults > 0 {
+		if capacity.TrimmedToolResults == 1 {
+			info += " (1 large tool result was shortened in the summary request only)"
+		} else {
+			info += fmt.Sprintf(" (%d large tool results were shortened in the summary request only)", capacity.TrimmedToolResults)
+		}
+	}
+	return info
 }

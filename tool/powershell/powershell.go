@@ -66,6 +66,11 @@ func (t *Tool) Spec() dora.ToolSpec {
 	return t.core.Spec()
 }
 
+// Exclusive implements dora.ExclusiveTool: a command may change files and
+// processes that other calls of its response read, so it runs alone and in
+// the order the model wrote it.
+func (t *Tool) Exclusive() bool { return true }
+
 // Execute implements dora.Tool. Command failures are returned as structured
 // output so the model can inspect stderr and decide how to proceed.
 func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResult, error) {
@@ -80,3 +85,5 @@ func commandArgs(command string) []string {
 }
 
 var _ dora.Tool = (*Tool)(nil)
+
+var _ dora.ExclusiveTool = (*Tool)(nil)

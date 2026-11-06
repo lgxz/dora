@@ -147,11 +147,11 @@ func TestWriteToolAppend(t *testing.T) {
 func TestEditTool(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("foo bar foo"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("foo bar baz"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tool := NewEditTool()
-	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"baz"}`))
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"foo","new_string":"qux"}`))
 	out := toolResult.Content
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestEditTool(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 	data, _ := os.ReadFile(path)
-	if string(data) != "baz bar foo" {
+	if string(data) != "qux bar baz" {
 		t.Fatalf("content = %q", data)
 	}
 }

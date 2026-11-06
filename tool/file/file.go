@@ -12,12 +12,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/tool/internal/runpath"
 )
 
+// maxReadBytes is the longest line grep scans (read caps lines itself, see
+// maxReadLineBytes).
 const maxReadBytes = 1 << 20 // 1MB
+
+const (
+	// maxReadOutputBytes bounds one read result. Tool results are stored in the
+	// turn and resent with every later request, so a read must not be able to
+	// put megabytes into the context. The note that tells the model how to
+	// continue is added on top of this.
+	maxReadOutputBytes = 32 << 10
+	// maxReadLineBytes bounds a single returned line (minified files have
+	// lines of megabytes); the rest of such a line is replaced by a marker.
+	maxReadLineBytes = 8 << 10
+)
 
 // ReadTool reads a file with line numbers.
 type ReadTool struct{}
@@ -32,7 +46,7 @@ const defaultReadLimit = 200
 func (t *ReadTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
 		Name:        "read",
-		Description: "Read a file with line numbers.",
+		Description: "Read a file with line numbers. A result is limited to about 32 KiB and lines longer than 8 KiB are cut; when the limit stops the output, the result says which offset to continue from.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -71,9 +85,9 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	}
 
 	// Stream lines, collecting the requested range. Stop after the range so
-	// large files are not fully read.
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), maxReadBytes)
+	// large files are not fully read. Lines are read with a cap so that a huge
+	// line neither fails the read nor sits in memory.
+	reader := bufio.NewReaderSize(f, 64*1024)
 	var sb strings.Builder
 	start := input.Offset
 	limit := defaultReadLimit
@@ -82,18 +96,32 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 	}
 	end := start + limit - 1
 	lineNo := 0
-	for scanner.Scan() {
+	for {
+		line, total, err := readLineCapped(reader, maxReadLineBytes)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return dora.ToolResult{}, fmt.Errorf("read: scan: %w", err)
+		}
 		lineNo++
 		if lineNo >= start && lineNo <= end {
+			text := string(line)
+			if total > len(line) {
+				text += fmt.Sprintf(" ... [line truncated: %d bytes in total]", total)
+			}
 			// Prefix each line with its number for reference in edit operations.
-			fmt.Fprintf(&sb, "%d:%s\n", lineNo, scanner.Text())
+			entry := fmt.Sprintf("%d:%s\n", lineNo, text)
+			if sb.Len() > 0 && sb.Len()+len(entry) > maxReadOutputBytes {
+				fmt.Fprintf(&sb, "[output limited to %d KiB: showing lines %d-%d; continue with offset=%d]\n",
+					maxReadOutputBytes>>10, start, lineNo-1, lineNo)
+				break
+			}
+			sb.WriteString(entry)
 		}
 		if lineNo >= end {
 			break
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return dora.ToolResult{}, fmt.Errorf("read: scan: %w", err)
 	}
 	if lineNo == 0 {
 		return dora.ToolResult{Content: "(empty file)"}, nil
@@ -102,6 +130,47 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 		return dora.ToolResult{Content: fmt.Sprintf("(offset %d is beyond the file's %d lines)", start, lineNo)}, nil
 	}
 	return dora.ToolResult{Content: sb.String()}, nil
+}
+
+// readLineCapped reads one line without its line terminator. It keeps at most
+// keep bytes (cut on a UTF-8 boundary) and reports the line's full length, so
+// the remainder of a very long line is skipped without being buffered. It
+// returns io.EOF only when no more lines exist.
+func readLineCapped(r *bufio.Reader, keep int) (line []byte, total int, err error) {
+	var buf []byte
+	read := false
+	for {
+		chunk, isPrefix, err := r.ReadLine()
+		if err != nil {
+			if read {
+				break
+			}
+			return nil, 0, err
+		}
+		read = true
+		total += len(chunk)
+		if room := keep - len(buf); room > 0 {
+			if len(chunk) > room {
+				chunk = chunk[:room]
+			}
+			buf = append(buf, chunk...)
+		}
+		if !isPrefix {
+			break
+		}
+	}
+	if total > len(buf) {
+		// Do not leave half of a multi-byte rune at the cut.
+		for i := len(buf) - 1; i >= 0 && i >= len(buf)-3; i-- {
+			if utf8.RuneStart(buf[i]) {
+				if !utf8.FullRune(buf[i:]) {
+					buf = buf[:i]
+				}
+				break
+			}
+		}
+	}
+	return buf, total, nil
 }
 
 type readInput struct {
@@ -141,6 +210,10 @@ type WriteTool struct{}
 // NewWriteTool creates a write tool.
 func NewWriteTool() *WriteTool { return &WriteTool{} }
 
+// Exclusive implements dora.ExclusiveTool: a write must not overlap with the
+// other calls of its response, which may read or depend on the file.
+func (t *WriteTool) Exclusive() bool { return true }
+
 // Spec implements dora.Tool.
 func (t *WriteTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
@@ -166,6 +239,8 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage) (dora.Tool
 		return dora.ToolResult{}, err
 	}
 	input.Path = runpath.Resolve(ctx, input.Path)
+	unlock := lockPath(input.Path)
+	defer unlock()
 	created := false
 	if _, err := os.Stat(input.Path); os.IsNotExist(err) {
 		created = true
@@ -204,6 +279,10 @@ type EditTool struct{}
 // NewEditTool creates an edit tool.
 func NewEditTool() *EditTool { return &EditTool{} }
 
+// Exclusive implements dora.ExclusiveTool: an edit must not overlap with the
+// other calls of its response, which may read or depend on the file.
+func (t *EditTool) Exclusive() bool { return true }
+
 // Spec implements dora.Tool.
 func (t *EditTool) Spec() dora.ToolSpec {
 	return dora.ToolSpec{
@@ -230,26 +309,40 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolR
 		return dora.ToolResult{}, err
 	}
 	input.Path = runpath.Resolve(ctx, input.Path)
-	data, err := os.ReadFile(input.Path)
+	// Hold the file's lock across the whole read-modify-write cycle so that
+	// concurrent edits of one file are applied one after another, each on top
+	// of the previous result, instead of overwriting each other.
+	unlock := lockPath(input.Path)
+	defer unlock()
+	data, before, err := readFileSnapshot(input.Path)
 	if err != nil {
 		return dora.ToolResult{}, fmt.Errorf("edit: %w", err)
 	}
 	content := string(data)
-	var newContent string
-	var count int
-	if input.ReplaceAll {
-		newContent = strings.ReplaceAll(content, input.OldString, input.NewString)
-		count = strings.Count(content, input.OldString)
-	} else {
-		newContent = strings.Replace(content, input.OldString, input.NewString, 1)
-		if newContent != content {
-			count = 1
-		}
-	}
+	count := strings.Count(content, input.OldString)
 	if count == 0 {
 		return dora.ToolResult{Content: "old_string not found in file"}, nil
 	}
-	if err := writeFile(input.Path, []byte(newContent), false); err != nil {
+	if count > 1 && !input.ReplaceAll {
+		return dora.ToolResult{Content: fmt.Sprintf(
+			"old_string appears %d times in the file, so it is ambiguous; include more surrounding context to make it unique, or set replace_all to replace every occurrence",
+			count)}, nil
+	}
+	n := 1
+	if input.ReplaceAll {
+		n = -1
+	}
+	newContent := strings.Replace(content, input.OldString, input.NewString, n)
+	if newContent == content {
+		return dora.ToolResult{Content: fmt.Sprintf("replacements: %d, bytes_changed: 0", count)}, nil
+	}
+	if beforeCommit != nil {
+		beforeCommit()
+	}
+	if !unchanged(input.Path, before) {
+		return dora.ToolResult{}, fmt.Errorf("edit: %w", errFileChanged)
+	}
+	if err := writeFileAtomic(input.Path, []byte(newContent)); err != nil {
 		return dora.ToolResult{}, fmt.Errorf("edit: %w", err)
 	}
 	bytesChanged := len(newContent) - len(content)
@@ -305,11 +398,13 @@ func isBinary(data []byte) bool {
 	return nonPrintable > len(sample)/10
 }
 
+// writeFile writes data to path. Appending uses O_APPEND; replacing a file's
+// content is atomic (see writeFileAtomic). Callers hold the path lock.
 func writeFile(path string, data []byte, appendMode bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	if appendMode {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
@@ -318,7 +413,7 @@ func writeFile(path string, data []byte, appendMode bool) error {
 		_, err = f.Write(data)
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFileAtomic(path, data)
 }
 
 func ensureSingleValue(decoder *json.Decoder) error {
@@ -336,4 +431,9 @@ var (
 	_ dora.Tool = (*ReadTool)(nil)
 	_ dora.Tool = (*WriteTool)(nil)
 	_ dora.Tool = (*EditTool)(nil)
+)
+
+var (
+	_ dora.ExclusiveTool = (*WriteTool)(nil)
+	_ dora.ExclusiveTool = (*EditTool)(nil)
 )

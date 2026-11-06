@@ -733,3 +733,358 @@ func TestStoreRejectsVersionNine(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func appendTestRound(t *testing.T, turn *dora.Turn, number int) {
+	t.Helper()
+	id := "call-" + strconv.Itoa(number)
+	round := dora.Round{
+		Assistant: dora.Message{Role: dora.RoleAssistant, ToolCalls: []dora.ToolCall{{ID: id, Name: "echo", Input: json.RawMessage(`{}`)}}},
+		Tools:     []dora.Message{{Role: dora.RoleTool, ToolCallID: id, Content: "output-" + strconv.Itoa(number)}},
+	}
+	if err := turn.AppendRound(round, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func listAll(t *testing.T, store *Store) []session.TurnSummary {
+	t.Helper()
+	page, err := store.ListTurns(context.Background(), session.ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.Turns
+}
+
+func TestTurnWriterSavesRoundsIncrementallyThenFinishes(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	turn := dora.NewTurn("long task")
+	writer := store.BeginTurn(turn)
+	if err := writer.Sync(ctx); err != nil || writer.ID() != 0 || len(listAll(t, store)) != 0 {
+		t.Fatalf("Sync without rounds: err=%v id=%d turns=%d (must not create a row)", err, writer.ID(), len(listAll(t, store)))
+	}
+
+	appendTestRound(t, turn, 1)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := writer.ID()
+	if id == 0 {
+		t.Fatal("first Sync with a round did not create the turn")
+	}
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].ID != id || turns[0].Status != session.TurnStatusRunning ||
+		turns[0].RoundCount != 1 || turns[0].Result != "" || turns[0].Error != "" || turns[0].Usage != nil {
+		t.Fatalf("running turn = %+v", turns)
+	}
+	rounds, err := store.GetRounds(ctx, id, session.RoundOptions{Limit: 10})
+	if err != nil || rounds.Total != 1 || len(rounds.Rounds) != 1 || rounds.Rounds[0].Tools[0].Content != "output-1" {
+		t.Fatalf("rounds = %+v, err = %v", rounds, err)
+	}
+
+	// A Sync with nothing new changes nothing.
+	if err := writer.Sync(ctx); err != nil || writer.ID() != id {
+		t.Fatalf("idempotent Sync: err=%v id=%d", err, writer.ID())
+	}
+
+	appendTestRound(t, turn, 2)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if turns := listAll(t, store); len(turns) != 1 || turns[0].RoundCount != 2 {
+		t.Fatalf("after second round = %+v", turns)
+	}
+
+	completeTurnWithSystem(t, turn, "all done")
+	finishedID, err := writer.Finish(ctx, session.TurnStatusCompleted, nil)
+	if err != nil || finishedID != id {
+		t.Fatalf("Finish = %d, %v; want %d", finishedID, err, id)
+	}
+	turns = listAll(t, store)
+	if len(turns) != 1 || turns[0].Status != session.TurnStatusCompleted || turns[0].Result != "all done" ||
+		turns[0].Error != "" || turns[0].RoundCount != 2 {
+		t.Fatalf("completed turn = %+v (must be the same row, not a duplicate)", turns)
+	}
+	var system string
+	if err := store.db.QueryRow(`SELECT system FROM turns WHERE id = ?`, id).Scan(&system); err != nil || system != "system" {
+		t.Fatalf("system = %q, err = %v", system, err)
+	}
+	rounds, err = store.GetRounds(ctx, id, session.RoundOptions{Limit: 10})
+	if err != nil || len(rounds.Rounds) != 2 || rounds.Rounds[1].Tools[0].Content != "output-2" {
+		t.Fatalf("rounds after finish = %+v, err = %v", rounds, err)
+	}
+	if _, err := writer.Finish(ctx, session.TurnStatusCompleted, nil); err == nil {
+		t.Fatal("second Finish succeeded")
+	}
+	if got := len(listAll(t, store)); got != 1 {
+		t.Fatalf("turns after second Finish = %d", got)
+	}
+}
+
+func TestTurnWriterFinishWithoutSyncCreatesOneTerminalRow(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	turn := completedTurn(t, "never synced", "answer", 2)
+	writer := store.BeginTurn(turn)
+	id, err := writer.Finish(ctx, session.TurnStatusCompleted, nil)
+	if err != nil || id == 0 || writer.ID() != id {
+		t.Fatalf("Finish = %d, %v", id, err)
+	}
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].Status != session.TurnStatusCompleted || turns[0].RoundCount != 2 {
+		t.Fatalf("turns = %+v", turns)
+	}
+}
+
+func TestTurnWriterRunningRowSurvivesInterruption(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "crash.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := dora.NewTurn("will be interrupted")
+	writer := store.BeginTurn(turn)
+	appendTestRound(t, turn, 1)
+	appendTestRound(t, turn, 2)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Close without Finish, as if the process had been killed after round two.
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	turns := listAll(t, reopened)
+	if len(turns) != 1 || turns[0].Status != session.TurnStatusRunning || turns[0].RoundCount != 2 {
+		t.Fatalf("interrupted turn = %+v", turns)
+	}
+	rounds, err := reopened.GetRounds(ctx, turns[0].ID, session.RoundOptions{Limit: 10})
+	if err != nil || len(rounds.Rounds) != 2 {
+		t.Fatalf("rounds = %+v, err = %v", rounds, err)
+	}
+}
+
+func TestTurnWriterFinishAfterSyncKeepsRoundsOnce(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	turn := dora.NewTurn("fails later")
+	writer := store.BeginTurn(turn)
+	appendTestRound(t, turn, 1)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	appendTestRound(t, turn, 2)
+	cause := errors.New("model exploded")
+	id, err := writer.Finish(ctx, session.TurnStatusFailed, cause)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].ID != id || turns[0].Status != session.TurnStatusFailed ||
+		turns[0].Error != cause.Error() || turns[0].Result != "" || turns[0].RoundCount != 2 {
+		t.Fatalf("failed turn = %+v", turns)
+	}
+	var messages int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE turn_id = ?`, id).Scan(&messages); err != nil || messages != 4 {
+		t.Fatalf("messages = %d (want 2 rounds x assistant+tool, no duplicates), err = %v", messages, err)
+	}
+}
+
+func TestTurnWriterRepairsFailedSyncOnNextSave(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	turn := dora.NewTurn("flaky storage")
+	writer := store.BeginTurn(turn)
+	appendTestRound(t, turn, 1)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := writer.Sync(canceled); err == nil {
+		t.Fatal("Sync with a canceled context succeeded")
+	}
+	if writer.ID() != 0 || len(listAll(t, store)) != 0 {
+		t.Fatalf("failed Sync left state behind: id=%d turns=%d", writer.ID(), len(listAll(t, store)))
+	}
+
+	appendTestRound(t, turn, 2)
+	if err := writer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if turns := listAll(t, store); len(turns) != 1 || turns[0].RoundCount != 2 || turns[0].Status != session.TurnStatusRunning {
+		t.Fatalf("after repair = %+v (both rounds must be saved)", turns)
+	}
+}
+
+func TestTurnWriterRejectsInvalidFinishWithoutCreatingRows(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cases := []struct {
+		name   string
+		status session.TurnStatus
+		cause  error
+	}{
+		{"running is not terminal", session.TurnStatusRunning, nil},
+		{"completed needs a completed turn", session.TurnStatusCompleted, nil},
+		{"failed needs a cause", session.TurnStatusFailed, nil},
+		{"canceled needs context.Canceled", session.TurnStatusCanceled, errors.New("other")},
+		{"max rounds needs ErrMaxRounds", session.TurnStatusMaxRounds, errors.New("other")},
+		{"unknown status", session.TurnStatus("bogus"), errors.New("x")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			turn := dora.NewTurn("incomplete")
+			appendTestRound(t, turn, 1)
+			if _, err := store.BeginTurn(turn).Finish(ctx, tc.status, tc.cause); err == nil {
+				t.Fatal("Finish succeeded")
+			}
+			if got := len(listAll(t, store)); got != 0 {
+				t.Fatalf("rows after rejected Finish = %d", got)
+			}
+		})
+	}
+}
+
+// onlyTool is a minimal dora.Tool for driving a real Agent run.
+type onlyTool struct{}
+
+func (onlyTool) Spec() dora.ToolSpec { return dora.ToolSpec{Name: "echo"} }
+func (onlyTool) Execute(context.Context, json.RawMessage) (dora.ToolResult, error) {
+	return dora.ToolResult{Content: "echoed"}, nil
+}
+
+type modelFunc func(context.Context, dora.Request) (dora.Response, error)
+
+func (f modelFunc) Generate(ctx context.Context, request dora.Request) (dora.Response, error) {
+	return f(ctx, request)
+}
+
+func TestAgentRunSavesEachRoundBeforeNextModelRequest(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	turn := dora.NewTurn("multi round")
+	writer := store.BeginTurn(turn)
+	calls := 0
+	model := modelFunc(func(ctx context.Context, _ dora.Request) (dora.Response, error) {
+		calls++
+		turns := listAll(t, store)
+		if calls == 1 {
+			if len(turns) != 0 {
+				t.Fatalf("turn saved before any round completed: %+v", turns)
+			}
+			return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{{ID: "c1", Name: "echo", Input: json.RawMessage(`{}`)}}}, nil
+		}
+		// Rounds finished so far are already durable at this point.
+		if len(turns) != 1 || turns[0].Status != session.TurnStatusRunning || turns[0].RoundCount != calls-1 {
+			t.Fatalf("model call %d saw turns %+v", calls, turns)
+		}
+		attempts, err := store.GetAttempts(ctx, turns[0].ID, session.RoundOptions{Limit: 10})
+		if err != nil || attempts.Total != calls-1 {
+			t.Fatalf("model call %d saw attempts %+v, err = %v", calls, attempts, err)
+		}
+		if calls == 2 {
+			return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{{ID: "c2", Name: "echo", Input: json.RawMessage(`{}`)}}}, nil
+		}
+		return dora.Response{FinishReason: dora.FinishStop, Content: "finished"}, nil
+	})
+	agent, err := dora.New(model, onlyTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = agent.RunObservedWithOptions(ctx, turn, nil, dora.RunOptions{
+		OnRound: func(*dora.Turn) {
+			if err := writer.Sync(ctx); err != nil {
+				t.Errorf("Sync: %v", err)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := writer.Finish(ctx, session.TurnStatusCompleted, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := listAll(t, store)
+	if len(turns) != 1 || turns[0].ID != id || turns[0].Status != session.TurnStatusCompleted ||
+		turns[0].Result != "finished" || turns[0].RoundCount != 2 {
+		t.Fatalf("final turn = %+v", turns)
+	}
+	attempts, err := store.GetAttempts(ctx, id, session.RoundOptions{Limit: 10})
+	if err != nil || attempts.Total != 3 || attempts.Attempts[2].Disposition != "final" {
+		t.Fatalf("final attempts = %+v, err = %v", attempts, err)
+	}
+}
+
+func TestStoreRejectsVersionTenWithoutMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.sqlite")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 10`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "version 10") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestRunningStatusConstraints(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	insert := func(status, errorText, result string) error {
+		_, err := store.db.Exec(`
+INSERT INTO turns (system, user, result, status, error, round_count, committed_at)
+VALUES ('', 'u', ?, ?, NULLIF(?, ''), 0, '2026-01-01T00:00:00Z')`, result, status, errorText)
+		return err
+	}
+	if err := insert("running", "", ""); err != nil {
+		t.Fatalf("plain running row rejected: %v", err)
+	}
+	if err := insert("running", "some error", ""); err == nil {
+		t.Fatal("running row with an error accepted")
+	}
+	if err := insert("running", "", "stray result"); err == nil {
+		t.Fatal("running row with a result accepted")
+	}
+}

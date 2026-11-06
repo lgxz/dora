@@ -16,12 +16,25 @@ import (
 
 const commitTimeout = 5 * time.Second
 
+// terminalSaveAttempts bounds how often a failing terminal save is tried. The
+// writer is safe to retry: a failed save rolls back and advances no counters.
+// Retrying rides out brief contention (another process holding the session
+// file) before a finished run is reported as unsaved.
+const terminalSaveAttempts = 3
+
+// terminalSaveBackoff is the wait before the second attempt; it doubles for
+// each further one. It is a variable so tests do not have to sleep.
+var terminalSaveBackoff = 200 * time.Millisecond
+
 // ErrSessionBusy reports an attempt to start a second prompt while one is
 // already running in the same application session.
 var ErrSessionBusy = errors.New("session already has an active prompt")
 
 // PersistenceError reports that a terminal Turn could not be committed. A
 // long-running frontend should stop rather than discard that Turn and continue.
+// The PromptResult returned with it is still filled in: when the model
+// finished, Completed and Content carry the answer, so the frontend can
+// deliver it before reporting that it could not be saved.
 type PersistenceError struct {
 	err error
 }
@@ -46,7 +59,9 @@ type PromptOptions struct {
 }
 
 // PromptResult describes the terminal state of one prompt. Completed is false
-// only when continuation after ErrMaxRounds was declined.
+// only when continuation after ErrMaxRounds was declined, or when the run
+// failed or was canceled. It reports whether the model produced a final answer,
+// independently of whether that Turn could be saved.
 type PromptResult struct {
 	Turn      *dora.Turn
 	Content   string
@@ -109,23 +124,60 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 	defer s.flushChildren(false)
 
 	turn := dora.NewTurn(prompt)
-	for {
-		runErr := s.agent.RunObservedWithOptions(runCtx, turn, options.Observer, dora.RunOptions{
-			WorkingDirectory: s.workingDirectory,
-		})
-		if runErr == nil {
-			// A completed turn is the one result that must not be lost: commit it
-			// on a detached context like the terminal paths, so a cancellation
-			// racing the run-to-store transition cannot discard it.
-			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
-			parentID, commitErr := s.store.CommitTurn(commitCtx, turn)
-			cancelCommit()
-			collector.parentID = parentID
-			if commitErr != nil {
-				return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
+	writer := s.store.BeginTurn(turn)
+	saveWarned := false
+	runOptions := dora.RunOptions{
+		WorkingDirectory: s.workingDirectory,
+		// Save every completed round as soon as it exists, so a crash or forced
+		// exit keeps the work done so far. A failed save is only a warning: the
+		// writer retries whatever is missing on the next save, and Finish stores
+		// the rest, which is where a persistent storage failure becomes an error.
+		// A canceled run is left to the terminal save, on its detached context.
+		OnRound: func(*dora.Turn) {
+			if runCtx.Err() != nil {
+				return
 			}
+			syncCtx, cancelSync := context.WithTimeout(runCtx, commitTimeout)
+			defer cancelSync()
+			if err := writer.Sync(syncCtx); err != nil && !saveWarned {
+				saveWarned = true
+				if options.Observer != nil {
+					options.Observer.Observe(dora.Update{
+						Kind: dora.UpdateInfo,
+						Info: fmt.Sprintf("Warning: could not save turn progress: %v", err),
+					})
+				}
+			}
+		},
+	}
+	// saveTerminal records the terminal state on a detached context, so a cancellation
+	// racing the run-to-store transition cannot discard a Turn.
+	saveTerminal := func(status session.TurnStatus, cause error) (id int64, err error) {
+		backoff := terminalSaveBackoff
+		for attempt := 1; ; attempt++ {
+			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
+			id, err = writer.Finish(commitCtx, status, cause)
+			cancelCommit()
+			if err == nil || attempt == terminalSaveAttempts {
+				return id, err
+			}
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	for {
+		runErr := s.agent.RunObservedWithOptions(runCtx, turn, options.Observer, runOptions)
+		if runErr == nil {
+			// A completed turn is the one result that must not be lost, so the
+			// answer is returned even when saving it fails.
+			parentID, commitErr := saveTerminal(session.TurnStatusCompleted, nil)
+			collector.parentID = parentID
 			content, _ := turn.Result()
-			return PromptResult{Turn: turn, Content: content, Completed: true}, nil
+			result := PromptResult{Turn: turn, Content: content, Completed: true}
+			if commitErr != nil {
+				return result, &PersistenceError{err: commitErr}
+			}
+			return result, nil
 		}
 
 		if errors.Is(runErr, dora.ErrMaxRounds) {
@@ -137,9 +189,7 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 			if keepGoing && continueErr == nil {
 				continue
 			}
-			commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
-			parentID, commitErr := s.store.CommitMaxRounds(commitCtx, turn, runErr)
-			cancelCommit()
+			parentID, commitErr := saveTerminal(session.TurnStatusMaxRounds, runErr)
 			collector.parentID = parentID
 			if commitErr != nil {
 				return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}
@@ -153,15 +203,11 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 			return PromptResult{Turn: turn}, runErr
 		}
 
-		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(runCtx), commitTimeout)
-		var commitErr error
-		var parentID int64
+		status := session.TurnStatusFailed
 		if errors.Is(runErr, context.Canceled) {
-			parentID, commitErr = s.store.CommitCanceled(commitCtx, turn, runErr)
-		} else {
-			parentID, commitErr = s.store.CommitFailed(commitCtx, turn, runErr)
+			status = session.TurnStatusCanceled
 		}
-		cancelCommit()
+		parentID, commitErr := saveTerminal(status, runErr)
 		collector.parentID = parentID
 		if commitErr != nil {
 			return PromptResult{Turn: turn}, &PersistenceError{err: commitErr}

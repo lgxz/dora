@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 // connectionPragmas travels in the DSN rather than in one-time statements so
 // the driver applies it to every connection it creates, including a pool
@@ -90,95 +90,183 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// CommitTurn atomically appends one completed turn and all of its rounds.
+// CommitTurn saves a completed turn and all of its rounds in one transaction.
+// Production code saves turns incrementally through BeginTurn; the Commit
+// methods serve callers that only have a finished Turn.
 func (s *Store) CommitTurn(ctx context.Context, turn *dora.Turn) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, errors.New("sqlite session is not initialized")
-	}
-	if turn == nil || !turn.Completed() {
-		return 0, errors.New("cannot commit an incomplete turn")
-	}
-	result, _ := turn.Result()
-	return s.commitTurn(ctx, 0, turn, session.TurnStatusCompleted, result, "", turn.Usage())
+	return s.commit(ctx, 0, turn, session.TurnStatusCompleted, nil)
 }
 
 // CommitMaxRounds atomically appends an incomplete turn stopped by the round limit.
 func (s *Store) CommitMaxRounds(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, errors.New("sqlite session is not initialized")
-	}
-	if turn == nil || turn.Completed() {
-		return 0, errors.New("cannot commit a completed turn as max rounds")
-	}
-	if !errors.Is(cause, dora.ErrMaxRounds) {
-		return 0, errors.New("max-round turn requires ErrMaxRounds")
-	}
-	return s.commitTurn(ctx, 0, turn, session.TurnStatusMaxRounds, "", cause.Error(), nil)
+	return s.commit(ctx, 0, turn, session.TurnStatusMaxRounds, cause)
 }
 
 // CommitFailed atomically appends an incomplete turn stopped by an error. Only
 // complete assistant/tool rounds are stored; any partial streamed model output
 // is deliberately absent from Turn and therefore is not persisted.
 func (s *Store) CommitFailed(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, errors.New("sqlite session is not initialized")
-	}
-	if turn == nil || turn.Completed() {
-		return 0, errors.New("cannot commit a completed turn as failed")
-	}
-	if cause == nil {
-		return 0, errors.New("failed turn requires an error")
-	}
-	return s.commitTurn(ctx, 0, turn, session.TurnStatusFailed, "", cause.Error(), nil)
+	return s.commit(ctx, 0, turn, session.TurnStatusFailed, cause)
 }
 
 // CommitCanceled atomically appends an incomplete turn stopped by context
 // cancellation. Only complete assistant/tool rounds are stored.
 func (s *Store) CommitCanceled(ctx context.Context, turn *dora.Turn, cause error) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, errors.New("sqlite session is not initialized")
-	}
-	if turn == nil || turn.Completed() {
-		return 0, errors.New("cannot commit a completed turn as canceled")
-	}
-	if !errors.Is(cause, context.Canceled) {
-		return 0, errors.New("canceled turn requires context.Canceled")
-	}
-	return s.commitTurn(ctx, 0, turn, session.TurnStatusCanceled, "", cause.Error(), nil)
+	return s.commit(ctx, 0, turn, session.TurnStatusCanceled, cause)
 }
 
-func (s *Store) commitTurn(ctx context.Context, parentID int64, turn *dora.Turn, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
-	usageJSON, err := encodeUsage(usage)
-	if err != nil {
-		return 0, fmt.Errorf("encode final usage: %w", err)
+func (s *Store) commit(ctx context.Context, parentID int64, turn *dora.Turn, status session.TurnStatus, cause error) (int64, error) {
+	w := &turnWriter{store: s, parentID: parentID, turn: turn}
+	return w.Finish(ctx, status, cause)
+}
+
+// BeginTurn implements session.Store. It does no storage work: the turn row is
+// created by the first Sync that has a round to save, or by Finish.
+func (s *Store) BeginTurn(turn *dora.Turn) session.TurnWriter {
+	return &turnWriter{store: s, turn: turn}
+}
+
+// turnWriter saves one Turn incrementally. It remembers how many rounds and
+// model attempts are already stored and appends only the rest, advancing those
+// counts only after a transaction commits, so a failed save leaves it ready to
+// retry. It is not safe for concurrent use.
+type turnWriter struct {
+	store    *Store
+	parentID int64
+	turn     *dora.Turn
+	id       int64
+	rounds   int
+	attempts int
+}
+
+func (w *turnWriter) ID() int64 { return w.id }
+
+func (w *turnWriter) ready() error {
+	if w.store == nil || w.store.db == nil {
+		return errors.New("sqlite session is not initialized")
 	}
-	totalUsageJSON, err := encodeUsage(turn.TotalUsage())
-	if err != nil {
-		return 0, fmt.Errorf("encode total usage: %w", err)
+	if w.turn == nil {
+		return errors.New("cannot save a nil turn")
 	}
-	rounds := turn.Rounds()
-	committedAt := time.Now().UTC()
+	return nil
+}
+
+// Sync implements session.TurnWriter.
+func (w *turnWriter) Sync(ctx context.Context) error {
+	if err := w.ready(); err != nil {
+		return err
+	}
+	_, err := w.save(ctx, session.TurnStatusRunning, "", "", nil)
+	return err
+}
+
+// Finish implements session.TurnWriter.
+func (w *turnWriter) Finish(ctx context.Context, status session.TurnStatus, cause error) (int64, error) {
+	if err := w.ready(); err != nil {
+		return 0, err
+	}
+	result, errorText, usage, err := terminalFields(w.turn, status, cause)
+	if err != nil {
+		return 0, err
+	}
+	return w.save(ctx, status, result, errorText, usage)
+}
+
+// terminalFields validates that turn and cause agree with a terminal status and
+// returns the values stored for it.
+func terminalFields(turn *dora.Turn, status session.TurnStatus, cause error) (result, errorText string, usage *dora.Usage, err error) {
+	if turn == nil {
+		return "", "", nil, errors.New("cannot save a nil turn")
+	}
+	switch status {
+	case session.TurnStatusCompleted:
+		if !turn.Completed() {
+			return "", "", nil, errors.New("cannot commit an incomplete turn")
+		}
+		result, _ = turn.Result()
+		return result, "", turn.Usage(), nil
+	case session.TurnStatusMaxRounds:
+		if turn.Completed() {
+			return "", "", nil, errors.New("cannot commit a completed turn as max rounds")
+		}
+		if !errors.Is(cause, dora.ErrMaxRounds) {
+			return "", "", nil, errors.New("max-round turn requires ErrMaxRounds")
+		}
+		return "", cause.Error(), nil, nil
+	case session.TurnStatusFailed:
+		if turn.Completed() {
+			return "", "", nil, errors.New("cannot commit a completed turn as failed")
+		}
+		if cause == nil {
+			return "", "", nil, errors.New("failed turn requires an error")
+		}
+		return "", cause.Error(), nil, nil
+	case session.TurnStatusCanceled:
+		if turn.Completed() {
+			return "", "", nil, errors.New("cannot commit a completed turn as canceled")
+		}
+		if !errors.Is(cause, context.Canceled) {
+			return "", "", nil, errors.New("canceled turn requires context.Canceled")
+		}
+		return "", cause.Error(), nil, nil
+	default:
+		return "", "", nil, fmt.Errorf("invalid terminal turn status %q", status)
+	}
+}
+
+// save appends the rounds and model attempts not yet stored and writes the
+// turn's current status, creating the row on first use, all in one transaction.
+// Final usage totals are written only for terminal statuses.
+func (w *turnWriter) save(ctx context.Context, status session.TurnStatus, result, errorText string, usage *dora.Usage) (int64, error) {
+	s := w.store
+	rounds := w.turn.Rounds()
+	attempts := w.turn.Attempts()
+	terminal := status != session.TurnStatusRunning
+	if !terminal {
+		// Nothing new to save, and no reason to create a row for a turn that has
+		// not completed a round.
+		if w.id == 0 && len(rounds) == 0 {
+			return 0, nil
+		}
+		if w.id != 0 && len(rounds) == w.rounds && len(attempts) == w.attempts {
+			return w.id, nil
+		}
+	}
+	var usageJSON, totalUsageJSON string
+	if terminal {
+		var err error
+		if usageJSON, err = encodeUsage(usage); err != nil {
+			return 0, fmt.Errorf("encode final usage: %w", err)
+		}
+		if totalUsageJSON, err = encodeUsage(w.turn.TotalUsage()); err != nil {
+			return 0, fmt.Errorf("encode total usage: %w", err)
+		}
+	}
+	savedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin session transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	inserted, err := tx.ExecContext(ctx, `
+	turnID := w.id
+	if turnID == 0 {
+		inserted, err := tx.ExecContext(ctx, `
 INSERT INTO turns (
     parent_turn_id, system, user, result, status, error, round_count, usage_json, total_usage_json, committed_at
 ) VALUES (NULLIF(?, 0), ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
-		parentID, turn.System(), turn.User(), result, status, errorText, len(rounds), usageJSON, totalUsageJSON, committedAt.Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert turn: %w", err)
+			w.parentID, w.turn.System(), w.turn.User(), result, string(status), errorText, len(rounds), usageJSON, totalUsageJSON, savedAt,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("insert turn: %w", err)
+		}
+		turnID, err = inserted.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("read inserted turn ID: %w", err)
+		}
 	}
-	turnID, err := inserted.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("read inserted turn ID: %w", err)
-	}
-	for index, attempt := range turn.Attempts() {
-		encoded, err := json.Marshal(attempt)
+	for index := w.attempts; index < len(attempts); index++ {
+		encoded, err := json.Marshal(attempts[index])
 		if err != nil {
 			return 0, fmt.Errorf("encode model attempt: %w", err)
 		}
@@ -186,7 +274,8 @@ INSERT INTO turns (
 			return 0, fmt.Errorf("insert model attempt: %w", err)
 		}
 	}
-	for roundIndex, round := range rounds {
+	for roundIndex := w.rounds; roundIndex < len(rounds); roundIndex++ {
+		round := rounds[roundIndex]
 		if err := insertMessage(ctx, tx, turnID, roundIndex, 0, round.Assistant, round.Usage); err != nil {
 			return 0, err
 		}
@@ -196,9 +285,25 @@ INSERT INTO turns (
 			}
 		}
 	}
+	if w.id != 0 {
+		updated, err := tx.ExecContext(ctx, `
+UPDATE turns
+SET system = ?, result = ?, status = ?, error = NULLIF(?, ''), round_count = ?,
+    usage_json = NULLIF(?, ''), total_usage_json = NULLIF(?, ''), committed_at = ?
+WHERE id = ? AND status = 'running'`,
+			w.turn.System(), result, string(status), errorText, len(rounds), usageJSON, totalUsageJSON, savedAt, turnID,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("update turn %d: %w", turnID, err)
+		}
+		if n, err := updated.RowsAffected(); err != nil || n != 1 {
+			return 0, fmt.Errorf("update turn %d: turn is no longer running", turnID)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit turn: %w", err)
 	}
+	w.id, w.rounds, w.attempts = turnID, len(rounds), len(attempts)
 	return turnID, nil
 }
 
@@ -388,7 +493,7 @@ func (s *Store) validateSchema(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'`).Scan(&turnsDefinition); err != nil {
 		return fmt.Errorf("validate sqlite session schema: read turns definition: %w", err)
 	}
-	if !strings.Contains(turnsDefinition, "'canceled'") {
+	if !strings.Contains(turnsDefinition, "'running'") {
 		return fmt.Errorf("unsupported sqlite session schema version %d definition", schemaVersion)
 	}
 	return nil
@@ -401,13 +506,13 @@ var schemaStatements = []string{
         system TEXT NOT NULL,
         user TEXT NOT NULL,
         result TEXT NOT NULL,
-		status TEXT NOT NULL CHECK (status IN ('completed', 'max_rounds', 'failed', 'canceled')),
+		status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'max_rounds', 'failed', 'canceled')),
 		error TEXT,
         round_count INTEGER NOT NULL CHECK (round_count >= 0),
 		usage_json TEXT,
 		total_usage_json TEXT,
 		committed_at TEXT NOT NULL,
-		CHECK ((status = 'completed' AND error IS NULL) OR (status IN ('max_rounds', 'failed', 'canceled') AND error IS NOT NULL)),
+		CHECK ((status IN ('running', 'completed') AND error IS NULL) OR (status IN ('max_rounds', 'failed', 'canceled') AND error IS NOT NULL)),
 		CHECK (status = 'completed' OR (result = '' AND usage_json IS NULL))
     )`,
 	`CREATE INDEX turns_parent ON turns(parent_turn_id)`,
@@ -616,13 +721,10 @@ func (s *Store) CommitChild(ctx context.Context, parentID int64, turn *dora.Turn
 		return 0, errors.New("child requires a parent ID and turn")
 	}
 	status := session.TurnStatusCompleted
-	result, complete := turn.Result()
-	errorText := ""
-	if !complete {
+	if !turn.Completed() {
 		if cause == nil {
 			return 0, errors.New("incomplete child requires an error")
 		}
-		errorText = cause.Error()
 		switch {
 		case errors.Is(cause, dora.ErrMaxRounds):
 			status = session.TurnStatusMaxRounds
@@ -632,5 +734,5 @@ func (s *Store) CommitChild(ctx context.Context, parentID int64, turn *dora.Turn
 			status = session.TurnStatusFailed
 		}
 	}
-	return s.commitTurn(ctx, parentID, turn, status, result, errorText, turn.Usage())
+	return s.commit(ctx, parentID, turn, status, cause)
 }

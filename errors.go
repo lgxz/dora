@@ -1,6 +1,9 @@
 package dora
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // RetryableErrorKind classifies a retryable failure so the retry policy can
 // choose an appropriate attempt limit and backoff.
@@ -30,3 +33,24 @@ func (e *RetryableError) Error() string { return e.Err.Error() }
 
 // Unwrap exposes the underlying error for errors.Is and errors.As.
 func (e *RetryableError) Unwrap() error { return e.Err }
+
+// ErrContextLength reports that the provider rejected a request because its
+// input does not fit the model's context window. Test with errors.Is. The
+// agent reacts by compacting the history and retrying the request once.
+var ErrContextLength = errors.New("context length exceeded")
+
+// ContextLengthError wraps a provider failure caused by an oversized request.
+// It is permanent for the same input (never retried as-is), and matches
+// ErrContextLength through errors.Is while keeping the provider message.
+type ContextLengthError struct {
+	Err error
+}
+
+// Error returns the wrapped provider message.
+func (e *ContextLengthError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the underlying provider error.
+func (e *ContextLengthError) Unwrap() error { return e.Err }
+
+// Is makes errors.Is(err, ErrContextLength) true for any ContextLengthError.
+func (e *ContextLengthError) Is(target error) bool { return target == ErrContextLength }

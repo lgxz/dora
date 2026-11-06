@@ -820,3 +820,36 @@ func TestRequestMessageItemsHaveExplicitType(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateStreamClassifiesContextLengthEvents(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{"failed by message", `{"type":"response.failed","response":{"error":{"message":"Your input exceeds the context window of this model."}}}`, true},
+		{"failed by code", `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"too big"}}}`, true},
+		{"error event", `{"type":"error","message":"prompt is too long"}`, true},
+		{"unrelated failure", `{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`, false},
+		{"unrelated error event", `{"type":"error","message":"boom"}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: "+test.payload+"\n\n")
+			}))
+			defer server.Close()
+			client, err := New(Config{BaseURL: server.URL, Model: "test-model"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.GenerateStream(context.Background(), dora.Request{}, nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := errors.Is(err, dora.ErrContextLength); got != test.want {
+				t.Fatalf("ErrContextLength = %v, want %v (err %v)", got, test.want, err)
+			}
+		})
+	}
+}

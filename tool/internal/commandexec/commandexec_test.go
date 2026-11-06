@@ -1,8 +1,10 @@
 package commandexec
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/job"
 	jobtool "github.com/lgxz/dora/tool/job"
 )
@@ -302,6 +305,26 @@ func TestExecuteCapsLargeOutput(t *testing.T) {
 	}
 }
 
+func TestExecuteBoundsHugeOutput(t *testing.T) {
+	tool := newTestTool(t, Config{})
+
+	toolResult, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"huge-output"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, toolResult.Content)
+	total := len("HEAD-MARKER\n") + (64*1024-1)*1024 + len("TAIL-MARKER")
+	if !strings.HasPrefix(result.Stdout, "HEAD-MARKER\n") || !strings.HasSuffix(result.Stdout, "TAIL-MARKER") {
+		t.Fatalf("head/tail not preserved: %q ... %q", result.Stdout[:20], result.Stdout[len(result.Stdout)-20:])
+	}
+	if want := fmt.Sprintf("%d bytes total", total); !strings.Contains(result.Stdout, want) {
+		t.Fatalf("marker should report the true size (%s)", want)
+	}
+	if len(result.Stdout) > job.MaxResultBytes {
+		t.Fatalf("stdout = %d bytes, want <= %d", len(result.Stdout), job.MaxResultBytes)
+	}
+}
+
 func TestExecuteCapsOutputOnBackgroundAdoption(t *testing.T) {
 	jm := job.New()
 	tool := newTestTool(t, Config{JobManager: jm})
@@ -343,16 +366,213 @@ func TestExecuteRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestExecuteStartsWithCanceledContext(t *testing.T) {
-	tool := newTestTool(t, Config{})
+func TestExecuteDoesNotStartWithCanceledContext(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+	marker := filepath.Join(t.TempDir(), "started")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// The background execution path uses an independent context for the
-	// process, so an already-canceled request still starts the command.
-	_, err := tool.Execute(ctx, json.RawMessage(`{"command":"hello"}`))
+	// A request that is already canceled must not start a process at all: the
+	// helper would create the marker half a second after starting.
+	_, err := tool.Execute(ctx, json.RawMessage(fmt.Sprintf(`{"command":%q,"wait_seconds":0}`, "write-after:"+marker)))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	time.Sleep(900 * time.Millisecond)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the command ran despite the canceled context")
+	}
+	if jm.HasActiveJobs() {
+		t.Fatal("a canceled request left a background job")
+	}
+}
+
+// waitForFile polls until path exists, failing the test after a generous limit.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s never appeared", path)
+}
+
+func TestExecuteCancelDuringForegroundWaitKillsProcessTree(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	survived := filepath.Join(dir, "survived")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The parent starts a child in the same process group, then sleeps for 10s.
+	// The child would write "survived" half a second after starting.
+	command := fmt.Sprintf(`{"command":%q,"wait_seconds":600}`, "spawn-child:"+started+":"+survived)
+	type outcome struct {
+		result dora.ToolResult
+		err    error
+		took   time.Duration
+	}
+	finished := make(chan outcome, 1)
+	begin := time.Now()
+	go func() {
+		result, err := tool.Execute(ctx, json.RawMessage(command))
+		finished <- outcome{result, err, time.Since(begin)}
+	}()
+	waitForFile(t, started)
+	canceledAt := time.Now()
+	cancel()
+
+	select {
+	case got := <-finished:
+		if got.err != nil {
+			t.Fatalf("Execute error = %v, want a canceled result", got.err)
+		}
+		if elapsed := time.Since(canceledAt); elapsed > 5*time.Second {
+			t.Fatalf("Execute took %s to notice cancellation, want it prompt", elapsed)
+		}
+		result := decodeResult(t, got.result.Content)
+		if !result.Canceled || result.ExitCode != -1 {
+			t.Fatalf("result = %#v, want canceled with exit code -1", result)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Execute did not return after cancellation (wait_seconds was 600)")
+	}
+	if jm.HasActiveJobs() {
+		t.Fatal("canceled foreground command was adopted as a background job")
+	}
+	// Give a surviving child time to write its marker; the whole tree is dead.
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(survived); err == nil {
+		t.Fatal("a descendant of the canceled command survived")
+	}
+}
+
+func TestExecuteCancelReturnsOutputCapturedSoFar(t *testing.T) {
+	tool := newTestTool(t, Config{})
+	started := filepath.Join(t.TempDir(), "started")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	finished := make(chan dora.ToolResult, 1)
+	go func() {
+		result, err := tool.Execute(ctx, json.RawMessage(fmt.Sprintf(`{"command":%q,"wait_seconds":600}`, "print-hang:"+started)))
+		if err != nil {
+			t.Errorf("Execute error = %v", err)
+		}
+		finished <- result
+	}()
+	waitForFile(t, started)
+	cancel()
+
+	select {
+	case got := <-finished:
+		result := decodeResult(t, got.Content)
+		if !result.Canceled || result.Stdout != "partial-out" || result.Stderr != "partial-err" {
+			t.Fatalf("result = %#v, want the output printed before cancellation", result)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Execute did not return after cancellation")
+	}
+}
+
+type scriptedModel func(context.Context, dora.Request) (dora.Response, error)
+
+func (f scriptedModel) Generate(ctx context.Context, request dora.Request) (dora.Response, error) {
+	return f(ctx, request)
+}
+
+// The Agent waits for every running tool before it can stop, so a command that
+// ignores cancellation would keep the whole run (and the unsaved Turn) hostage
+// for up to wait_seconds. This drives the real Agent loop to check that.
+func TestAgentRunStopsPromptlyWhenCanceledDuringForegroundCommand(t *testing.T) {
+	tool := newTestTool(t, Config{})
+	started := filepath.Join(t.TempDir(), "started")
+	input := fmt.Sprintf(`{"command":%q,"wait_seconds":600}`, "print-hang:"+started)
+	var calls int
+	model := scriptedModel(func(context.Context, dora.Request) (dora.Response, error) {
+		calls++
+		return dora.Response{FinishReason: dora.FinishToolCalls, ToolCalls: []dora.ToolCall{
+			{ID: "call-1", Name: "test-command", Input: json.RawMessage(input)},
+		}}, nil
+	})
+	agent, err := dora.New(model, tool)
 	if err != nil {
-		t.Fatalf("error = %v", err)
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	turn := dora.NewTurn("run something that hangs")
+	finished := make(chan error, 1)
+	go func() { finished <- agent.Run(ctx, turn) }()
+	waitForFile(t, started)
+	cancel()
+
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return after cancellation while a foreground command was running")
+	}
+	if calls != 1 {
+		t.Fatalf("model calls = %d, want 1 (no request after cancellation)", calls)
+	}
+	rounds := turn.Rounds()
+	if len(rounds) != 1 || len(rounds[0].Tools) != 1 {
+		t.Fatalf("rounds = %#v, want the interrupted round to be kept", rounds)
+	}
+	result := decodeResult(t, rounds[0].Tools[0].Content)
+	if !result.Canceled || result.Stdout != "partial-out" {
+		t.Fatalf("saved tool result = %#v, want canceled with the partial output", result)
+	}
+}
+
+func TestExecuteCancelAfterAdoptionLeavesBackgroundJobRunning(t *testing.T) {
+	jm := job.New()
+	tool := newTestTool(t, Config{JobManager: jm})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// wait_seconds=0 adopts immediately. Once adopted the command has its own
+	// lifetime: canceling the run that started it must not kill it.
+	toolResult, err := tool.Execute(ctx, json.RawMessage(`{"command":"long-sleep","wait_seconds":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bg struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal([]byte(toolResult.Content), &bg); err != nil || bg.JobID == "" {
+		t.Fatalf("background result = %s, err = %v", toolResult.Content, err)
+	}
+	cancel()
+	done, ok := jm.Poll(bg.JobID, 15*time.Second)
+	if !ok || done.Status != job.StatusDone {
+		t.Fatalf("job after run cancellation = %#v, ok = %v; want it to finish normally", done, ok)
+	}
+}
+
+func TestExecuteDeadlineDuringForegroundWaitCancelsCommand(t *testing.T) {
+	tool := newTestTool(t, Config{})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	begin := time.Now()
+	toolResult, err := tool.Execute(ctx, json.RawMessage(`{"command":"sleep","wait_seconds":600}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begin); elapsed > 10*time.Second {
+		t.Fatalf("Execute took %s despite a 300ms deadline", elapsed)
+	}
+	if result := decodeResult(t, toolResult.Content); !result.Canceled {
+		t.Fatalf("result = %#v, want canceled", result)
 	}
 }
 
@@ -415,6 +635,15 @@ func TestCommandHelper(t *testing.T) {
 		time.Sleep(10 * time.Second)
 		os.Exit(0)
 	}
+	if strings.HasPrefix(command, "print-hang:") {
+		fmt.Print("partial-out")
+		fmt.Fprint(os.Stderr, "partial-err")
+		if err := os.WriteFile(strings.TrimPrefix(command, "print-hang:"), []byte("started"), 0o600); err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
 	if strings.HasPrefix(command, "write-after:") {
 		time.Sleep(500 * time.Millisecond)
 		if err := os.WriteFile(strings.TrimPrefix(command, "write-after:"), []byte("survived"), 0o600); err != nil {
@@ -463,6 +692,16 @@ func TestCommandHelper(t *testing.T) {
 		}
 		fmt.Print("TAIL-MARKER")
 		fmt.Fprint(os.Stderr, strings.Repeat("e", 60_000))
+	case "huge-output":
+		// 64 MiB of stdout in 1 KiB lines, with identifiable ends.
+		w := bufio.NewWriter(os.Stdout)
+		fmt.Fprint(w, "HEAD-MARKER\n")
+		line := strings.Repeat("h", 1023) + "\n"
+		for i := 0; i < 64*1024-1; i++ {
+			w.WriteString(line)
+		}
+		fmt.Fprint(w, "TAIL-MARKER")
+		w.Flush()
 	case "big-output-slow":
 		// Emits oversized output quickly, then keeps running so the tool
 		// adopts it as a background job with buffered output.

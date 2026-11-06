@@ -189,11 +189,18 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		result, promptErr := appSession.Prompt(ctx, prompt, promptOptions)
 		traceErr := writeTraceFile(opts.tracePath, result.Turn)
 		if promptErr != nil {
+			if app.IsPersistenceError(promptErr) {
+				// The model may have finished and only saving the turn failed.
+				// Hand over the answer before reporting the failure, so the
+				// work is not lost with it; errors.Join drops the nil errors.
+				var answerErr error
+				if result.Completed {
+					answerErr = writeAnswer(streams, result.Content)
+				}
+				return errors.Join(promptErr, traceErr, answerErr)
+			}
 			if traceErr != nil {
 				return errors.Join(promptErr, traceErr)
-			}
-			if app.IsPersistenceError(promptErr) {
-				return promptErr
 			}
 			if serverMode {
 				info(observer, "run turn: %v", promptErr)

@@ -239,7 +239,8 @@ func TestAgentRunCompactsAndClearsContinuation(t *testing.T) {
 			if len(request.Tools) != 1 {
 				t.Fatalf("normal request tools = %#v", request.Tools)
 			}
-			if len(request.Messages) != 1 || !strings.HasPrefix(request.Messages[0].Content, "Conversation summary:") {
+			if len(request.Messages) != 1 || !strings.HasPrefix(request.Messages[0].Content, "Original task (verbatim):\n\noriginal task") ||
+				!strings.Contains(request.Messages[0].Content, "original task and tool result preserved") {
 				t.Fatalf("normal request messages = %#v", request.Messages)
 			}
 			return Response{FinishReason: FinishStop, Content: "done", Continuation: "new-continuation"}, nil

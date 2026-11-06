@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -50,6 +52,9 @@ func TestAdoptRunning(t *testing.T) {
 	m := New()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 5")
+	// Production commands set WaitDelay too; without it, Wait blocks on an orphaned
+	// sleep that still holds the output pipes after sh is killed.
+	cmd.WaitDelay = time.Second
 	out := &OutputBuffer{}
 	cmd.Stdout = out.StdoutWriter()
 	cmd.Stderr = out.StderrWriter()
@@ -386,4 +391,154 @@ func TestSnapshotCapsCommandOutput(t *testing.T) {
 	if snapshot.Stderr == big || len(snapshot.Stderr) > MaxResultBytes+256 {
 		t.Fatalf("snapshot stderr not capped: %d bytes", len(snapshot.Stderr))
 	}
+}
+
+func TestStartTaskRecoversFromPanic(t *testing.T) {
+	m := New()
+	task := m.StartTask("task", "panics", func(context.Context) (string, error) {
+		panic("kaboom")
+	})
+	done, ok := m.Poll(task.ID, time.Second)
+	if !ok || done.Status != StatusFailed || !strings.Contains(done.Error, "task panicked: kaboom") {
+		t.Fatalf("panicking task = %#v, ok = %v", done, ok)
+	}
+	// The manager remains usable after the recovered panic.
+	next := m.StartTask("task", "after", func(context.Context) (string, error) { return "fine", nil })
+	if after, ok := m.Poll(next.ID, time.Second); !ok || after.Status != StatusDone || after.Result != "fine" {
+		t.Fatalf("task after panic = %#v, ok = %v", after, ok)
+	}
+}
+
+// numberedStream returns n fixed-width lines so a truncated copy can be checked
+// against the exact prefix and suffix of the full stream.
+func numberedStream(n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "line %08d\n", i)
+	}
+	return sb.String()
+}
+
+func writeChunked(t *testing.T, w interface{ Write([]byte) (int, error) }, data string, chunk int) {
+	t.Helper()
+	for len(data) > 0 {
+		n := min(chunk, len(data))
+		got, err := w.Write([]byte(data[:n]))
+		if err != nil || got != n {
+			t.Fatalf("Write(%d bytes) = %d, %v; want full write and no error", n, got, err)
+		}
+		data = data[n:]
+	}
+}
+
+func TestOutputBufferBoundsMemoryAndKeepsHeadAndTail(t *testing.T) {
+	full := numberedStream(400_000) // ~5 MB, far beyond the retained window
+	for _, chunk := range []int{1, 7, 4096, outputTailBytes - 1, outputTailBytes, outputTailBytes + 1, 100_000, len(full)} {
+		t.Run(fmt.Sprintf("chunk=%d", chunk), func(t *testing.T) {
+			b := &OutputBuffer{}
+			writeChunked(t, b.StdoutWriter(), full, chunk)
+
+			if got := len(b.stdout.head); got > capHeadBytes {
+				t.Fatalf("head holds %d bytes, want <= %d", got, capHeadBytes)
+			}
+			if got := len(b.stdout.tail); got > 2*outputTailBytes {
+				t.Fatalf("tail holds %d bytes, want <= %d", got, 2*outputTailBytes)
+			}
+
+			stdout, stderr := b.Drain()
+			if stderr != "" {
+				t.Fatalf("stderr = %q, want empty", stderr)
+			}
+			if len(stdout) > MaxResultBytes {
+				t.Fatalf("drained %d bytes, want <= %d", len(stdout), MaxResultBytes)
+			}
+			if CapOutput(stdout) != stdout {
+				t.Fatal("CapOutput changed already-bounded output")
+			}
+			marker := fmt.Sprintf(outputTruncMarker, len(full))
+			head, tail, ok := strings.Cut(stdout, marker)
+			if !ok {
+				t.Fatalf("marker with exact total %d missing", len(full))
+			}
+			if !strings.HasPrefix(full, head) || len(head) < capHeadBytes-utf8.UTFMax {
+				t.Fatalf("head is not the stream prefix (len %d)", len(head))
+			}
+			if !strings.HasSuffix(full, tail) || len(tail) < outputTailBytes-utf8.UTFMax {
+				t.Fatalf("tail is not the stream suffix (len %d)", len(tail))
+			}
+		})
+	}
+}
+
+func TestOutputBufferUntruncatedUpToRetainedWindow(t *testing.T) {
+	exact := strings.Repeat("a", capHeadBytes+outputTailBytes)
+	for _, chunk := range []int{1, 1000, len(exact)} {
+		b := &OutputBuffer{}
+		writeChunked(t, b.StdoutWriter(), exact, chunk)
+		if got, _ := b.Drain(); got != exact {
+			t.Fatalf("chunk=%d: output at the retained window changed (len %d)", chunk, len(got))
+		}
+	}
+
+	b := &OutputBuffer{}
+	writeChunked(t, b.StdoutWriter(), exact+"b", 1000)
+	got, _ := b.Drain()
+	if !strings.Contains(got, fmt.Sprintf("%d bytes total", len(exact)+1)) || !strings.HasSuffix(got, "ab") {
+		t.Fatalf("one byte past the window should truncate with an exact total, got len %d", len(got))
+	}
+}
+
+func TestOutputBufferTruncationKeepsUTF8Valid(t *testing.T) {
+	full := strings.Repeat("界é🙂", 200_000)
+	for _, chunk := range []int{1, 2, 5, 4093, len(full)} {
+		b := &OutputBuffer{}
+		writeChunked(t, b.StdoutWriter(), full, chunk)
+		got, _ := b.Drain()
+		if !utf8.ValidString(got) {
+			t.Fatalf("chunk=%d: truncated output is not valid UTF-8", chunk)
+		}
+		if len(got) > MaxResultBytes {
+			t.Fatalf("chunk=%d: drained %d bytes", chunk, len(got))
+		}
+	}
+}
+
+func TestOutputBufferDrainResetsTotals(t *testing.T) {
+	b := &OutputBuffer{}
+	writeChunked(t, b.StdoutWriter(), strings.Repeat("x", 10*MaxResultBytes), 1000)
+	if got, _ := b.Drain(); !strings.Contains(got, "bytes total") {
+		t.Fatal("first drain should be truncated")
+	}
+	_, _ = b.StdoutWriter().Write([]byte("small"))
+	if got, _ := b.Drain(); got != "small" {
+		t.Fatalf("drain after a truncated one = %q, want %q", got, "small")
+	}
+}
+
+func TestOutputBufferConcurrentWritersAndDrain(t *testing.T) {
+	b := &OutputBuffer{}
+	chunk := []byte(strings.Repeat("z", 1000))
+	var wg sync.WaitGroup
+	for _, w := range []io.Writer{b.StdoutWriter(), b.StderrWriter()} {
+		wg.Add(1)
+		go func(w io.Writer) {
+			defer wg.Done()
+			for i := 0; i < 2000; i++ {
+				_, _ = w.Write(chunk)
+			}
+		}(w)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			stdout, stderr := b.Drain()
+			if len(stdout) > MaxResultBytes || len(stderr) > MaxResultBytes {
+				t.Errorf("drain exceeded the result cap: %d, %d", len(stdout), len(stderr))
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	<-done
 }
