@@ -327,24 +327,6 @@ git diff | ./dora "Review this change"
 
 使用 `--config`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
-### Agent Client Protocol
-
-通过 stdin/stdout 将 Dora 作为 ACP v1 Agent 运行：
-
-```sh
-dora --acp
-```
-
-ACP Client 启动该命令，并通过标准流交换逐行 JSON-RPC。配置、模型选择、`--thinking`、`--max-rounds` 和 `--no-skills` 与普通 CLI 一致。stdout 完全用于协议输出，诊断信息仍写入 stderr。
-
-每次 `session/new` 都会创建彼此隔离的 Agent、JobManager 和内存 SQLite 历史库。Client 提供的绝对 `cwd` 会成为该 session 的工具工作目录。重复调用 `session/prompt` 会创建独立的 Dora Turn，较早结果仍可通过 history 工具访问。不同 session 可以并发运行，同一 session 会拒绝重叠的 prompt。
-
-首版 ACP 支持初始化、创建 session、文本及 resource-link prompt、流式回答和思考内容、工具调用生命周期更新、取消和关闭 session。达到 Dora 最大 rounds 时返回 ACP `max_turn_requests` stop reason。关闭 session 会取消活动 prompt 和后台 job，并丢弃其内存历史。
-
-当 Client 声明支持 terminal authentication 时，Dora 会提供 `Configure Dora` 方法并启动 `dora --setup`。认证保持在本机完成：setup 配置模型 provider，ACP 连接本身不会收到 API key。即使尚未配置模型，Dora 也可以完成 `initialize`；在 setup 完成且 Client 重新连接前，`session/new` 会返回 `Authentication required`。
-
-首版不支持协议驱动的 authenticate/logout、持久化 session 的 list/resume/load、图片/音频/嵌入资源 prompt、mode、配置选项、Client 文件系统或 terminal 委托，也不支持 Client 提供的 MCP server。非空 `mcpServers` 和 `additionalDirectories` 会被拒绝。`--acp` 不能与 prompt、`--session` 或 `--workdir` 同时使用；这些内容由 ACP 自身提供。
-
 ### 技能（Skills）
 
 技能是仅在相关内容时由模型加载的本地指令包。每个技能都是一个包含 `SKILL.md` 的目录，带有严格的 YAML front matter：

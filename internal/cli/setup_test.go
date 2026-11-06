@@ -66,7 +66,7 @@ agent:
 	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := Run(context.Background(), []string{"--acp", "--setup", "--config", configPath}, IO{
+	err := Run(context.Background(), []string{"--setup", "--config", configPath}, IO{
 		Stdin:  strings.NewReader("2\n3\ntrust-secret\n"),
 		Stdout: &strings.Builder{},
 		Stderr: &strings.Builder{},

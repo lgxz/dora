@@ -61,19 +61,6 @@ func Run(ctx context.Context, args []string, streams IO) error {
 	if handled, err := handleImmediate(ctx, opts, streams); handled {
 		return err
 	}
-	if opts.acp {
-		if err := validateACPOptions(opts); err != nil {
-			return err
-		}
-	}
-
-	if opts.acp {
-		cfg, err := loadConfig(opts)
-		if err != nil {
-			return err
-		}
-		return runACP(ctx, opts, cfg, streams)
-	}
 	cfg, model, err := loadRuntimeConfig(opts, streams.HTTPClient)
 	if err != nil {
 		return err

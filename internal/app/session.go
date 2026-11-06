@@ -266,16 +266,6 @@ func (s *Session) ActiveCounts() (commands, tasks int) {
 // Close cancels an active prompt and closes the history store. It is safe to
 // call more than once.
 func (s *Session) Close() error {
-	return s.close(false)
-}
-
-// Shutdown closes the session and also cancels all background jobs. Protocol
-// frontends use it when the remote client explicitly releases the session.
-func (s *Session) Shutdown() error {
-	return s.close(true)
-}
-
-func (s *Session) close(cancelJobs bool) error {
 	if s == nil {
 		return nil
 	}
@@ -293,9 +283,6 @@ func (s *Session) close(cancelJobs bool) error {
 	}
 	if done != nil {
 		<-done
-	}
-	if cancelJobs {
-		s.jobs.CancelAll()
 	}
 	// Background Tasks do not survive session closure. Give their canceled
 	// Turns a chance to reach the collector before closing the store.

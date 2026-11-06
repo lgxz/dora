@@ -69,7 +69,6 @@ Key constraints on dependency direction:
 | `cmd/dora` | Process startup, signal handling, terminal capability detection, final error output | `main` |
 | `internal/cli` | Argument parsing, dependency assembly, terminal presentation, and frontend selection | `Run(context.Context, []string, IO)` |
 | `internal/app` | Frontend-neutral prompt lifecycle, cancellation, terminal-state persistence, and per-session job ownership | `NewSession`, `Session.Prompt`, `Session.Cancel`, `Session.Close`, `Session.Shutdown` |
-| `internal/acp` | ACP v1 stdio transport, capability handling, session routing, and Observer-to-protocol conversion | `Serve` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
@@ -242,26 +241,25 @@ Current execution semantics:
 - Output-limited responses are retained only in `Turn.Attempts`, never in conversation history. `AgentConfig.OutputLimitRecovery == nil` enables one additional request with twice the effective output budget, clamped to configured/model capacity and remaining context. An explicit zero-retry policy disables recovery. Unknown budgets, no room to increase, exhausted retries, empty final text, blocked output, or unknown finish reasons return identifiable errors. Retry history and continuation remain at the last complete exchange. Cancellation also stops recovery. The adapter maps Chat `length` and Responses `incomplete/max_output_tokens` to `output_limit`; `[DONE]` alone is not a successful semantic finish.
 - A tool execution error, an unknown tool, invalid JSON tool arguments, or a panic inside a tool (recovered and reported as `tool "name" panicked: ...`) does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Continuing does not persist an intermediate record. Declining or a non-interactive failure persists the Turn with status `max_rounds` when a session is configured; non-interactive runs still report the error directly.
-- The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The CLI appends a `runtime_environment` block with `runtime.GOOS`, `runtime.GOARCH`, and the local Agent start date (`YYYY-MM-DD`, without time) to either prompt. It captures the date at CLI/event startup or ACP session creation and keeps it fixed for the Agent lifetime, including child tasks; it does not refresh across midnight. Environment collection remains outside the kernel. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
+- The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The CLI appends a `runtime_environment` block with `runtime.GOOS`, `runtime.GOARCH`, and the local Agent start date (`YYYY-MM-DD`, without time) to either prompt. It captures the date at CLI startup and keeps it fixed for the Agent lifetime, including child tasks; it does not refresh across midnight. Environment collection remains outside the kernel. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 - Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, but with no tools and no opaque continuation. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized, empty or output-limited (cut off) summary gets one stricter retry that asks for half the budget while the hard output cap stays unchanged, because a too-long summary normally shows up as being cut off at the cap; any other invalid response is rejected at once. The summary request is also sized against the context window: the calibrated input estimate, a prompt allowance and a 5% margin are subtracted from the window, and when the target does not fit, tool results larger than a cap are shortened (head and tail with a marker; 32, 16, 8, 4, 2 then 1 KiB, stopping at the first cap that makes room) in a copy used only for that request, and the output budget is lowered to the room that remains but not below the lesser of the target and 1024 tokens. The request is never refused locally on these heuristics; the provider decides with exact counts. The history itself is never modified, and the compaction notice says how many tool results were shortened for the request. Only a validated summary atomically replaces the model-visible history. The result is the leading system messages, one user message holding the original task verbatim followed by the summary, and then the most recent rounds verbatim. The task is capped at 5% of the window (head and tail around a marker; the summarizer still sees all of it) and is taken from the `Turn`, not from the first message of the current model-visible history, so repeated compactions never nest an earlier summary message; task images are carried over. The verbatim tail is built from whole rounds, newest first, while they fit 10% of the window: an assistant message is never separated from its tool results, the oldest round is never part of the tail so something always remains to summarize, and a newest round larger than the budget is summarized instead of kept. The summary request contains everything before the tail, and the tail's estimate is subtracted from the request's input estimate. **Context overflow recovery.** `provider.APIError` classifies a 400, 413 or 422 whose error code/type or message carries a known context-window phrase (`context_length_exceeded`, "maximum context length", "prompt is too long", ...) as `dora.ContextLengthError`, which matches `dora.ErrContextLength` through `errors.Is` and is not retryable as-is; the Responses client classifies `response.failed` and `error` stream events the same way (`provider.StreamError`). Rate limits and server errors are never classified, even when their text mentions tokens. When a normal request fails with `ErrContextLength` in a round that was not just compacted, the Agent runs a forced compaction (no trigger check; the history is assumed to fill the window, so the tool-result shortening ladder applies to the summary request), clears the continuation, emits an `UpdateInfo` notice, and retries the request exactly once. If the summary request itself is rejected as too large it is re-planned once with a pessimistic input estimate (50% higher, at least the window) without consuming a summary attempt. A failed forced compaction reports both the provider error and the compaction error; a second overflow, or an overflow right after a proactive compaction, ends the run with the provider's error.
 
 The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, the number of summary attempts, the number of messages kept verbatim, and whether the task was shortened. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
 
 ## CLI Run Flow
 
-`internal/cli.Run` is the composition root and selects either the terminal/event
-frontend or ACP:
+`internal/cli.Run` is the composition root and drives the terminal frontend:
 
 1. Parse arguments; `--version`, `-update`, and `--setup` complete and exit before reading runtime configuration or the prompt. Setup updates only the selected YAML file's `env` and `policy.text`, validates the complete result, and preserves other fields and comments.
 2. Resolve and load the default or explicit configuration and validate one-shot model/thinking/round overrides.
-3. In `--acp` mode, attempt to construct the selected model router and start the protocol frontend; absence of a selectable model is retained as an unauthenticated state rather than a startup failure. No CLI prompt or shared CLI session is created. Normal CLI mode requires the router immediately.
+3. Normal CLI mode requires the model router immediately.
 4. For a normal Agent run, validate `--workdir` and compose the user prompt from command arguments and standard input.
 5. Open the active SQLite session: the file selected by `--session`, or an in-memory database when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
-9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt; ACP supplies none. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`. ACP has already streamed the answer to the client by then and reports the error. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
-10. The terminal frontend writes completed text to stdout or continues its event loop.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`. When requested, the CLI then writes the parent `--trace-file`, including completed calls retained by a failed turn.
+10. The terminal frontend writes completed text to stdout.
 
 The process entry point converts both `SIGINT` and `SIGTERM` into context
 cancellation, allowing the application to save a canceled Turn before exiting.
@@ -277,42 +275,6 @@ The setup flow selects a built-in provider and optional profile. It reads the
 API key without terminal echo, writes the configuration through a validated
 temporary file, and installs it with owner-only permissions on Unix. Existing
 environment variables keep their normal precedence over config-local values.
-
-## ACP Frontend
-
-`internal/acp` uses the pinned `github.com/coder/acp-go-sdk` v1 transport and
-types. `Serve` owns one protocol connection and a concurrency-safe map from ACP
-session IDs to `app.Session` instances. `session/new` requires an absolute,
-existing `cwd` and constructs an isolated in-memory SQLite store, JobManager,
-tool set, and Agent. The configured model router is immutable after startup and
-is shared across those Agents. When no text model is selectable, initialization
-still succeeds so clients can discover terminal setup; session creation returns
-ACP `Authentication required` until setup completes and the client reconnects.
-
-ACP prompt text and resource links are converted into one Dora user string.
-Images, audio, embedded resources, MCP servers, and additional directories are
-not advertised or accepted. Each prompt calls `app.Session.Prompt`; the
-application layer prevents overlapping prompts within one session while
-allowing different sessions to run concurrently.
-
-An asynchronous ordered Observer adapter maps content/reasoning deltas to
-`agent_message_chunk`/`agent_thought_chunk`, tool start and finish events to
-`tool_call`/`tool_call_update`, and flushes those notifications before the
-prompt response. Transport failures are retained while the adapter continues
-draining its bounded queue so a disconnected client cannot deadlock the Agent.
-Normal completion, cancellation, and `ErrMaxRounds` map to `end_turn`,
-`cancelled`, and `max_turn_requests`. `session/cancel` cancels the active prompt;
-advertised `session/close` additionally cancels background jobs and closes the
-ephemeral history store. Disconnect shuts down every remaining ACP session.
-
-During initialization, clients advertising terminal authentication receive a
-`dora-setup` auth method with `--setup` arguments. The Registry validator's
-legacy `_meta.terminal-auth` marker is accepted alongside the standardized
-`clientCapabilities.auth.terminal` field. This configures provider credentials
-out of band; Dora does not implement protocol-driven `authenticate` or
-`logout`.
-
-`internal/update` only updates binaries marked by the standalone installer writing a marker in the same directory. It fetches the latest stable Release from GitHub, selects the archive for the running platform, verifies the SHA-256 using `checksums.txt`, and stages and runs the new version's `--version` in the same directory. After successful verification, it switches the binary via a same-directory rename; on installation failure it attempts a rollback and uses an exclusive marker to reject concurrent updates. Development builds, manual copies, and package-manager installations are not modified.
 
 ## Model Adapters
 
@@ -574,7 +536,7 @@ process, so they do not survive process exit and any uncollected result is
 lost on forced exit. On graceful session closure, Dora cancels only in-process
 Tasks and waits up to five seconds for their terminal records before flushing
 children and closing storage. Adopted command processes retain their normal
-lifetime; explicit ACP Shutdown still cancels all jobs. Uncooperative Tasks
+lifetime. Uncooperative Tasks
 that outlive this grace period cannot contribute further history. Foreground and background Task calls inherit run context values such as
 the working directory. Background Tasks deliberately drop the parent deadline
 and cancellation while retaining those values, preserving their independent
@@ -634,7 +596,4 @@ A new UI can call the root-package Agent directly, create a `Turn`, and implemen
 - SQLite serializes writers and uses a five-second busy timeout; Dora does not add a separate cross-process lock.
 - The CLI remains the configuration and tool composition root; `internal/app`
   owns only frontend-neutral execution and persistence, not provider discovery.
-- ACP sessions are process-local and ephemeral. Persistent list/resume/load,
-  client-delegated filesystem/terminal operations, permissions, and MCP server
-  attachment are not implemented.
 - There is currently no interactive REPL or general event bus.
