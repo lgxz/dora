@@ -343,7 +343,7 @@ ACP Client 启动该命令，并通过标准流交换逐行 JSON-RPC。配置、
 
 当 Client 声明支持 terminal authentication 时，Dora 会提供 `Configure Dora` 方法并启动 `dora --setup`。认证保持在本机完成：setup 配置模型 provider，ACP 连接本身不会收到 API key。即使尚未配置模型，Dora 也可以完成 `initialize`；在 setup 完成且 Client 重新连接前，`session/new` 会返回 `Authentication required`。
 
-首版不支持协议驱动的 authenticate/logout、持久化 session 的 list/resume/load、图片/音频/嵌入资源 prompt、mode、配置选项、Client 文件系统或 terminal 委托，也不支持 Client 提供的 MCP server。非空 `mcpServers` 和 `additionalDirectories` 会被拒绝。`--acp` 不能与 prompt、`--session`、`--workdir` 或 `--events` 同时使用；这些内容由 ACP 自身提供。
+首版不支持协议驱动的 authenticate/logout、持久化 session 的 list/resume/load、图片/音频/嵌入资源 prompt、mode、配置选项、Client 文件系统或 terminal 委托，也不支持 Client 提供的 MCP server。非空 `mcpServers` 和 `additionalDirectories` 会被拒绝。`--acp` 不能与 prompt、`--session` 或 `--workdir` 同时使用；这些内容由 ACP 自身提供。
 
 ### 技能（Skills）
 

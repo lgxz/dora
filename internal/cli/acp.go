@@ -68,8 +68,6 @@ func validateACPOptions(opts options) error {
 		return errors.New("--acp does not accept --trace-file; ACP may run multiple prompts")
 	case opts.workdir != "":
 		return errors.New("--acp does not accept --workdir; the ACP client supplies cwd per session")
-	case opts.events:
-		return errors.New("--acp cannot be combined with --events")
 	}
 	return nil
 }

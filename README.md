@@ -750,7 +750,7 @@ persistent session listing/resume/load, prompt images/audio/embedded resources,
 modes, config options, client filesystem/terminal delegation, or MCP servers
 supplied by the client. Non-empty `mcpServers` and `additionalDirectories` are rejected.
 `--acp` cannot be combined with a prompt, `--session`, `--trace-file`,
-`--workdir`, or `--events`; ACP supplies its own prompts, sessions, and working
+or `--workdir`; ACP supplies its own prompts, sessions, and working
 directories.
 
 ### Skills

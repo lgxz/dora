@@ -18,18 +18,16 @@ type agentDependencies struct {
 	jobs         *job.Manager
 	history      session.Reader
 	noSkills     bool
-	extraTools   []dora.Tool
 	systemPrompt string
 }
 
 func buildAgent(cfg config.Config, deps agentDependencies) (*dora.Agent, error) {
 	var agent *dora.Agent
 	tools, err := buildTools(cfg, toolDependencies{
-		model:      deps.model,
-		jobs:       deps.jobs,
-		history:    deps.history,
-		noSkills:   deps.noSkills,
-		extraTools: deps.extraTools,
+		model:    deps.model,
+		jobs:     deps.jobs,
+		history:  deps.history,
+		noSkills: deps.noSkills,
 		taskRunner: func(ctx context.Context, instruction string) (string, error) {
 			return runTask(ctx, agent, instruction)
 		},

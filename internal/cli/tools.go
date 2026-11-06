@@ -7,7 +7,6 @@ import (
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
-	"github.com/lgxz/dora/internal/events"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/model/router"
 	"github.com/lgxz/dora/session"
@@ -27,22 +26,6 @@ type toolDependencies struct {
 	history    session.Reader
 	noSkills   bool
 	taskRunner tasktool.Runner
-	extraTools []dora.Tool
-}
-
-func buildEventTools(source *events.Events) ([]dora.Tool, error) {
-	if source == nil || !source.Enabled() {
-		return nil, nil
-	}
-	sendTool, err := events.NewSendTool(source)
-	if err != nil {
-		return nil, err
-	}
-	nodesTool, err := events.NewNodesTool(source)
-	if err != nil {
-		return nil, err
-	}
-	return []dora.Tool{sendTool, nodesTool}, nil
 }
 
 func buildTools(cfg config.Config, deps toolDependencies) ([]dora.Tool, error) {
@@ -85,7 +68,6 @@ func buildTools(cfg config.Config, deps toolDependencies) ([]dora.Tool, error) {
 	})
 	tools = append(tools, viewImage)
 	tools = append(tools, buildFileTools()...)
-	tools = append(tools, deps.extraTools...)
 	if cfg.Tools.Task.Enabled == nil || *cfg.Tools.Task.Enabled {
 		task := tasktool.New(deps.taskRunner)
 		task.SetContextBackgroundStarter(func(parent context.Context, instruction string) (string, error) {

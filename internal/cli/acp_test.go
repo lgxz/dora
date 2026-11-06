@@ -23,7 +23,6 @@ func TestRunACPRejectsConflictingCLIState(t *testing.T) {
 		{name: "session", opts: options{sessionPath: "turns.sqlite"}, want: "does not accept --session"},
 		{name: "trace", opts: options{tracePath: "trace.json"}, want: "does not accept --trace-file"},
 		{name: "workdir", opts: options{workdir: "/tmp"}, want: "does not accept --workdir"},
-		{name: "events", opts: options{events: true}, want: "cannot be combined with --events"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

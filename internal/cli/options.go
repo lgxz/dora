@@ -25,7 +25,6 @@ type options struct {
 	quiet        bool
 	color        string
 	reasoning    bool
-	events       bool
 	acp          bool
 	sessionPath  string
 	tracePath    string
@@ -66,7 +65,6 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		}
 	})
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
-	flags.BoolVar(&opts.events, "events", false, "enable event daemon mode even when events.enabled is unset")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdin/stdout")
 	flags.StringVar(&opts.sessionPath, "session", "", "SQLite file used to store and query saved turns")
 	flags.StringVar(&opts.tracePath, "trace-file", "", "write the parent turn trace as JSON")

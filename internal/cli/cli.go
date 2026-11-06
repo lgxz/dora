@@ -16,7 +16,6 @@ import (
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/app"
 	"github.com/lgxz/dora/internal/config"
-	"github.com/lgxz/dora/internal/events"
 	"github.com/lgxz/dora/internal/job"
 	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
@@ -84,30 +83,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 
-	// --events forces event daemon mode regardless of events.enabled.
-	if opts.events {
-		cfg.Events.Enabled = true
-	}
-
-	// Open the event source from the events configuration. Enabled reports
-	// whether to run in event daemon mode.
-	source, err := events.New(cfg.Events)
+	prompt, err := readPrompt(opts.promptArgs, streams.Stdin, streams.StdinIsTerminal)
 	if err != nil {
+		opts.usage()
 		return err
-	}
-	defer source.Close()
-	serverMode := source.Enabled()
-	if serverMode && opts.tracePath != "" {
-		return errors.New("--trace-file cannot be used in event daemon mode")
-	}
-
-	var prompt string
-	if !serverMode {
-		prompt, err = readPrompt(opts.promptArgs, streams.Stdin, streams.StdinIsTerminal)
-		if err != nil {
-			opts.usage()
-			return err
-		}
 	}
 
 	sessionStore, err := openSession(ctx, opts.sessionPath)
@@ -115,17 +94,11 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	jobManager := job.New()
-	extraTools, err := buildEventTools(source)
-	if err != nil {
-		_ = sessionStore.Close()
-		return err
-	}
 	agent, err := buildAgent(cfg, agentDependencies{
 		model:        model,
 		jobs:         jobManager,
 		history:      sessionStore,
 		noSkills:     opts.noSkills,
-		extraTools:   extraTools,
 		systemPrompt: systemPrompt(cfg.Agent, time.Now()),
 	})
 	if err != nil {
@@ -159,69 +132,41 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		}
 	}()
 
-	for {
-		if serverMode {
-			ev, err := source.Next(ctx)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-				info(observer, "receive event: %v", err)
-				continue
-			}
-			// An event with no meaningful content does not start a turn.
-			if ev.Empty() {
-				continue
-			}
-			prompt = events.EventPrompt(ev)
-		}
-
-		if observer != nil {
-			observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
-		}
-		promptOptions := app.PromptOptions{Observer: observer}
-		if streams.StdinIsTerminal && streams.TerminalProgress {
-			input := bufio.NewReader(streams.Stdin)
-			promptOptions.Continue = func(_ context.Context, _ *dora.Turn, _ error) (bool, error) {
-				return confirmContinue(input, streams.Stderr)
-			}
-		}
-		result, promptErr := appSession.Prompt(ctx, prompt, promptOptions)
-		traceErr := writeTraceFile(opts.tracePath, result.Turn)
-		if promptErr != nil {
-			if app.IsPersistenceError(promptErr) {
-				// The model may have finished and only saving the turn failed.
-				// Hand over the answer before reporting the failure, so the
-				// work is not lost with it; errors.Join drops the nil errors.
-				var answerErr error
-				if result.Completed {
-					answerErr = writeAnswer(streams, result.Content)
-				}
-				return errors.Join(promptErr, traceErr, answerErr)
-			}
-			if traceErr != nil {
-				return errors.Join(promptErr, traceErr)
-			}
-			if serverMode {
-				info(observer, "run turn: %v", promptErr)
-				continue
-			}
-			return promptErr
-		}
-		if traceErr != nil {
-			return traceErr
-		}
-		if !serverMode && !result.Completed {
-			return nil
-		}
-		if err := writeAnswer(streams, result.Content); err != nil {
-			return err
-		}
-
-		if !serverMode {
-			return nil
+	if observer != nil {
+		observer.Observe(dora.Update{Kind: dora.UpdateTurnStarted, Info: prompt})
+	}
+	promptOptions := app.PromptOptions{Observer: observer}
+	if streams.StdinIsTerminal && streams.TerminalProgress {
+		input := bufio.NewReader(streams.Stdin)
+		promptOptions.Continue = func(_ context.Context, _ *dora.Turn, _ error) (bool, error) {
+			return confirmContinue(input, streams.Stderr)
 		}
 	}
+	result, promptErr := appSession.Prompt(ctx, prompt, promptOptions)
+	traceErr := writeTraceFile(opts.tracePath, result.Turn)
+	if promptErr != nil {
+		if app.IsPersistenceError(promptErr) {
+			// The model may have finished and only saving the turn failed.
+			// Hand over the answer before reporting the failure, so the
+			// work is not lost with it; errors.Join drops the nil errors.
+			var answerErr error
+			if result.Completed {
+				answerErr = writeAnswer(streams, result.Content)
+			}
+			return errors.Join(promptErr, traceErr, answerErr)
+		}
+		if traceErr != nil {
+			return errors.Join(promptErr, traceErr)
+		}
+		return promptErr
+	}
+	if traceErr != nil {
+		return traceErr
+	}
+	if !result.Completed {
+		return nil
+	}
+	return writeAnswer(streams, result.Content)
 }
 
 func resolveWorkingDirectory(path string) (string, error) {
