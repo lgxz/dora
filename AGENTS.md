@@ -61,7 +61,7 @@ root `dora` package.
 ### Internal services
 
 - `internal/config/`: strict YAML decoding, environment lookup, and validation.
-- `internal/paths/`: cross-platform XDG configuration, skill, and session paths.
+- `internal/paths/`: unified `~/.dora` configuration and skill paths (`DORA_HOME` overrides).
 - `session/`: completed-turn persistence interfaces and query records.
 - `session/jsonl/`: append-only JSON Lines storage for saved turns.
 - `tool/history/`: paginated history access exposed to the model.

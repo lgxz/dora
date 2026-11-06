@@ -84,6 +84,13 @@ func TestUpdateDownloadsVerifiesAndReplacesExecutable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(directory, ".dora.old")); !os.IsNotExist(err) {
 		t.Fatalf("backup remains after update: %v", err)
 	}
+	if info, err := os.Stat(executable); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("updated executable mode = %v, err = %v; want 0755", info, err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(directory, ".dora-*"))
+	if len(leftovers) != 1 || filepath.Base(leftovers[0]) != ".dora-install.json" {
+		t.Fatalf("unexpected files left beside the executable: %v", leftovers)
+	}
 }
 
 func TestUpdateDoesNotDownloadAssetsWhenCurrent(t *testing.T) {

@@ -31,6 +31,12 @@ flowchart TD
     CLI --> PowerShell["tool/powershell<br/>PowerShell tool"]
     CLI --> Task["tool/task<br/>independent Agent turn"]
     CLI --> History["tool/history<br/>explicit history queries"]
+    CLI --> FileTools["tool/file<br/>read, write, edit, grep, glob"]
+    CLI --> JobTool["tool/job<br/>background job control"]
+    CLI --> App["internal/app<br/>prompt lifecycle + persistence"]
+    App --> Jobs["internal/job<br/>background job manager"]
+    JobTool --> Jobs
+    App --> Session
 
     Registry --> OpenAI["model/openai<br/>Chat Completions"]
     Registry --> Responses["model/openairesponses<br/>Responses API"]
@@ -47,6 +53,8 @@ flowchart TD
     Bash -->|"Tool"| Core
     PowerShell -->|"Tool"| Core
     Task -->|"Tool"| Core
+    FileTools -->|"Tool"| Core
+    JobTool -->|"Tool"| Core
     Task -->|"fresh Turn via RunOptions"| Core
     CommandExec -->|"Tool"| Core
     Progress -->|"Observer"| Core
@@ -67,8 +75,10 @@ Key constraints on dependency direction:
 | --- | --- | --- |
 | `dora` | Domain abstractions for the agent loop, messages, models, tools, and observers | `New`, `NewWithConfig`, `Agent.Run*`, `Model`, `Tool`, `Observer` |
 | `cmd/dora` | Process startup, signal handling, terminal capability detection, final error output | `main` |
-| `internal/cli` | Argument parsing, dependency assembly, terminal presentation, and frontend selection | `Run(context.Context, []string, IO)` |
-| `internal/app` | Frontend-neutral prompt lifecycle, cancellation, terminal-state persistence, and per-session job ownership | `NewSession`, `Session.Prompt`, `Session.Cancel`, `Session.Close`, `Session.Shutdown` |
+| `internal/cli` | Argument parsing, dependency assembly, and terminal presentation | `Run(context.Context, []string, IO)` |
+| `internal/app` | Frontend-neutral prompt lifecycle, cancellation, terminal-state persistence, and per-session job ownership | `NewSession`, `Session.Prompt`, `Session.Cancel`, `Session.Close` |
+| `internal/job` | In-memory manager for background command and Task jobs: adoption, polling, kill, and graceful stop | `New`, `Manager.AdoptCommand`, `Manager.StartTaskContext`, `Manager.Poll`, `Manager.Kill`, `Manager.StopTasks` |
+| `internal/capstr` | UTF-8-safe head-and-tail truncation of large strings around a marker | `HeadTail` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
 | `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
@@ -84,6 +94,8 @@ Key constraints on dependency direction:
 | `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
 | `tool/bash` | Executes Bash within the current directory with background transition and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
+| `tool/file` | `read`, `write`, `edit`, `grep` and `glob` with per-file locking and atomic replacement | `NewReadTool`, `NewWriteTool`, `NewEditTool`, `NewGrepTool`, `NewGlobTool` |
+| `tool/job` | Lists, polls, and kills background command and Task jobs | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/history` | Gives the model paginated access to saved turns and rounds | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/viewimage` | Loads a local image file or remote URL and returns a text description via a transient visual model | `New`, `Tool.SetViewer`, `Tool.Spec`, `Tool.Execute` |
 | `tool/task` | Runs an instruction through the same Agent in a fresh Turn, excluding itself from the nested run | `New`, `Tool.Spec`, `Tool.Execute` |
@@ -258,7 +270,7 @@ The capacity check returns a `CompactionResult` containing the selected history,
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
 8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
-9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot `dora -p` run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`.
+9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`.
 10. The terminal frontend writes completed text to stdout.
 
 The process entry point converts both `SIGINT` and `SIGTERM` into context
@@ -518,7 +530,11 @@ diagnostics, never substituted for task execution results. No Observer or
 kernel change is required, and the parent usage remains parent-only.
 
 Multiple Task calls returned in one response follow the Agent's normal
-unbounded concurrent tool execution. Nested runs use no Observer, preventing
+concurrent tool execution, but every task run, foreground or background, first
+takes a slot from a shared limit (`tools.task.max_concurrent`, default 8) and
+waits for one when all are taken; the wait ends early if its context does.
+Tasks cannot start tasks, so a waiting run never holds a slot another waiting
+run needs. Nested runs use no Observer, preventing
 parallel child progress from interleaving in the terminal; the outer Task
 completion still reports its final result and duration.
 
@@ -536,7 +552,7 @@ confirmed. Command cancellation terminates the Unix process group or Windows
 process tree. Task cancellation is cooperative and remains `cancelling` until
 the nested run observes its context and returns.
 
-Background Tasks have no concurrency limit. They are goroutines in the Dora
+Background Tasks count against the same limit. They are goroutines in the Dora
 process, so they do not survive process exit and any uncollected result is
 lost on forced exit. On graceful session closure, Dora cancels only in-process
 Tasks and waits up to five seconds for their terminal records before flushing

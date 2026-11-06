@@ -8,7 +8,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -158,7 +157,7 @@ func (s *Service) Update(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("download %s: %w", archiveName, err)
 	}
 	actual := sha256.Sum256(archive)
-	if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
+	if !bytes.Equal(actual[:], expected) {
 		return Result{}, fmt.Errorf("checksum verification failed for %s", archiveName)
 	}
 	binary, err := extractBinary(archive, archiveName, binaryName)
@@ -362,25 +361,6 @@ func extractZip(archive []byte, binaryName string) ([]byte, error) {
 }
 
 func replaceExecutable(ctx context.Context, target string, binary []byte, expectedVersion string) error {
-	lockPath := filepath.Join(filepath.Dir(target), ".dora-update.lock")
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return errors.New("another update is in progress; remove .dora-update.lock if no updater is running")
-	}
-	if err != nil {
-		return fmt.Errorf("create update lock: %w", err)
-	}
-	if _, err := fmt.Fprintf(lock, "%d\n", os.Getpid()); err != nil {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
-		return fmt.Errorf("write update lock: %w", err)
-	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return fmt.Errorf("close update lock: %w", err)
-	}
-	defer os.Remove(lockPath)
-
 	info, err := os.Stat(target)
 	if err != nil {
 		return fmt.Errorf("inspect current executable: %w", err)
@@ -394,26 +374,20 @@ func replaceExecutable(ctx context.Context, target string, binary []byte, expect
 		return fmt.Errorf("stage updated executable: %w", err)
 	}
 	stagedPath := staged.Name()
-	cleanupStaged := true
+	_ = staged.Close()
+	installed := false
 	defer func() {
-		if cleanupStaged {
+		if !installed {
 			_ = os.Remove(stagedPath)
 		}
 	}()
-	if err := staged.Chmod(info.Mode().Perm()); err != nil {
-		_ = staged.Close()
-		return fmt.Errorf("set updated executable permissions: %w", err)
-	}
-	if _, err := staged.Write(binary); err != nil {
-		_ = staged.Close()
+	// The staged binary is executed below, so a torn or corrupt write is caught
+	// by validation rather than needing an fsync here.
+	if err := os.WriteFile(stagedPath, binary, 0o600); err != nil {
 		return fmt.Errorf("write updated executable: %w", err)
 	}
-	if err := staged.Sync(); err != nil {
-		_ = staged.Close()
-		return fmt.Errorf("sync updated executable: %w", err)
-	}
-	if err := staged.Close(); err != nil {
-		return fmt.Errorf("close updated executable: %w", err)
+	if err := os.Chmod(stagedPath, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("set updated executable permissions: %w", err)
 	}
 	output, err := exec.CommandContext(ctx, stagedPath, "--version").CombinedOutput()
 	if err != nil {
@@ -438,7 +412,7 @@ func replaceExecutable(ctx context.Context, target string, binary []byte, expect
 		}
 		return fmt.Errorf("install updated executable: %w", err)
 	}
-	cleanupStaged = false
+	installed = true
 	_ = os.Remove(backup)
 	return nil
 }
