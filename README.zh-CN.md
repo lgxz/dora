@@ -515,6 +515,8 @@ tools:
     enabled: false
 ```
 
+同时最多运行四个 task（前台和后台合计），超出的会等待空闲名额；可用 `tools.task.max_concurrent` 调整上限。
+
 ## 图像理解
 
 Dora 将视觉能力视为 model profile 的能力（capability）。能够理解图像的 profile 声明 `capabilities: [text, image_input]`；纯文本模型声明 `capabilities: [text]`。CLI 不提供覆盖或直接附加图片的标志。

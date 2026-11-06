@@ -28,9 +28,9 @@ func buildAgent(cfg config.Config, deps agentDependencies) (*dora.Agent, error) 
 		jobs:     deps.jobs,
 		history:  deps.history,
 		noSkills: deps.noSkills,
-		taskRunner: func(ctx context.Context, instruction string) (string, error) {
+		taskRunner: limitTasks(cfg.Tools.Task.MaxConcurrent, func(ctx context.Context, instruction string) (string, error) {
 			return runTask(ctx, agent, instruction)
-		},
+		}),
 	})
 	if err != nil {
 		return nil, err
@@ -45,6 +45,26 @@ func buildAgent(cfg config.Config, deps agentDependencies) (*dora.Agent, error) 
 		SystemPrompt:        deps.systemPrompt,
 	}, tools...)
 	return agent, err
+}
+
+// limitTasks bounds how many task runs execute at once, foreground and
+// background alike. A run beyond the limit waits for a free slot or for its
+// context to end. Tasks cannot start tasks, so a waiting run never holds a slot
+// that another waiting run needs.
+func limitTasks(limit int, run tasktool.Runner) tasktool.Runner {
+	if limit <= 0 {
+		limit = config.DefaultTaskConcurrency
+	}
+	slots := make(chan struct{}, limit)
+	return func(ctx context.Context, instruction string) (string, error) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return run(ctx, instruction)
+	}
 }
 
 func runTask(ctx context.Context, agent *dora.Agent, instruction string) (string, error) {

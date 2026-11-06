@@ -873,6 +873,10 @@ tools:
     enabled: false
 ```
 
+At most four task runs execute at once, foreground and background together;
+further runs wait for a free slot. Change the limit with
+`tools.task.max_concurrent`.
+
 ## Image understanding
 
 Dora treats vision support as a model-profile capability. A profile that can

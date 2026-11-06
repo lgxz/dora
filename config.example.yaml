@@ -122,3 +122,6 @@ tools:
     # Enabled by default. Set false to prevent delegation into independent
     # conversation contexts.
     # enabled: true
+    # Most task runs that execute at once, foreground and background together.
+    # Further runs wait for a free slot. Default: 4.
+    # max_concurrent: 4

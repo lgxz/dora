@@ -507,6 +507,33 @@ tools:
 	}
 }
 
+func TestLoadTaskMaxConcurrent(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    profiles: [{name: model}]
+tools:
+  task:
+    max_concurrent: 2
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Task.MaxConcurrent != 2 {
+		t.Fatalf("tools.task.max_concurrent = %d, want 2", cfg.Tools.Task.MaxConcurrent)
+	}
+	if _, err := Load(writeConfig(t, `
+providers:
+  - name: deepseek
+    profiles: [{name: model}]
+tools:
+  task:
+    max_concurrent: -1
+`)); err == nil {
+		t.Fatal("negative tools.task.max_concurrent was accepted")
+	}
+}
+
 func providerByName(t *testing.T, cfg Config, name string) Provider {
 	t.Helper()
 	for _, provider := range cfg.Providers {

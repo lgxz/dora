@@ -126,10 +126,16 @@ type PowerShell struct {
 	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
+// DefaultTaskConcurrency is how many Task runs may execute at once when
+// tools.task.max_concurrent is unset.
+const DefaultTaskConcurrency = 4
+
 // Task configures delegation to a fresh Agent turn. Nil Enabled defaults to
-// enabled.
+// enabled. MaxConcurrent bounds simultaneous task runs, foreground and
+// background together; zero means DefaultTaskConcurrency.
 type Task struct {
-	Enabled *bool `yaml:"enabled,omitempty"`
+	Enabled       *bool `yaml:"enabled,omitempty"`
+	MaxConcurrent int   `yaml:"max_concurrent,omitempty"`
 }
 
 // Skills configures local directories containing SKILL.md packages. Skills
@@ -243,6 +249,9 @@ func (cfg *Config) resolveAndValidate() error {
 	}
 	if cfg.Agent.MaxRounds < 0 {
 		return errors.New("agent.max_rounds cannot be negative")
+	}
+	if cfg.Tools.Task.MaxConcurrent < 0 {
+		return errors.New("tools.task.max_concurrent cannot be negative")
 	}
 	for index, directory := range cfg.Skills.Directories {
 		if directory == "" {

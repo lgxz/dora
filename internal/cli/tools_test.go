@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -141,4 +144,91 @@ func TestBuildToolsAlwaysRegistersViewImage(t *testing.T) {
 	if !strings.Contains(toolNames(tools), "view_image") {
 		t.Fatalf("tools = %q, want view_image present", toolNames(tools))
 	}
+}
+
+func TestLimitTasksBoundsConcurrency(t *testing.T) {
+	var running, peak atomic.Int32
+	release := make(chan struct{})
+	run := limitTasks(2, func(context.Context, string) (string, error) {
+		now := running.Add(1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		<-release
+		running.Add(-1)
+		return "ok", nil
+	})
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if result, err := run(context.Background(), "x"); err != nil || result != "ok" {
+				t.Errorf("run = %q, %v", result, err)
+			}
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for running.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // give excess runs the chance to start wrongly
+	if got := running.Load(); got != 2 {
+		t.Fatalf("running = %d, want 2", got)
+	}
+	close(release)
+	wg.Wait()
+	if got := peak.Load(); got != 2 {
+		t.Fatalf("peak concurrency = %d, want 2", got)
+	}
+}
+
+func TestLimitTasksWaitEndsWithContext(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	started := make(chan struct{})
+	run := limitTasks(1, func(ctx context.Context, instruction string) (string, error) {
+		if instruction == "first" {
+			close(started)
+			<-block
+			return "done", nil
+		}
+		t.Error("waiting run executed")
+		return "", nil
+	})
+	go run(context.Background(), "first")
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := run(ctx, "second"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+}
+
+func TestLimitTasksDefaultsWhenUnset(t *testing.T) {
+	var running, peak atomic.Int32
+	release := make(chan struct{})
+	run := limitTasks(0, func(context.Context, string) (string, error) {
+		now := running.Add(1)
+		if now > peak.Load() {
+			peak.Store(now)
+		}
+		<-release
+		running.Add(-1)
+		return "", nil
+	})
+	var wg sync.WaitGroup
+	for range config.DefaultTaskConcurrency + 3 {
+		wg.Add(1)
+		go func() { defer wg.Done(); run(context.Background(), "x") }()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := running.Load(); got != config.DefaultTaskConcurrency {
+		t.Fatalf("running = %d, want %d", got, config.DefaultTaskConcurrency)
+	}
+	close(release)
+	wg.Wait()
 }
