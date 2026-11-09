@@ -123,3 +123,81 @@ func TestTurnRejectsDifferentSystemPromptBinding(t *testing.T) {
 		t.Fatal("expected a different system prompt to be rejected")
 	}
 }
+
+func TestTurnPlacesContextInFrontOfUserInput(t *testing.T) {
+	turn := NewTurn("do the work")
+	if err := turn.bindSystem("system"); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.bindContext("<environment>host</environment>\n\n<run_context>today</run_context>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.bindContext("<environment>host</environment>\n\n<run_context>today</run_context>"); err != nil {
+		t.Fatalf("rebinding the same context: %v", err)
+	}
+	if err := turn.bindContext("<run_context>tomorrow</run_context>"); err == nil {
+		t.Fatal("expected a different context to be rejected")
+	}
+
+	messages := turn.Messages()
+	want := "<environment>host</environment>\n\n<run_context>today</run_context>\n\ndo the work"
+	if len(messages) != 2 || messages[0].Role != RoleSystem || messages[0].Content != "system" ||
+		messages[1].Role != RoleUser || messages[1].Content != want {
+		t.Fatalf("messages = %#v", messages)
+	}
+	// The preamble is not part of what the user typed, so persistence and
+	// history keep the input alone.
+	if turn.User() != "do the work" || turn.Context() == "" {
+		t.Fatalf("user = %q, context = %q", turn.User(), turn.Context())
+	}
+}
+
+func TestTurnWithoutContextKeepsUserInputUnchanged(t *testing.T) {
+	turn := NewTurn("user")
+	if err := turn.bindContext(""); err != nil {
+		t.Fatal(err)
+	}
+	messages := turn.Messages()
+	if len(messages) != 1 || messages[0].Content != "user" {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
+func TestAgentBuildsContextFromAgentAndRun(t *testing.T) {
+	var requests []Request
+	model := modelFunc(func(_ context.Context, request Request) (Response, error) {
+		requests = append(requests, request)
+		return Response{FinishReason: FinishStop, Content: "done"}, nil
+	})
+	agent, err := NewWithConfig(model, AgentConfig{SystemPrompt: "system", Context: "  <environment>host</environment>  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn := NewTurn("task")
+	if err := agent.RunObservedWithOptions(context.Background(), turn, nil, RunOptions{Context: "<run_context>today</run_context>"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || len(requests[0].Messages) != 2 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if got := requests[0].Messages[0].Content; got != "system" {
+		t.Fatalf("system prompt = %q; context must not leak into it", got)
+	}
+	want := "<environment>host</environment>\n\n<run_context>today</run_context>\n\ntask"
+	if got := requests[0].Messages[1].Content; got != want {
+		t.Fatalf("first user message = %q, want %q", got, want)
+	}
+
+	// A run without any context sends the input alone.
+	plain, err := New(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.RunObservedWithOptions(context.Background(), NewTurn("task"), nil, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests[1].Messages[0].Content; got != "task" {
+		t.Fatalf("plain first message = %q", got)
+	}
+}

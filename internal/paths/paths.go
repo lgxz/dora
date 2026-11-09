@@ -27,6 +27,16 @@ func SkillsDir() (string, error) {
 	return filepath.Join(home, "skills"), nil
 }
 
+// SessionsDir returns the directory where Dora stores sessions it saves
+// automatically. It lives at <doraHome>/sessions.
+func SessionsDir() (string, error) {
+	home, err := doraHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "sessions"), nil
+}
+
 // doraHome returns Dora's home directory. It uses the DORA_HOME environment
 // variable when set, otherwise it falls back to $HOME/.dora.
 func doraHome() (string, error) {

@@ -76,9 +76,21 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 
-	sessionStore, err := openSession(ctx, opts.sessionPath)
+	sessionWorkdir := workdir
+	if sessionWorkdir == "" {
+		sessionWorkdir, _ = os.Getwd()
+	}
+	selection, err := selectSession(opts, sessionWorkdir, time.Now())
 	if err != nil {
 		return err
+	}
+	sessionStore, err := openSession(ctx, selection.Path, sessionWorkdir)
+	if err != nil {
+		return err
+	}
+	if selection.Created {
+		// Registered before the session is closed, so it runs after it.
+		defer removeIfEmpty(selection.Path)
 	}
 	jobManager := job.New()
 	agent, err := buildAgent(cfg, agentDependencies{
@@ -86,7 +98,7 @@ func Run(ctx context.Context, args []string, streams IO) error {
 		jobs:         jobManager,
 		history:      sessionStore,
 		noSkills:     opts.noSkills,
-		systemPrompt: systemPrompt(cfg.Agent, time.Now()),
+		systemPrompt: systemPrompt(cfg.Agent),
 	})
 	if err != nil {
 		_ = sessionStore.Close()
@@ -102,7 +114,10 @@ func Run(ctx context.Context, args []string, streams IO) error {
 			fmt.Fprintf(streams.Stderr, "Warning: session cleanup: %v\n", err)
 		}
 	}()
-	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, opts.sessionPath)
+	observer := buildObserver(streams, opts.quiet, opts.reasoning, opts.color, selection.Path)
+	if selection.Notice != "" {
+		info(observer, "%s", selection.Notice)
+	}
 	if observer != nil {
 		selection := model.TextSelection()
 		observer.Model(selection.Provider, selection.Profile, selection.Thinking)

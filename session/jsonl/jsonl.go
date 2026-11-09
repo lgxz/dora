@@ -67,8 +67,26 @@ type turnEntry struct {
 	rounds, attempts  []span
 }
 
+// headerRec is the first line of every session file.
+type headerRec struct {
+	T       string `json:"t"`
+	V       int    `json:"v"`
+	Workdir string `json:"workdir,omitempty"`
+}
+
+// Option configures Open.
+type Option func(*Store)
+
+// WithWorkdir records the directory a new session file belongs to in its
+// header, so that tools can find the sessions of one directory. It has no
+// effect on a file that already exists.
+func WithWorkdir(directory string) Option {
+	return func(s *Store) { s.workdir = directory }
+}
+
 // Store is a JSONL-backed session store.
 type Store struct {
+	workdir string // written to the header of a new file
 	mu      sync.Mutex
 	file    *os.File // nil for an in-memory store
 	mem     []byte   // contents of an in-memory store
@@ -81,7 +99,7 @@ type Store struct {
 
 // Open opens or creates the JSONL session file at path and locks it for this
 // process.
-func Open(ctx context.Context, path string) (*Store, error) {
+func Open(ctx context.Context, path string, options ...Option) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("session path is required")
 	}
@@ -103,6 +121,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open session: %w", err)
 	}
 	s := &Store{file: file, writeAt: file.WriteAt}
+	for _, option := range options {
+		option(s)
+	}
 	if err := s.load(); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("load session %q: %w", absolute, err)
@@ -153,7 +174,11 @@ func (s *Store) usable() error {
 }
 
 func (s *Store) writeHeader() error {
-	return s.appendLocked([]byte(fmt.Sprintf(`{"t":%q,"v":%d}`+"\n", recHeader, formatVersion)), true)
+	line, err := json.Marshal(headerRec{T: recHeader, V: formatVersion, Workdir: s.workdir})
+	if err != nil {
+		return err
+	}
+	return s.appendLocked(append(line, '\n'), true)
 }
 
 // load replays an existing file into the index. A torn last line is cut off.
@@ -215,12 +240,13 @@ func checkHeader(line []byte) error {
 // Wire records.
 
 type turnRec struct {
-	T      string    `json:"t"`
-	ID     int64     `json:"id"`
-	Parent int64     `json:"parent,omitempty"`
-	System string    `json:"system,omitempty"`
-	User   string    `json:"user"`
-	At     time.Time `json:"at"`
+	T       string    `json:"t"`
+	ID      int64     `json:"id"`
+	Parent  int64     `json:"parent,omitempty"`
+	System  string    `json:"system,omitempty"`
+	Context string    `json:"context,omitempty"` // preamble shown to the model in front of User
+	User    string    `json:"user"`
+	At      time.Time `json:"at"`
 }
 
 type roundRec struct {
@@ -606,7 +632,7 @@ func (w *turnWriter) save(ctx context.Context, status session.TurnStatus, result
 	if id == 0 {
 		id = int64(len(s.turns)) + 1
 		system = w.turn.System()
-		batch.add(turnRec{T: recTurn, ID: id, Parent: w.parentID, System: system, User: w.turn.User(), At: now})
+		batch.add(turnRec{T: recTurn, ID: id, Parent: w.parentID, System: system, Context: w.turn.Context(), User: w.turn.User(), At: now})
 	}
 	for i := w.attempts; i < len(attempts); i++ {
 		batch.add(attemptRec{T: recAttempt, Turn: id, Index: i, Record: attempts[i]})

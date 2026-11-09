@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
+	"github.com/lgxz/dora/skill"
 )
 
 func TestBuildObserverColorMode(t *testing.T) {
@@ -88,24 +88,49 @@ func TestParseModelSpec(t *testing.T) {
 	}
 }
 
-func TestSystemPromptAppendsEnvironment(t *testing.T) {
-	// The local date differs from UTC to catch accidental UTC conversion.
-	startedAt := time.Date(2026, 9, 10, 0, 30, 0, 0, time.FixedZone("local", 2*60*60))
-	suffix := "\n\n<runtime_environment>\nOS: " + runtime.GOOS +
-		"\nArchitecture: " + runtime.GOARCH +
-		"\nAgent start date (local): 2026-09-10\n</runtime_environment>"
+func TestSystemPromptHasNoHostFacts(t *testing.T) {
+	// The system prompt and the tool definitions form the cacheable request
+	// prefix, so nothing that depends on the machine, the skills or the date
+	// may appear in them.
 	for _, tc := range []struct {
-		name, configured, base string
+		name, configured, want string
 	}{
 		{"default", "", strings.TrimSpace(defaultSystemPrompt)},
 		{"whitespace", " \n ", strings.TrimSpace(defaultSystemPrompt)},
 		{"custom", "  You are a pirate.  ", "You are a pirate."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := systemPrompt(config.Agent{SystemPrompt: tc.configured}, startedAt); got != tc.base+suffix {
-				t.Fatalf("system prompt = %q, want %q", got, tc.base+suffix)
+			if got := systemPrompt(config.Agent{SystemPrompt: tc.configured}); got != tc.want {
+				t.Fatalf("system prompt = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentContextListsHostThenSortedSkills(t *testing.T) {
+	root := t.TempDir()
+	writeCLITestSkill(t, root, "beta")
+	writeCLITestSkill(t, root, "alpha")
+	skills, err := skill.New(skill.Config{Directories: []string{root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutSkills := agentContext(nil)
+	host := "<environment>\nOS: " + runtime.GOOS + "\nArchitecture: " + runtime.GOARCH
+	if withoutSkills != host+"\n</environment>" {
+		t.Fatalf("context without skills = %q", withoutSkills)
+	}
+
+	got := agentContext([]dora.Tool{skills})
+	alpha := strings.Index(got, "- alpha: Test skill alpha.")
+	beta := strings.Index(got, "- beta: Test skill beta.")
+	if !strings.HasPrefix(got, host+"\n\n") || !strings.HasSuffix(got, "\n</environment>") ||
+		alpha < 0 || beta < 0 || alpha > beta {
+		t.Fatalf("context with skills = %q", got)
+	}
+	if strings.Contains(got, "Date") || strings.Contains(got, "Working directory") {
+		t.Fatalf("context holds per-run facts: %q", got)
 	}
 }
 

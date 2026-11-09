@@ -323,7 +323,13 @@ agent:
     优先使用 /opt/acme 下的部署脚本。
 ```
 
-Dora 会在默认提示词和自定义提示词之后追加一个 `runtime_environment` 块，包含操作系统、架构以及 Agent 的本地启动日期（不含时间）。这份快照在 Agent 的整个生命周期（包括子任务）内保持不变，在启动时捕获。长时间运行的 Agent 不会在跨午夜时刷新日期。
+系统提示词和工具定义不会随机器、技能或日期变化，因此模型服务商或本地推理服务可以把它们作为一段稳定的请求前缀来缓存。会变化的内容放在任务前面、第一条 user 消息里，按变化频率从低到高排列：
+
+1. `<environment>` 块：操作系统、架构，以及可用技能列表（按名称排序）；
+2. `<run_context>` 块：本地日期和工作目录，在每个 turn 开始时捕获；
+3. 你的提示词。
+
+子任务与父任务使用相同的 `<environment>` 块。会话文件把你的提示词和这段上下文分开记录。
 
 运行一次性提示，或将指令与管道输入结合：
 
@@ -350,9 +356,9 @@ git diff | ./dora "Review this change"
 
 推理模型会在最终答案前输出思维链。由于向终端流式输出思维链会在慢速终端上拖慢执行，Dora 默认将其隐藏；传入 `--reasoning` 可以暗色样式实时显示，在终端中替代 `Thinking...` 占位行。最终答案仍在 stdout 上另起一行输出，`--quiet` 会连同其它进度一并隐藏推理显示。
 
-当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前会话中，并由 history 工具返回；没有 `--session` 时，会话在内存中，随 Dora 退出而消失。
+当提供商报告 token 用量时，Dora 会记录每个完成的模型轮次的用量，并在可用时包含缓存和推理 token 的明细。终端渲染器不打印用量。每轮用量和最终响应用量保存在当前会话中，并由 history 工具返回；默认每次运行都会保存为会话文件（见下文“会话”）。
 
-如需机器可读的运行记录，传入 `--session PATH`：该 JSON Lines 文件包含 system 和 user 消息、每个已完成的轮次，以及每次模型尝试及其用量（见下文“会话”）。子任务和图片工具的模型调用保存为独立的子 turn。
+每次运行也都会记录到一个会话文件，默认位于 `~/.dora/sessions`；传入 `--session PATH` 可指定文件。该 JSON Lines 文件包含 system 和 user 消息、每个已完成的轮次，以及每次模型尝试及其用量（见下文“会话”）。子任务和图片工具的模型调用保存为独立的子 turn。
 
 使用 `--workdir` 可以指定工具解析相对路径时使用的基准目录：
 
@@ -392,12 +398,18 @@ policy:
 
 ### 会话
 
-传入一个会话文件（JSON Lines，惯例扩展名 `.jsonl`），可以跨多次 CLI 调用保留 turns：
+Dora 会把每次运行保存为会话文件（JSON Lines），因此任务结束后仍可以继续追问。不带任何选项时，一次运行会在 `~/.dora/sessions`（设置了 `DORA_HOME` 时为 `DORA_HOME/sessions`）中新建一个会话，文件名由启动时间和一小段随机后缀组成，例如 `20261108-205803-a1b2c3.jsonl`；进度输出会显示这个路径。去掉 `.jsonl` 的文件名就是会话 ID。
 
 ```sh
-./dora -s ./system-status.jsonl "Analyze this machine's system status"
-./dora -s ./system-status.jsonl "Continue with the busiest processes"
+./dora "Analyze this machine's system status"
+./dora --continue "Continue with the busiest processes"   # 也可写 -c：继续当前目录最近一次会话
+./dora --list-sessions                                      # 列出最近会话：ID、最近使用时间、目录、首条提示词
+./dora --session 20261108-2058 "Why did you check the disk first?"   # 会话 ID 或其唯一前缀
+./dora --session ./system-status.jsonl "Keep going"         # 任意文件路径；不存在时创建
+./dora --no-session "A one-off question"                    # 不保存，只保留在内存中
 ```
+
+`--session` 的参数如果包含路径分隔符，或者是当前目录里已有的文件名，就按路径处理；其他名字按已保存会话的 ID 或其唯一前缀处理，前缀有歧义时会报错并列出候选。不匹配任何会话、且以 `.jsonl` 结尾的单独文件名，仍表示当前目录里的新文件。`--continue` 选择为当前工作目录创建的、最近使用过的会话；没有时新建一个。`--list-sessions` 显示最近使用的 20 个会话。Dora 不会自动删除旧会话，请自行定期清理该目录。无法创建会话目录时，本次运行改在内存中进行并给出提示。一次运行在没有保存任何 turn 的情况下结束时，会删除它新建的空文件。
 
 每次调用都是一个全新且独立的 turn，历史消息不会自动装入模型上下文。Dora 始终提供 `history` 工具，包括第一个 turn 之前：模型可以用 `list` 列出 turns 及各自的状态、错误、round 数量和最终响应 usage，再用 `turn_id`、`offset`、`limit` 按时间顺序分页 `get` rounds；空会话会返回空列表。一个 round 是一条 assistant tool-call 消息、对应的全部 tool 结果消息及该次模型调用的可选 usage。成功完成的 turn 会原子追加。因达到最大 rounds 而停止的 turn 也会以 `max_rounds` 状态保存，包含其错误和全部已完成的工具 rounds，但没有最终结果和最终响应 usage。Ctrl+C（`SIGINT`）和 `SIGTERM` 造成的取消以 `canceled` 状态保存；Dora 使用单独的短时提交上下文，使取消运行不会同时取消它的会话写入。其他失败的 turn 以 `failed` 状态保存。两者都会保留错误、完整的工具 rounds 以及单独的模型尝试审计记录，包括输出受限的响应。传输故障可能没有响应内容或 usage。确认交互式继续提示会继续使用同一个 Turn，不会保存中间的 `max_rounds` 记录。Provider continuation 只在该 turn 运行期间保留。
 
@@ -409,7 +421,7 @@ timeout --kill-after=10s 300s dora --session session.jsonl "Your task"
 
 最初的 `SIGTERM` 请求取消；额外的十秒用于在 `SIGKILL` 之前完成清理。父 turn 存储和每个子任务历史的写入各有五秒预算；后台 Task 的关闭也可能再等待五秒。取消缓慢或子任务历史清理可能需要更长的宽限期。`SIGKILL` 无法被处理，可能丢失当前 turn。只会保留完整的工具 rounds 和可用的模型尝试记录，不保留未完成的流式文本。
 
-指定 `--session` 时，文件是只追加的 JSON Lines 日志：一行 header，随后是 `turn`、`round`、`attempt` 和 `end` 记录，合起来记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、附带的图片引用、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON、结束元数据、最终推理和报告的总用量。存储的 `GetAttempts` API 与对话 rounds 分开，单独分页读取审计记录。新文件权限为 `0600`。一个会话文件同一时间只属于一个 Dora 进程：第二个进程打开同一文件会报错 “in use”（在支持文件锁的平台上）。旧的 SQLite 和 JSON 会话、`--fresh` 以及自动迁移均不支持（这类文件会被原样拒绝，请新建文件）。崩溃留下的写了一半的最后一行，会在下次打开文件时丢弃。每个完整的工具 round 在 turn 运行期间就会保存，因此崩溃或强制退出时仍会保留已完成的 rounds；这样被打断的 turn 会停留在 `running` 状态，正在进行的那个 round 会丢失。Dora 不会恢复被中断的 turn。省略 `--session`/`-s` 时，Dora 会在当前进程内把会话保存在内存中；这让长驻模式可以保留此前 turns，而普通单次 CLI 调用仍是临时的。Session 文件可能包含命令、工具输出及 token 使用信息，因此请将持久化文件视为敏感内容。
+会话文件是只追加的 JSON Lines 日志：一行 header（格式版本，以及 Dora 新建的文件里记录的工作目录），随后是 `turn`、`round`、`attempt` 和 `end` 记录，合起来记录 turn 状态和错误、system prompt、用户输入、最终结果、中间工具 rounds、附带的图片引用、round assistant 消息上捕获的推理，以及每次模型调用的 usage JSON、结束元数据、最终推理和报告的总用量。存储的 `GetAttempts` API 与对话 rounds 分开，单独分页读取审计记录。新文件权限为 `0600`。一个会话文件同一时间只属于一个 Dora 进程：第二个进程打开同一文件会报错 “in use”（在支持文件锁的平台上）。旧的 SQLite 和 JSON 会话、`--fresh` 以及自动迁移均不支持（这类文件会被原样拒绝，请新建文件）。崩溃留下的写了一半的最后一行，会在下次打开文件时丢弃。每个完整的工具 round 在 turn 运行期间就会保存，因此崩溃或强制退出时仍会保留已完成的 rounds；这样被打断的 turn 会停留在 `running` 状态，正在进行的那个 round 会丢失。Dora 不会恢复被中断的 turn。使用 `--no-session` 时，Dora 只在当前进程内把会话保存在内存中，运行结束后不留任何文件。Session 文件可能包含命令、工具输出及 token 使用信息，因此请将它们视为敏感内容。
 
 使用 `--config`、`-m`/`--model`、`--thinking`、`--max-rounds` 或 `--no-skills` 可为一次调用覆盖相应的配置。
 
@@ -452,7 +464,7 @@ skills:
 
 每个配置的路径必须是绝对路径或 `~/` 开头。相对路径会被拒绝。配置目录会转换为绝对形式并去重；它们完全按所列内容使用，不会与默认目录合并。使用 `--no-skills` 可为一次调用禁用所有技能来源；它优先于 `skills.directories`。
 
-Dora 仅在 `skill` 工具 schema 中公布技能名称和描述。当模型调用该工具时，会返回技能的绝对目录和完整的 `SKILL.md`，从而允许指令引用诸如 `scripts/check.sh` 之类的文件。技能工具从不执行这些文件；执行仍然需要一个已启用的工具（如 Bash）。名称必须包含小写字母、数字和连字符，并且必须与其目录名匹配。会拒绝重复的名称。缺失或为空的默认目录只会让该工具保持禁用；畸形的已发现技能和缺失的显式配置目录则属于错误。
+Dora 只在任务前面的 `<environment>` 块中列出技能名称和描述，`skill` 工具的 schema 本身保持不变。当模型调用该工具时，会返回技能的绝对目录和完整的 `SKILL.md`，从而允许指令引用诸如 `scripts/check.sh` 之类的文件。技能工具从不执行这些文件；执行仍然需要一个已启用的工具（如 Bash）。名称必须包含小写字母、数字和连字符，并且必须与其目录名匹配。会拒绝重复的名称。缺失或为空的默认目录只会让该工具保持禁用；畸形的已发现技能和缺失的显式配置目录则属于错误。
 
 ## 发布（Releasing）
 

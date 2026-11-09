@@ -81,7 +81,7 @@ Key constraints on dependency direction:
 | `internal/capstr` | UTF-8-safe head-and-tail truncation of large strings around a marker | `HeadTail` |
 | `internal/config` | Strict reading, parsing, and validation of YAML configuration | `Load(string)` |
 | `internal/imagefile` | Validates local image files and encodes them as data URLs | `Validate`, `DataURL` |
-| `internal/paths` | Resolves Dora's default configuration and skill paths | `ConfigFile`, `SkillsDir` |
+| `internal/paths` | Resolves Dora's default configuration, skill and session paths | `ConfigFile`, `SkillsDir`, `SessionsDir` |
 | `session` | Defines saved-turn history contracts and query records | `Reader`, `Store` |
 | `session/jsonl` | Saves turns to a user-selected JSON Lines file as they run (`running`) and finalizes them as completed, maximum-round, failed, or canceled | `Open`, `Store.BeginTurn` (`TurnWriter.Sync`, `TurnWriter.Finish`), `Store.CommitChild`, `Store.ListTurns`, `Store.GetRounds` |
 | `internal/update` | Queries stable Releases, validates archives, and replaces the standalone binary with rollback | `New`, `Service.Update` |
@@ -91,7 +91,7 @@ Key constraints on dependency direction:
 | `model/openairesponses` | Responses API, SSE stream, and provider continuation adapter | `New`, `Client.GenerateStream` |
 | `model/registry` | Catalog registration/query (order = priority) and per-protocol adapter construction | `NewCatalog`, `Catalog.Providers`, `Construct` |
 | `model/router` | Constraint-based selection, `dora.Model` routing with caching; internal `selection` | `New`, `Router.Generate`, `Router.GenerateStream`, `Router.View`, `Router.SetThinking`, `Router.TextSelection` |
-| `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool` |
+| `skill` | Discovers and validates local `SKILL.md`, returns full instructions to the model on demand | `New`, returns `dora.Tool`; `Catalog` returns the model-visible skill list |
 | `tool/bash` | Executes Bash within the current directory with background transition and output-limit constraints | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/powershell` | Executes PowerShell using `pwsh` or `powershell.exe` | `New`, `Tool.Spec`, `Tool.Execute` |
 | `tool/file` | `read`, `write`, `edit`, `grep` and `glob` with per-file locking and atomic replacement | `NewReadTool`, `NewWriteTool`, `NewEditTool`, `NewGrepTool`, `NewGlobTool` |
@@ -201,7 +201,11 @@ result, complete := turn.Result()
 
 `Turn` is the Agent's mutable run state. It is constructed from one user input.
 On its first run, the Agent binds a snapshot of its immutable system prompt to
-the Turn; an empty prompt omits the system message. The Turn then appends only
+the Turn; an empty prompt omits the system message. It also binds a context
+preamble, the Agent's `AgentConfig.Context` followed by `RunOptions.Context`
+(blank-line separated, empty parts omitted), which `Messages` places in front of
+the user input inside the first user message. `Turn.User` keeps returning the
+input alone, and `Turn.Context` returns the preamble. The Turn then appends only
 complete rounds and ends with a final assistant result without tool calls. A
 round contains one assistant message with one or more tool calls, all
 corresponding tool messages in call order, and the optional usage reported for
@@ -243,7 +247,7 @@ sequenceDiagram
 
 Current execution semantics:
 
-- The Agent is immutable and owns the system prompt; mutable messages, the bound system-prompt snapshot, and continuation belong to the supplied Turn.
+- The Agent is immutable and owns the system prompt and the static context; mutable messages, the bound system-prompt snapshot, the bound context preamble, and continuation belong to the supplied Turn.
 - A run may exclude tools without mutating the Agent; excluded tools are neither advertised nor executable for that run.
 - Input messages, tool calls, and output state are all defensively copied.
 - Tool packages translate tool-specific output conventions into `ToolResult`; the Agent only forwards its content and images into the provider-neutral message history.
@@ -253,7 +257,7 @@ Current execution semantics:
 - Output-limited responses are retained only in `Turn.Attempts`, never in conversation history. `AgentConfig.OutputLimitRecovery == nil` enables one additional request with twice the effective output budget, clamped to configured/model capacity and remaining context. An explicit zero-retry policy disables recovery. Unknown budgets, no room to increase, exhausted retries, empty final text, blocked output, or unknown finish reasons return identifiable errors. Retry history and continuation remain at the last complete exchange; the retry request alone ends with a user note saying the previous reply was cut off and discarded and asking for brief reasoning, because a larger budget by itself lets runaway reasoning run away again (the note is never stored in the turn history). Cancellation also stops recovery. The adapter maps Chat `length` and Responses `incomplete/max_output_tokens` to `output_limit`; `[DONE]` alone is not a successful semantic finish.
 - A tool execution error, an unknown tool, invalid JSON tool arguments, or a panic inside a tool (recovered and reported as `tool "name" panicked: ...`) does not terminate the task: the Agent feeds the failure back to the model as a `tool` message so the model can correct itself, and continues the loop. A tool itself may choose to encode a command failure as a normal result. For example, Bash returns a non-zero exit code to the model rather than terminating the Agent directly.
 - If the model keeps calling tools, reaching `MaxRounds` returns `ErrMaxRounds`; the completed rounds remain in the same Turn. The CLI may call the Agent again with that Turn after interactive confirmation. Continuing does not persist an intermediate record. Declining or a non-interactive failure persists the Turn with status `max_rounds` when a session is configured; non-interactive runs still report the error directly.
-- The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The CLI appends a `runtime_environment` block with `runtime.GOOS`, `runtime.GOARCH`, and the local Agent start date (`YYYY-MM-DD`, without time) to either prompt. It captures the date at CLI startup and keeps it fixed for the Agent lifetime, including child tasks; it does not refresh across midnight. Environment collection remains outside the kernel. Each Turn receives a snapshot from that Agent when it starts. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
+- The CLI constructs the Agent with the configured `agent.system_prompt` (which fully replaces the built-in default) or, when unset, the default embedded at `internal/cli/prompts/default_system.md`. The system prompt and the tool definitions depend only on the Dora version and the configuration, never on the host, the installed skills or the date, so providers and local servers can cache them as one request prefix. Everything else travels in a context preamble in front of the user input, from the least to the most volatile: `AgentConfig.Context`, built once by the CLI as an `<environment>` block with `runtime.GOOS`, `runtime.GOARCH` and the skills catalog (`skill.Catalog`, sorted by name), then `RunOptions.Context`, built per run by `app.RunContext` as a `<run_context>` block with the local date (`YYYY-MM-DD`, without time) taken when the turn starts and the working directory (the process directory when `--workdir` is unset). A child task builds its own `<run_context>` from the parent's working directory and shares the Agent's `<environment>`, so it reuses the parent's cached prefix up to that point. Each Turn receives snapshots of the system prompt and the preamble when it starts; rerunning a Turn after `ErrMaxRounds` uses the same ones. Because the preamble is part of the first user message, compaction re-attaches it with the verbatim task. Environment collection remains outside the kernel. Session-history behavior is described by the history tool itself rather than duplicated in the system prompt.
 - Before each normal model request, the Agent predicts context occupancy and leaves the history untouched until the prediction, including an output reserve, reaches 80% of the model-reported `contextWindow`. The estimate anchors on the previous normal call's real `total_tokens`, which already includes that request's tool schema and assistant response, then adds only tool results produced afterwards. Without reported usage it estimates the complete model-visible history and tool schemas using about four ASCII bytes or one non-ASCII rune per token plus a small framing allowance; vision tokens remain provider-specific and unestimated. At the threshold, the Agent calls the active model with the complete model-visible history plus a summary instruction, carrying the same tool schemas as normal requests (so a provider-side prompt cache can serve the shared prefix; chat templates render the schemas into the system prompt, so a request without them would be recomputed from the first token) but no opaque continuation. The instruction tells the model not to call tools, and a response that does is retried like an empty one. The replacement summary must be non-empty, contain no tool calls, and fit within 20% of the context window, capped further by the model's optional hard output capacity. The effective target is attached to the summary `Request` as `MaxOutputTokens`, overriding the model profile's ordinary per-response `max_tokens`; adapters defensively clamp it to the hard capacity again. An oversized, empty, tool-calling or output-limited (cut off) summary gets one stricter retry that asks for half the budget while the hard output cap stays unchanged, because a too-long summary normally shows up as being cut off at the cap; any other invalid response is rejected at once. The summary request is also sized against the context window: the calibrated input estimate (including the tool schemas), a prompt allowance and a 5% margin are subtracted from the window, and when the target does not fit, tool results larger than a cap are shortened (head and tail with a marker; 32, 16, 8, 4, 2 then 1 KiB, stopping at the first cap that makes room) in a copy used only for that request, and the output budget is lowered to the room that remains but not below the lesser of the target and 1024 tokens. The request is never refused locally on these heuristics; the provider decides with exact counts. The history itself is never modified, and the compaction notice says how many tool results were shortened for the request. Only a validated summary atomically replaces the model-visible history. The result is the leading system messages, one user message holding the original task verbatim followed by the summary, and then the most recent rounds verbatim. The task is capped at 5% of the window (head and tail around a marker; the summarizer still sees all of it) and is taken from the `Turn`, not from the first message of the current model-visible history, so repeated compactions never nest an earlier summary message; task images are carried over. The verbatim tail is built from whole rounds, newest first, while they fit 10% of the window: an assistant message is never separated from its tool results, the oldest round is never part of the tail so something always remains to summarize, and a newest round larger than the budget is summarized instead of kept. The summary request contains everything before the tail, and the tail's estimate is subtracted from the request's input estimate. **Context overflow recovery.** `provider.APIError` classifies a 400, 413 or 422 whose error code/type or message carries a known context-window phrase (`context_length_exceeded`, "maximum context length", "prompt is too long", ...) as `dora.ContextLengthError`, which matches `dora.ErrContextLength` through `errors.Is` and is not retryable as-is; the Responses client classifies `response.failed` and `error` stream events the same way (`provider.StreamError`). Rate limits and server errors are never classified, even when their text mentions tokens. When a normal request fails with `ErrContextLength` in a round that was not just compacted, the Agent runs a forced compaction (no trigger check; the history is assumed to fill the window, so the tool-result shortening ladder applies to the summary request), clears the continuation, emits an `UpdateInfo` notice, and retries the request exactly once. If the summary request itself is rejected as too large it is re-planned once with a pessimistic input estimate (50% higher, at least the window) without consuming a summary attempt. A failed forced compaction reports both the provider error and the compaction error; a second overflow, or an overflow right after a proactive compaction, ends the run with the provider's error.
 
 The capacity check returns a `CompactionResult` containing the selected history, whether compaction succeeded, predicted token counts before and after the attempt, summary tokens, context/trigger/target token limits, the number of summary attempts, the number of messages kept verbatim, and whether the task was shortened. Failure aborts the run without deleting or locally truncating messages, while preserving the available attempt statistics for diagnostics. The complete `Turn` remains unabridged for persistence. Because provider continuation state belongs to the replaced message history, successful compaction clears it before the next normal request; subsequent rounds continue from the new continuation returned for the summarized history. Successful compaction emits one `UpdateInfo` notification with the before/after predicted token counts, without exposing summary streaming deltas.
@@ -266,10 +270,10 @@ The capacity check returns a `CompactionResult` containing the selected history,
 2. Resolve and load the default or explicit configuration and validate one-shot model/thinking/round overrides.
 3. Normal CLI mode requires the model router immediately.
 4. For a normal Agent run, validate `--workdir` and compose the user prompt from command arguments and standard input.
-5. Open the active session: the file selected by `--session`, or an in-memory store when the option is omitted. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
+5. Open the active session, selected by `selectSession` (`internal/cli/sessions.go`): an in-memory store for `--no-session`; the file or saved-session ID given to `--session`; the newest saved session of the working directory for `--continue`; otherwise a new file in the sessions directory (`paths.SessionsDir`). The working directory is recorded in the header of a new file. Register a history tool backed by its Reader interface from the first turn; never load old turns into the model request.
 6. Report the resolved conversation provider/profile and thinking configuration on stderr unless `--quiet` is active. An unset thinking configuration is displayed as `default`.
 7. Discover skills and create the other available tools according to configuration.
-8. Add the default-enabled task tool, construct an immutable `dora.Agent`, and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
+8. Add the default-enabled task tool, construct an immutable `dora.Agent` (with the system prompt and the `<environment>` context), and wrap it with its Store, JobManager, and working directory in `internal/app.Session`.
 9. `app.Session.Prompt` runs and persists the fresh Turn. The CLI supplies a continuation callback only for an interactive `ErrMaxRounds` prompt. Each complete tool round is saved as soon as it finishes, through `RunOptions.OnRound` and a `session.TurnWriter`, with the turn row in status `running`; a failed progress save only emits one `UpdateInfo` warning and the run continues, because the writer re-saves anything missing later. At the end the same row is finalized: `completed`; maximum rounds `max_rounds`; context cancellation `canceled`; other errors `failed`. The terminal save runs on a detached five-second commit context, so a cancellation racing the run-to-store transition cannot discard a terminal turn. A failing terminal save is tried up to three times (the writer is safe to retry; the wait starts at 200 ms and doubles) to ride out brief contention on the session file; if it still fails, the prompt returns a `PersistenceError`. A completed turn is never lost with it: the returned `PromptResult` still carries `Completed` and `Content`, and the CLI writes the answer to stdout before exiting with the error, so a one-shot run keeps its answer even though the turn is not in the history. The rounds saved earlier remain in the store with status `running`.
 10. The terminal frontend writes completed text to stdout.
 
@@ -379,10 +383,15 @@ key mechanism resolves `AZURE_API_KEY` when the configured name is `azure`.
 ## Session
 
 The `session` package is a provider-neutral persistence contract. The CLI's
-concrete implementation is `session/jsonl`; `--session`/`-s` selects a
-persistent JSON Lines file, while omitting it creates an in-memory store
-for the process lifetime. There is no default session directory and no
-automatic loading of prior messages. The file is single-writer: it is locked
+concrete implementation is `session/jsonl`. By default a run writes a new
+JSON Lines file under `<doraHome>/sessions` (named by local start time plus a
+random suffix, so the file name without extension is the session ID);
+`--session` selects an existing file or ID, `--continue` the newest session of
+the working directory, and `--no-session` an in-memory store that lives for the
+process. If the directory cannot be created the run falls back to memory, and a
+run that ends with no saved turn removes the file it created. Dora never deletes
+other sessions. Prior messages are never loaded automatically; the `history` tool
+reads them, and the run context says when earlier turns exist. The file is single-writer: it is locked
 exclusively while open, so a second dora process pointed at the same file fails
 to start instead of interleaving records.
 
@@ -390,8 +399,9 @@ The session file is an append-only JSON Lines log. Its first line is a header
 (`{"t":"header","v":1}`); every later line is one record tagged by `t`:
 
 - `turn`: a turn starts. It carries the sequential turn `id`, an optional
-  `parent` (the main turn of a child task), the plain-text `system` and `user`
-  prompts, and the time;
+  `parent` (the main turn of a child task), the plain-text `system` prompt,
+  the `context` preamble shown in front of the user input (omitted when empty),
+  the `user` prompt, and the time;
 - `round`: one complete assistant/tool round, keyed by `turn` and the round
   index `i`. Tool calls store their arguments as base64 `input_bytes` rather
   than embedded JSON, preserving all original bytes, including invalid JSON and
@@ -409,7 +419,7 @@ The session file is an append-only JSON Lines log. Its first line is a header
 
 A turn with no `end` record is reported as `running`: it was interrupted before
 it finished (or belongs to a live process still working on it; Dora does not try
-to tell the two apart). Opening the file replays it into an in-memory index of
+to tell the two apart). `jsonl.ReadInfo` reads only the header (format version and optional `workdir`) and the first turn without taking the lock, which is how `--list-sessions` and `--continue` find sessions. Opening the file replays it into an in-memory index of
 turns and the byte range of every round and attempt line, so listing turns costs
 no message decoding and `GetRounds`/`GetAttempts` read only the requested
 lines from disk. Replay checks that turn IDs are sequential, every record names
@@ -460,7 +470,7 @@ deliberately not implemented.
 
 ## Skills
 
-A skill is a tool, not text spliced directly into the prompt at startup. This way the model initially sees only the skill name and description, and only calls the `skill` tool to load the full content after deciding it is relevant.
+A skill is a tool, not text spliced directly into the prompt at startup. This way the model initially sees only the skill name and description, and only calls the `skill` tool to load the full content after deciding it is relevant. The names and descriptions are listed in the `<environment>` block in front of the task (`skill.Catalog`), not in the tool definition: the `skill` tool description is fixed text, so adding or removing a skill does not invalidate the cacheable system-prompt and tool-definition prefix.
 
 By default, `~/.dora/skills` (or `DORA_HOME/skills`) is discovered first, followed by `~/.agents/skills/`. Each default directory is included only when it exists as a directory; an absent default is silently skipped. When `skills.directories` is configured, the defaults are replaced by exactly those directories (each must be an absolute path or start with `~/`). All resulting paths are converted to absolute form and deduplicated; `--no-skills` takes precedence over all sources and disables skills entirely. Each direct subdirectory must contain a valid `SKILL.md`:
 
@@ -511,7 +521,7 @@ Bash and PowerShell remain separate public tools with separate shell-launch poli
 Task is enabled by default and can be disabled with
 `tools.task.enabled: false`. Its single `instruction` is executed using the same immutable Agent
 and model but a fresh Turn, so parent messages and provider continuation are
-not inherited. The nested run binds the same Agent system prompt and uses
+not inherited. The nested run binds the same Agent system prompt and `<environment>` context, adds its own `<run_context>`, and uses
 `RunObservedWithOptions` to exclude `task` from both
 model-visible definitions and executable tools. All other tools and their
 underlying process, filesystem, working-directory, and permission state remain
@@ -583,6 +593,7 @@ remain strict. The registry and router selection rules are unchanged.
 | --- | --- |
 | Optional configuration | `~/.dora/config.yaml` |
 | Skills | `~/.dora/skills` |
+| Sessions | `~/.dora/sessions` |
 
 The `DORA_HOME` environment variable can override the home directory and must be an absolute path. An explicit `--config` does not depend on the default configuration path and can fully override it.
 

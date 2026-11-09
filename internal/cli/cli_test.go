@@ -25,6 +25,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Runs save their session automatically, so keep that out of the real home.
+	doraHome, err := os.MkdirTemp("", "dora-cli-test-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("DORA_HOME", doraHome)
 	_ = os.Setenv("OPENAI_API_KEY", "test-key")
 	_ = os.Setenv("DEEPSEEK_API_KEY", "")
 	_ = os.Setenv("TRUST_API_KEY", "")
@@ -34,7 +40,9 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("DORA_POLICY_TEXT_PROFILE", "")
 	_ = os.Setenv("DORA_POLICY_IMAGE_PROVIDER", "")
 	_ = os.Setenv("DORA_POLICY_IMAGE_PROFILE", "")
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(doraHome)
+	os.Exit(code)
 }
 
 func TestRunCallsConfiguredModel(t *testing.T) {
@@ -863,7 +871,7 @@ func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
 	t.Setenv("DORA_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	var calls int
-	var parentSystem string
+	var parentSystem, parentContext string
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		var body map[string]any
@@ -882,17 +890,29 @@ func TestRunExecutesTaskInFreshTurnWithoutTaskTool(t *testing.T) {
 		switch calls {
 		case 1:
 			parentSystem = messages[0].(map[string]any)["content"].(string)
-			if !hasTask || len(messages) != 2 || messages[1].(map[string]any)["content"] != "parent request" {
+			parentContext = contextPreamble(messages[1])
+			if !hasTask || len(messages) != 2 || userInput(messages[1]) != "parent request" {
 				t.Fatalf("parent request tools/messages = %#v / %#v", tools, messages)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-task","type":"function","function":{"name":"task","arguments":"{\"instruction\":\"inspect independently\"}"}}]}}]}`), nil
 		case 2:
-			if hasTask || len(messages) != 2 || messages[1].(map[string]any)["content"] != "inspect independently" {
+			if hasTask || len(messages) != 2 || userInput(messages[1]) != "inspect independently" {
 				t.Fatalf("subagent request tools/messages = %#v / %#v", tools, messages)
 			}
 			system := messages[0].(map[string]any)["content"].(string)
-			if system != parentSystem || !strings.Contains(system, "<runtime_environment>") {
-				t.Fatalf("subagent system prompt = %q, want Agent system prompt", system)
+			if system != parentSystem || strings.Contains(system, "<environment>") || strings.Contains(system, "<run_context>") {
+				t.Fatalf("subagent system prompt = %q, want the unchanged Agent system prompt", system)
+			}
+			// The subagent shares the parent's environment block, so only the
+			// run context may differ between the two requests.
+			environment := func(preamble string) string {
+				before, _, _ := strings.Cut(preamble, "</environment>")
+				return before
+			}
+			childContext := contextPreamble(messages[1])
+			if !strings.HasPrefix(childContext, "<environment>\nOS: ") || !strings.Contains(childContext, "<run_context>\nDate (local): ") ||
+				environment(childContext) != environment(parentContext) {
+				t.Fatalf("subagent context = %q, parent context = %q", childContext, parentContext)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"child result"}}]}`), nil
 		case 3:
@@ -965,7 +985,7 @@ func TestRunStartsBackgroundTaskAndPollsResult(t *testing.T) {
 			t.Fatal(err)
 		}
 		messages := body["messages"].([]any)
-		userContent := messages[1].(map[string]any)["content"]
+		userContent := userInput(messages[1])
 		switch userContent {
 		case "background work":
 			for _, raw := range body["tools"].([]any) {
@@ -1513,8 +1533,11 @@ func TestRunLoadsSkillFromDoraHome(t *testing.T) {
 					break
 				}
 			}
-			if skillFunction == nil || !strings.Contains(skillFunction["description"].(string), "system-status") {
-				t.Fatalf("tools = %#v", tools)
+			if skillFunction == nil || strings.Contains(skillFunction["description"].(string), "system-status") {
+				t.Fatalf("skill tool must exist and must not list skills in its description: %#v", tools)
+			}
+			if preamble := contextPreamble(body["messages"].([]any)[1]); !strings.Contains(preamble, "- system-status: ") {
+				t.Fatalf("skill is not listed in the context: %q", preamble)
 			}
 			return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-skill","type":"function","function":{"name":"skill","arguments":"{\"name\":\"system-status\"}"}}]}}]}`), nil
 		case 2:
@@ -1673,8 +1696,12 @@ func TestRunLoadsConfiguredSkillDirectories(t *testing.T) {
 			t.Fatalf("skill tool not found in tools = %#v", tools)
 		}
 		description := skillTool["description"].(string)
-		if !strings.Contains(description, "alpha") || !strings.Contains(description, "beta") {
-			t.Fatalf("description = %q", description)
+		if strings.Contains(description, "alpha") || strings.Contains(description, "beta") {
+			t.Fatalf("description lists skills: %q", description)
+		}
+		preamble := contextPreamble(body["messages"].([]any)[1])
+		if !strings.Contains(preamble, "- alpha: ") || !strings.Contains(preamble, "- beta: ") {
+			t.Fatalf("context = %q", preamble)
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
 	})}
@@ -1768,7 +1795,7 @@ func TestRunLoadsSkillFromAgentsHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeCLITestSkill(t, filepath.Join(home, ".agents", "skills"), "system-status")
 
-	var capturedDescription string
+	var capturedContext string
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -1777,7 +1804,7 @@ func TestRunLoadsSkillFromAgentsHome(t *testing.T) {
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
 			if fn["name"] == "skill" {
-				capturedDescription = fn["description"].(string)
+				capturedContext = contextPreamble(body["messages"].([]any)[1])
 			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
@@ -1803,8 +1830,8 @@ tools:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capturedDescription, "system-status") {
-		t.Fatalf("description = %q", capturedDescription)
+	if !strings.Contains(capturedContext, "system-status") {
+		t.Fatalf("context = %q", capturedContext)
 	}
 }
 
@@ -1859,7 +1886,7 @@ func TestRunConfiguredDirectoriesReplaceDefaults(t *testing.T) {
 	configured := filepath.Join(root, "configured")
 	writeCLITestSkill(t, configured, "configured-skill")
 
-	var capturedDescription string
+	var capturedContext string
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -1868,7 +1895,7 @@ func TestRunConfiguredDirectoriesReplaceDefaults(t *testing.T) {
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
 			if fn["name"] == "skill" {
-				capturedDescription = fn["description"].(string)
+				capturedContext = contextPreamble(body["messages"].([]any)[1])
 			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
@@ -1897,11 +1924,11 @@ tools:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capturedDescription, "configured-skill") {
-		t.Fatalf("description = %q", capturedDescription)
+	if !strings.Contains(capturedContext, "configured-skill") {
+		t.Fatalf("context = %q", capturedContext)
 	}
-	if strings.Contains(capturedDescription, "default-skill") {
-		t.Fatalf("default skill should not load when configured directories are set, got %q", capturedDescription)
+	if strings.Contains(capturedContext, "default-skill") {
+		t.Fatalf("default skill should not load when configured directories are set, got %q", capturedContext)
 	}
 }
 
@@ -1912,7 +1939,7 @@ func TestRunExpandsTildeSkillDirectory(t *testing.T) {
 	t.Setenv("HOME", home)
 	writeCLITestSkill(t, filepath.Join(home, "myskills"), "tilde-skill")
 
-	var capturedDescription string
+	var capturedContext string
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -1921,7 +1948,7 @@ func TestRunExpandsTildeSkillDirectory(t *testing.T) {
 		for _, tool := range body["tools"].([]any) {
 			fn := tool.(map[string]any)["function"].(map[string]any)
 			if fn["name"] == "skill" {
-				capturedDescription = fn["description"].(string)
+				capturedContext = contextPreamble(body["messages"].([]any)[1])
 			}
 		}
 		return fakeJSONResponse(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`), nil
@@ -1950,8 +1977,8 @@ tools:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capturedDescription, "tilde-skill") {
-		t.Fatalf("description = %q", capturedDescription)
+	if !strings.Contains(capturedContext, "tilde-skill") {
+		t.Fatalf("context = %q", capturedContext)
 	}
 }
 
@@ -1976,6 +2003,27 @@ skills:
 	if err == nil || !strings.Contains(err.Error(), `skill directory "foo/" must be an absolute path or start with ~/`) {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+// contextPreamble returns the context that precedes the user input in a
+// request's first user message: the environment and run-context blocks.
+func contextPreamble(message any) string {
+	content := message.(map[string]any)["content"].(string)
+	before, _, found := strings.Cut(content, "</run_context>\n\n")
+	if !found {
+		return ""
+	}
+	return before + "</run_context>"
+}
+
+// userInput returns the user text of a request's first user message without
+// the context preamble.
+func userInput(message any) string {
+	content := message.(map[string]any)["content"].(string)
+	if _, after, found := strings.Cut(content, "</run_context>\n\n"); found {
+		return after
+	}
+	return content
 }
 
 func writeCLITestSkill(t *testing.T, root, name string) {
@@ -2163,7 +2211,7 @@ func TestRunStoresIndependentTurnsInJSONLSession(t *testing.T) {
 		if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" {
 			t.Fatalf("call %d loaded history into model messages: %#v", calls, messages)
 		}
-		if messages[1].(map[string]any)["content"] != []string{"first", "second"}[calls-1] {
+		if userInput(messages[1]) != []string{"first", "second"}[calls-1] {
 			t.Fatalf("call %d messages = %#v", calls, messages)
 		}
 		foundHistory := false

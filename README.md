@@ -505,10 +505,19 @@ agent:
     Always prefer the deploy scripts under /opt/acme.
 ```
 
-Dora appends a `runtime_environment` block to both default and custom prompts,
-containing OS, architecture, and the Agent's local start date (without time).
-This snapshot stays fixed for the Agent's lifetime, including child tasks.
-It is captured at startup. Long-running Agents do not refresh the date across midnight.
+The system prompt and the tool definitions never change with the machine, the
+skills or the date, so a provider or local server can cache them as one stable
+request prefix. Dora puts what varies in front of the task, in the first user
+message, ordered from the least to the most volatile:
+
+1. an `<environment>` block with the OS, the architecture, and the list of
+   available skills (sorted by name);
+2. a `<run_context>` block with the local date and the working directory,
+   captured when each turn starts;
+3. your prompt.
+
+Child tasks get the same `<environment>` block as their parent. The session
+file records your prompt and this context separately.
 
 Run a one-shot prompt or combine an instruction with piped input:
 
@@ -558,9 +567,9 @@ When a provider reports token usage, Dora captures it for every completed model
 round, including cached and reasoning-token details when available. The
 terminal renderer does not print usage. Per-round usage and the final response
 usage are saved in the active session and returned by the history tool;
-without `--session`, the session is in memory and disappears when Dora exits.
+every run is saved in a session file by default (see Sessions below).
 
-For a machine-readable record of a run, pass `--session PATH`: the JSON Lines file holds the system and user messages, every completed round, and each model attempt with its usage (see Sessions below). Child task and image-tool model calls are stored as separate child turns.
+Every run is also recorded in a session file, by default under `~/.dora/sessions`; pass `--session PATH` to choose the file. The JSON Lines file holds the system and user messages, every completed round, and each model attempt with its usage (see Sessions below). Child task and image-tool model calls are stored as separate child turns.
 
 Use `--workdir` to choose the base directory for relative paths used by tools:
 
@@ -630,12 +639,32 @@ Only the successful complete response enters turn history.
 
 ### Sessions
 
-Pass a session file (JSON Lines; `.jsonl` by convention) to retain turns across CLI invocations:
+Dora saves every run in a session file (JSON Lines), so you can ask follow-up
+questions after the task has finished. Without options, a run starts a new
+session in `~/.dora/sessions` (`DORA_HOME/sessions` when `DORA_HOME` is set),
+named by its start time and a short random suffix, for example
+`20261108-205803-a1b2c3.jsonl`; the progress output shows the path. The file
+name without `.jsonl` is the session ID.
 
 ```sh
-./dora -s ./system-status.jsonl "Analyze this machine's system status"
-./dora -s ./system-status.jsonl "Continue with the busiest processes"
+./dora "Analyze this machine's system status"
+./dora --continue "Continue with the busiest processes"   # also -c: latest session of this directory
+./dora --list-sessions                                      # recent sessions: ID, last use, directory, first prompt
+./dora --session 20261108-2058 "Why did you check the disk first?"   # a session ID or a unique prefix of it
+./dora --session ./system-status.jsonl "Keep going"         # any file path; created when missing
+./dora --no-session "A one-off question"                    # not saved; kept in memory only
 ```
+
+An argument to `--session` that contains a path separator, or names a file in
+the current directory, is a path. Any other name is the ID, or a unique prefix
+of the ID, of a saved session; an ambiguous prefix is an error that lists the
+candidates. A bare name ending in `.jsonl` that matches nothing is a new file in
+the current directory. `--continue` picks the most recently used session that
+was created for the current working directory, and starts a new one when there
+is none. `--list-sessions` shows the 20 most recently used sessions. Dora never
+deletes old sessions, so clean the directory up yourself from time to time. If
+the sessions directory cannot be created, the run continues in memory and says
+so. A run that ends before any turn was saved removes the empty file it created.
 
 Every invocation is a fresh, independent turn. Previous messages are never
 loaded into the model context automatically. Dora always adds a `history` tool,
@@ -669,17 +698,16 @@ seconds. Slow cancellation or child-history cleanup may need a longer grace peri
 cannot be handled and may lose the current turn. Only complete tool rounds and
 available model-attempt records are retained, not unfinished streaming text.
 
-With `--session`, the file is an append-only JSON Lines log: a header line, then `turn`, `round`, `attempt`, and `end` records. Together they hold the
+A session file is an append-only JSON Lines log: a header line (the format version and, for files Dora created, the working directory), then `turn`, `round`, `attempt`, and `end` records. Together they hold the
 turn status and error, system prompt, user input, final result, intermediate
 tool rounds, attached image references, reasoning captured on round assistant messages, and each model
 call's usage JSON, finish metadata, final reasoning, and reported total usage.
 The store's `GetAttempts` API pages through audit records separately from
 conversation rounds. Newly created files use `0600` permissions. A session file belongs to one Dora process at a time: a second process opening it fails with "in use" (on platforms with file locking). Older SQLite and JSON sessions, `--fresh`, and automatic migration are not supported
-(such files are rejected unchanged; start a new file). A half-written last line left by a crash is discarded the next time the file is opened. Each complete tool round is saved while the turn runs, so a crash or forced exit keeps the rounds finished so far; such an interrupted turn stays in status `running` and the round in flight is lost. Dora does not resume interrupted turns. When
-`--session`/`-s` is omitted, Dora keeps the session in memory for the
-process lifetime. This allows long-running modes to retain earlier turns while
-keeping ordinary CLI invocations ephemeral. Session files can contain
-commands, tool output, and token usage, so treat persistent files as sensitive.
+(such files are rejected unchanged; start a new file). A half-written last line left by a crash is discarded the next time the file is opened. Each complete tool round is saved while the turn runs, so a crash or forced exit keeps the rounds finished so far; such an interrupted turn stays in status `running` and the round in flight is lost. Dora does not resume interrupted turns. With
+`--no-session`, Dora keeps the session in memory for the process lifetime, so a
+run leaves nothing behind. Session files can contain commands, tool output, and
+token usage, so treat them as sensitive.
 
 Use `--config`, `-m`/`--model`, `--thinking`, `--max-rounds`, or `--no-skills` to override the
 corresponding configuration for one invocation.
@@ -748,7 +776,8 @@ form and deduplicated; they are used exactly as listed and are not merged with
 the defaults. Use `--no-skills` to disable every skill source for one
 invocation; it takes precedence over `skills.directories`.
 
-Dora advertises only skill names and descriptions in the `skill` tool schema.
+Dora lists only skill names and descriptions, in the `<environment>` block in
+front of the task; the `skill` tool schema itself stays fixed.
 The absolute skill directory and complete `SKILL.md` are returned when the
 model calls that tool, allowing instructions to reference files such as
 `scripts/check.sh`. The skill tool never executes those files; execution still

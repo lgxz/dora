@@ -128,6 +128,8 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 	saveWarned := false
 	runOptions := dora.RunOptions{
 		WorkingDirectory: s.workingDirectory,
+		// Built once, because every run of this Turn must bind the same context.
+		Context: RunContext(s.workingDirectory, time.Now(), s.hasHistory(runCtx)),
 		// Save every completed round as soon as it exists, so a crash or forced
 		// exit keeps the work done so far. A failed save is only a warning: the
 		// writer retries whatever is missing on the next save, and Finish stores
@@ -214,6 +216,13 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 		}
 		return PromptResult{Turn: turn}, runErr
 	}
+}
+
+// hasHistory reports whether the session already holds saved turns. A storage
+// error counts as no history: the hint is optional.
+func (s *Session) hasHistory(ctx context.Context) bool {
+	page, err := s.store.ListTurns(ctx, session.ListOptions{Limit: 1})
+	return err == nil && page.Total > 0
 }
 
 func (s *Session) beginPrompt(parent context.Context) (context.Context, func(), error) {

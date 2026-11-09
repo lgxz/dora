@@ -27,6 +27,8 @@ terminal implementation.
 
 - `cmd/dora/main.go`: process entry point, signal handling, terminal detection,
   and final error reporting.
+- `internal/cli/sessions.go`: chooses the session of a run (automatic new file,
+  `--continue`, `--session` path or ID, `--no-session`) and lists saved sessions.
 - `internal/cli/`: argument and stdin parsing, configuration overrides,
   provider/tool construction, session lifecycle, and stdout/stderr routing.
 
@@ -56,14 +58,16 @@ root `dora` package.
 - `tool/powershell/`: independent PowerShell tool that prefers `pwsh` and falls
   back to `powershell.exe`; CLI policy enables it automatically on Windows.
 - `skill/`: discovers and validates `SKILL.md` packages and exposes them through
-  one on-demand `dora.Tool`.
+  one on-demand `dora.Tool` with a fixed description; `skill.Catalog` yields the
+  list of skills that the CLI puts in the Agent context.
 
 ### Internal services
 
 - `internal/config/`: strict YAML decoding, environment lookup, and validation.
-- `internal/paths/`: unified `~/.dora` configuration and skill paths (`DORA_HOME` overrides).
+- `internal/paths/`: unified `~/.dora` configuration, skill and session paths (`DORA_HOME` overrides).
 - `session/`: completed-turn persistence interfaces and query records.
-- `session/jsonl/`: append-only JSON Lines storage for saved turns.
+- `session/jsonl/`: append-only JSON Lines storage for saved turns; `ReadInfo`
+  reads a session file's header and first prompt without locking it.
 - `tool/history/`: paginated history access exposed to the model.
 - `internal/update/`: standalone-install provenance checks, GitHub release
   discovery, checksum validation, and rollback-capable executable replacement.

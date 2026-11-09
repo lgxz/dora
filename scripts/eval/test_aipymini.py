@@ -475,6 +475,11 @@ class AIPyMiniModelSelectionTests(unittest.TestCase):
         # A torn last line is ignored.
         torn = lines(header, turn, round_record) + '{"t":"attempt","turn":1,"i":0,"rec'
         self.assertEqual(len(_trace_from_session(torn)["rounds"]), 1)
+        # The model saw the context preamble in front of the user input; a
+        # turn without one reports the input alone.
+        self.assertEqual(_trace_from_session(lines(header, turn))["user"], "go")
+        with_context = _trace_from_session(lines(header, dict(turn, context="<environment>x</environment>")))
+        self.assertEqual(with_context["user"], "<environment>x</environment>\n\ngo")
         # A terminal error end is reported as failed; a changed system prompt wins.
         failed = _trace_from_session(lines(header, dict(turn, system="old"), dict(t="end", turn=1, status="canceled", error="x", system="new")))
         self.assertEqual((failed["status"], failed["system"]), ("failed", "new"))

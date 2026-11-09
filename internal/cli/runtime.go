@@ -9,7 +9,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/config"
@@ -18,6 +17,7 @@ import (
 	"github.com/lgxz/dora/model/registry"
 	"github.com/lgxz/dora/model/router"
 	jsonlsession "github.com/lgxz/dora/session/jsonl"
+	"github.com/lgxz/dora/skill"
 )
 
 func loadRuntimeConfig(opts options, httpClient *http.Client) (config.Config, *router.Router, error) {
@@ -159,11 +159,13 @@ func parseModelSpec(s string) (provider, profile string, err error) {
 	return provider, profile, nil
 }
 
-func openSession(ctx context.Context, path string) (*jsonlsession.Store, error) {
+// openSession opens the selected session. An empty path is an in-memory
+// session. workdir is recorded in the header of a file that does not exist yet.
+func openSession(ctx context.Context, path, workdir string) (*jsonlsession.Store, error) {
 	if path == "" {
 		return jsonlsession.OpenMemory(ctx)
 	}
-	return jsonlsession.Open(ctx, path)
+	return jsonlsession.Open(ctx, path, jsonlsession.WithWorkdir(workdir))
 }
 
 func buildObserver(streams IO, quiet, reasoning bool, colorMode, sessionPath string) *progress.Renderer {
@@ -197,13 +199,31 @@ func info(observer dora.Observer, format string, args ...any) {
 //go:embed prompts/default_system.md
 var defaultSystemPrompt string
 
-// systemPrompt appends an environment snapshot to the configured or default
-// instructions. The local start date stays fixed for the Agent's lifetime.
-func systemPrompt(agent config.Agent, startedAt time.Time) string {
+// systemPrompt returns the configured or default instructions. It holds only
+// what depends on the Dora version and the configuration, so that it and the
+// tool definitions stay an unchanging request prefix. Host facts and the
+// available skills travel in agentContext, and the date and working directory
+// in app.RunContext, both in front of the user input.
+func systemPrompt(agent config.Agent) string {
 	base := strings.TrimSpace(agent.SystemPrompt)
 	if base == "" {
 		base = defaultSystemPrompt
 	}
-	return strings.TrimSpace(base) + fmt.Sprintf("\n\n<runtime_environment>\nOS: %s\nArchitecture: %s\nAgent start date (local): %s\n</runtime_environment>",
-		runtime.GOOS, runtime.GOARCH, startedAt.Format(time.DateOnly))
+	return strings.TrimSpace(base)
+}
+
+// agentContext is the per-installation context placed in front of every
+// Turn's user input: the host first, which seldom changes, then the skills,
+// which change only when the user adds or removes one. Volatile facts such as
+// the date belong to app.RunContext instead.
+func agentContext(tools []dora.Tool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<environment>\nOS: %s\nArchitecture: %s", runtime.GOOS, runtime.GOARCH)
+	for _, tool := range tools {
+		if catalog := skill.Catalog(tool); catalog != "" {
+			b.WriteString("\n\n" + catalog)
+		}
+	}
+	b.WriteString("\n</environment>")
+	return b.String()
 }

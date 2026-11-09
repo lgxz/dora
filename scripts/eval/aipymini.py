@@ -188,7 +188,8 @@ def _trace_from_session(text: str) -> dict[str, Any]:
         "schema_version": 2,
         "status": status,
         "system": (end or {}).get("system") or turn.get("system", ""),
-        "user": turn["user"],
+        # The model sees the context preamble in front of the user input.
+        "user": "\n\n".join(part for part in (turn.get("context"), turn["user"]) if part),
         "rounds": rounds,
         "attempts": attempts,
     }

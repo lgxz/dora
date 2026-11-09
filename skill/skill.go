@@ -41,8 +41,25 @@ type Config struct {
 
 // tool loads one discovered skill's instructions by name.
 type tool struct {
-	spec   dora.ToolSpec
-	skills map[string]loadedSkill
+	spec    dora.ToolSpec
+	catalog string
+	skills  map[string]loadedSkill
+}
+
+// toolDescription is fixed on purpose: the tool definitions are part of the
+// request prefix that providers and local servers cache, so the discovered
+// skills are listed separately by Catalog instead of in this description.
+const toolDescription = "Load the full instructions of one skill by name. The available skills and what they are for are listed in the context at the start of the conversation."
+
+// Catalog returns the model-visible list of the skills a tool made by New can
+// load, one per line in name order. It is empty for any other tool. Callers
+// must place it in the model's context, for example Agent context, because the
+// tool description no longer carries it.
+func Catalog(t dora.Tool) string {
+	if loaded, ok := t.(*tool); ok && loaded != nil {
+		return loaded.catalog
+	}
+	return ""
 }
 
 type metadata struct {
@@ -135,15 +152,16 @@ func New(cfg Config) (dora.Tool, error) {
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 	result := &tool{skills: make(map[string]loadedSkill, len(entries))}
-	var description strings.Builder
-	description.WriteString("Load specialized instructions when they are relevant. Available skills:")
+	var catalog strings.Builder
+	catalog.WriteString("Available skills (load one with the skill tool when it is relevant):")
 	for _, loaded := range entries {
 		result.skills[loaded.name] = loadedSkill{directory: loaded.directory, content: loaded.content}
-		fmt.Fprintf(&description, "\n- %s: %s", loaded.name, loaded.description)
+		fmt.Fprintf(&catalog, "\n- %s: %s", loaded.name, loaded.description)
 	}
+	result.catalog = catalog.String()
 	result.spec = dora.ToolSpec{
 		Name:        "skill",
-		Description: description.String(),
+		Description: toolDescription,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Skill name to load"}},"required":["name"],"additionalProperties":false}`),
 	}
 	return result, nil

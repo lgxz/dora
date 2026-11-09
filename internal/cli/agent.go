@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/lgxz/dora"
 	"github.com/lgxz/dora/internal/app"
@@ -43,6 +44,7 @@ func buildAgent(cfg config.Config, deps agentDependencies) (*dora.Agent, error) 
 		MaxRounds:           cfg.Agent.MaxRounds,
 		OutputLimitRecovery: recovery,
 		SystemPrompt:        deps.systemPrompt,
+		Context:             agentContext(tools),
 	}, tools...)
 	return agent, err
 }
@@ -74,6 +76,9 @@ func runTask(ctx context.Context, agent *dora.Agent, instruction string) (string
 	turn := dora.NewTurn(instruction)
 	runErr := agent.RunObservedWithOptions(ctx, turn, nil, dora.RunOptions{
 		ExcludeTools: []string{tasktool.Name},
+		// The task runs in the parent's working directory, which the context
+		// already carries.
+		Context: app.RunContext(dora.WorkingDirectory(ctx), time.Now(), false),
 	})
 	app.RecordTask(ctx, turn, runErr)
 	if runErr != nil {

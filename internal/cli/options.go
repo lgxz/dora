@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/lgxz/dora/internal/paths"
 	"github.com/lgxz/dora/internal/update"
 )
 
@@ -27,6 +28,12 @@ type options struct {
 	color        string
 	reasoning    bool
 	sessionPath  string
+	// continueSession continues the latest saved session of the working directory.
+	continueSession bool
+	// noSession keeps the session in memory instead of saving it.
+	noSession bool
+	// listSessions prints the saved sessions and exits.
+	listSessions bool
 	workdir      string
 	promptArgs   []string
 	usage        func()
@@ -65,7 +72,11 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		}
 	})
 	flags.BoolVar(&opts.reasoning, "reasoning", false, "stream captured model reasoning (slower on slow terminals)")
-	flags.StringVar(&opts.sessionPath, "session", "", "JSONL file used to store and query saved turns")
+	flags.StringVar(&opts.sessionPath, "session", "", "session to use: a JSONL file path (created when missing) or the ID, or a unique prefix of it, of a saved session (default: a new session saved in the sessions directory)")
+	flags.BoolVar(&opts.continueSession, "continue", false, "continue the most recent saved session of the working directory")
+	flags.BoolVar(&opts.continueSession, "c", false, "shorthand for -continue")
+	flags.BoolVar(&opts.noSession, "no-session", false, "do not save the session; keep it in memory until the process exits")
+	flags.BoolVar(&opts.listSessions, "list-sessions", false, "list the most recently used saved sessions and exit")
 	flags.StringVar(&opts.workdir, "workdir", "", "working directory used to resolve relative tool paths")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "A tiny, extensible, and efficient LLM agent.\n\n")
@@ -96,6 +107,19 @@ func handleImmediate(ctx context.Context, opts options, streams IO) (bool, error
 			return true, errors.New("--setup does not accept a prompt")
 		}
 		return true, runSetup(opts, streams)
+	}
+	if opts.listSessions {
+		if opts.showVersion || opts.update {
+			return true, errors.New("--list-sessions cannot be combined with --version or --update")
+		}
+		if len(opts.promptArgs) != 0 {
+			return true, errors.New("--list-sessions does not accept a prompt")
+		}
+		dir, err := paths.SessionsDir()
+		if err != nil {
+			return true, err
+		}
+		return true, printSessions(streams.Stdout, dir)
 	}
 	if opts.showVersion {
 		version := streams.Version

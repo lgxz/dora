@@ -356,6 +356,24 @@ func overflowAgent(t *testing.T, rejectAll bool, log *[]string, normal *[]Reques
 	return agent
 }
 
+func TestCompactionKeepsContextPreambleWithTheTask(t *testing.T) {
+	var log []string
+	var normal []Request
+	agent := overflowAgent(t, false, &log, &normal)
+	agent.context = "<environment>host</environment>"
+	turn := seededCompactionTurn(t)
+	err := agent.RunObservedWithOptions(context.Background(), turn, nil, RunOptions{Context: "<run_context>today</run_context>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The preamble is part of the first user message, so the verbatim task
+	// that survives compaction still carries the environment and the date.
+	want := "Original task (verbatim):\n\n<environment>host</environment>\n\n<run_context>today</run_context>\n\noriginal task"
+	if len(normal) != 2 || len(normal[1].Messages) != 1 || !strings.HasPrefix(normal[1].Messages[0].Content, want) {
+		t.Fatalf("requests = %#v", normal)
+	}
+}
+
 func TestAgentCompactsAndRetriesOnceAfterProviderOverflow(t *testing.T) {
 	var log []string
 	var normal []Request

@@ -41,6 +41,11 @@ type Agent struct {
 	// systemPrompt is immutable Agent identity/configuration. Each Turn binds
 	// a snapshot of it when the run starts.
 	systemPrompt string
+	// context is the immutable, environment-dependent part of the preamble
+	// placed in front of the user input. It changes less often than a run but
+	// more often than the Agent version, so it stays out of the system prompt
+	// and the tool definitions, which form the cache-stable request prefix.
+	context string
 	// contextWindow is the model's context capacity in tokens, probed once at
 	// construction and cached for compaction to consume
 	// without re-asserting each round. It falls back to
@@ -58,6 +63,11 @@ type Agent struct {
 type AgentConfig struct {
 	MaxRounds    int
 	SystemPrompt string
+	// Context is static, environment-dependent text (host facts, available
+	// skills) that the Agent places in front of the user input of every Turn.
+	// Unlike SystemPrompt it travels in the first user message, so changing it
+	// does not alter the system prompt or tool definitions.
+	Context string
 	// Nil enables one output-limit retry. A non-nil zero value disables it.
 	OutputLimitRecovery *OutputLimitRecovery
 }
@@ -86,7 +96,22 @@ type OutputLimitRecovery struct {
 type RunOptions struct {
 	ExcludeTools     []string
 	WorkingDirectory string
-	OnRound          func(*Turn)
+	// Context is per-run text (date, working directory) appended to the
+	// Agent's Context in front of the user input. It must stay the same for
+	// every run of one Turn.
+	Context string
+	OnRound func(*Turn)
+}
+
+// joinContext joins the non-empty context parts with a blank line.
+func joinContext(parts ...string) string {
+	var kept []string
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 // New creates an Agent. Tool names must be non-empty and unique.
@@ -131,6 +156,7 @@ func NewWithConfig(model Model, cfg AgentConfig, tools ...Tool) (*Agent, error) 
 		specs:           make([]ToolSpec, 0, len(tools)),
 		maxRounds:       maxRounds,
 		systemPrompt:    cfg.SystemPrompt,
+		context:         cfg.Context,
 		contextWindow:   contextWindow,
 		maxOutputTokens: maxOutputTokens,
 		outputRecovery:  recovery,
@@ -186,6 +212,9 @@ func (a *Agent) RunObservedWithOptions(ctx context.Context, turn *Turn, observer
 		ctx = withWorkingDirectory(ctx, opts.WorkingDirectory)
 	}
 	if err := turn.bindSystem(a.systemPrompt); err != nil {
+		return err
+	}
+	if err := turn.bindContext(joinContext(a.context, opts.Context)); err != nil {
 		return err
 	}
 	tools, specs := a.toolsForRun(opts)

@@ -38,10 +38,17 @@ Inspect the machine carefully.
 	if spec.Name != "skill" {
 		t.Fatalf("name = %q", spec.Name)
 	}
-	statusIndex := strings.Index(spec.Description, "system-status")
-	weatherIndex := strings.Index(spec.Description, "weather")
+	if strings.Contains(spec.Description, "system-status") || strings.Contains(spec.Description, "weather") {
+		t.Fatalf("description must not list skills: %q", spec.Description)
+	}
+	catalog := Catalog(tool)
+	statusIndex := strings.Index(catalog, "system-status: Analyze CPU, memory, and disk usage.")
+	weatherIndex := strings.Index(catalog, "- weather: ")
 	if statusIndex < 0 || weatherIndex < 0 || statusIndex > weatherIndex {
-		t.Fatalf("description is not sorted: %q", spec.Description)
+		t.Fatalf("catalog is not sorted: %q", catalog)
+	}
+	if Catalog(nil) != "" {
+		t.Fatalf("catalog of nil tool = %q", Catalog(nil))
 	}
 
 	toolResult, err := tool.Execute(context.Background(), []byte(`{"name":"weather"}`))

@@ -20,6 +20,8 @@ type Round struct {
 type Turn struct {
 	system        string
 	systemBound   bool
+	context       string
+	contextBound  bool
 	user          string
 	rounds        []Round
 	result        string
@@ -52,6 +54,24 @@ func (t *Turn) bindSystem(system string) error {
 	return nil
 }
 
+// bindContext binds the turn's context preamble when the turn first runs. The
+// preamble is model-visible text placed in front of the user input inside the
+// first user message; Turn.User keeps returning the input alone.
+func (t *Turn) bindContext(context string) error {
+	if t == nil {
+		return errors.New("turn is nil")
+	}
+	if t.contextBound {
+		if t.context != context {
+			return errors.New("turn is bound to a different context")
+		}
+		return nil
+	}
+	t.context = context
+	t.contextBound = true
+	return nil
+}
+
 // Messages returns a defensive copy of the complete current turn in model
 // message order.
 func (t *Turn) Messages() []Message {
@@ -72,7 +92,11 @@ func (t *Turn) Messages() []Message {
 	if t.system != "" {
 		messages = append(messages, Message{Role: RoleSystem, Content: t.system})
 	}
-	messages = append(messages, Message{Role: RoleUser, Content: t.user})
+	first := t.user
+	if t.context != "" {
+		first = t.context + "\n\n" + t.user
+	}
+	messages = append(messages, Message{Role: RoleUser, Content: first})
 	for _, round := range t.rounds {
 		messages = append(messages, cloneMessage(round.Assistant))
 		messages = append(messages, cloneMessages(round.Tools)...)
@@ -161,7 +185,16 @@ func (t *Turn) System() string {
 	return t.system
 }
 
-// User returns the turn's user input.
+// Context returns the preamble bound to the turn, which the model sees in front
+// of the user input.
+func (t *Turn) Context() string {
+	if t == nil {
+		return ""
+	}
+	return t.context
+}
+
+// User returns the turn's user input, without the context preamble.
 func (t *Turn) User() string {
 	if t == nil {
 		return ""
