@@ -290,14 +290,25 @@ func formatHistoryCall(raw json.RawMessage) string {
 	var input struct {
 		Action string `json:"action"`
 		TurnID *int64 `json:"turn_id"`
+		Offset int    `json:"offset"`
+		Limit  *int   `json:"limit"`
 	}
 	if json.Unmarshal(raw, &input) != nil || input.Action == "" {
 		return genericArguments(raw)
 	}
+	summary := input.Action
 	if input.Action == "get" && input.TurnID != nil {
-		return fmt.Sprintf("get turn %d", *input.TurnID)
+		summary = fmt.Sprintf("get turn %d", *input.TurnID)
 	}
-	return input.Action
+	// Show the requested window so repeated calls for the same turn are
+	// distinguishable.
+	if input.Offset > 0 {
+		summary += fmt.Sprintf(" offset %d", input.Offset)
+	}
+	if input.Limit != nil {
+		summary += fmt.Sprintf(" limit %d", *input.Limit)
+	}
+	return summary
 }
 
 func formatHistoryResult(call dora.ToolCall, message dora.Message) (string, outcome) {
@@ -307,14 +318,22 @@ func formatHistoryResult(call dora.ToolCall, message dora.Message) (string, outc
 	_ = json.Unmarshal(call.Input, &input)
 	var page struct {
 		Total  int               `json:"total"`
+		Offset int               `json:"offset"`
 		Turns  []json.RawMessage `json:"turns"`
 		Rounds []json.RawMessage `json:"rounds"`
 	}
 	if json.Unmarshal([]byte(message.Content), &page) != nil {
+		// Oversized results are cut in the middle and no longer parse.
+		if strings.Contains(message.Content, "history result truncated") {
+			return "truncated", outcomeWarning
+		}
 		return "done", outcomeSuccess
 	}
 	if input.Action == "get" {
-		return fmt.Sprintf("%d/%d rounds", len(page.Rounds), page.Total), outcomeSuccess
+		if len(page.Rounds) == 0 {
+			return fmt.Sprintf("0/%d rounds", page.Total), outcomeSuccess
+		}
+		return fmt.Sprintf("rounds %d-%d of %d", page.Offset+1, page.Offset+len(page.Rounds), page.Total), outcomeSuccess
 	}
 	return fmt.Sprintf("%d/%d turns", len(page.Turns), page.Total), outcomeSuccess
 }
