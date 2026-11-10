@@ -77,8 +77,8 @@ func runTask(ctx context.Context, agent *dora.Agent, instruction string) (string
 	runErr := agent.RunObservedWithOptions(ctx, turn, nil, dora.RunOptions{
 		ExcludeTools: []string{tasktool.Name},
 		// The task runs in the parent's working directory, which the context
-		// already carries.
-		Context: app.RunContext(dora.WorkingDirectory(ctx), time.Now(), false),
+		// already carries, and reads the same saved session.
+		Context: app.RunContext(dora.WorkingDirectory(ctx), time.Now(), app.SavedTurns(ctx)),
 	})
 	app.RecordTask(ctx, turn, runErr)
 	if runErr != nil {

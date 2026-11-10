@@ -512,8 +512,8 @@ message, ordered from the least to the most volatile:
 
 1. an `<environment>` block with the OS, the architecture, and the list of
    available skills (sorted by name);
-2. a `<run_context>` block with the local date and the working directory,
-   captured when each turn starts;
+2. a `<run_context>` block with the local date, the working directory and how
+   many turns the session has already saved, captured when each turn starts;
 3. your prompt.
 
 Child tasks get the same `<environment>` block as their parent. The session

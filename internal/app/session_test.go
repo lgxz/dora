@@ -434,3 +434,37 @@ func TestPromptDoesNotInventAnAnswerWhenAFailedTurnCannotBeSaved(t *testing.T) {
 		t.Fatalf("result = %#v, err = %v", result, err)
 	}
 }
+
+func TestPromptRunContextCountsSavedTurns(t *testing.T) {
+	var firstInputs []string
+	application, _ := newTestSession(t, modelFunc(func(_ context.Context, request dora.Request) (dora.Response, error) {
+		for _, message := range request.Messages {
+			if message.Role == dora.RoleUser {
+				firstInputs = append(firstInputs, message.Content)
+				break
+			}
+		}
+		return dora.Response{FinishReason: dora.FinishStop, Content: "done"}, nil
+	}), dora.AgentConfig{})
+
+	for _, prompt := range []string{"one", "two", "three"} {
+		if _, err := application.Prompt(context.Background(), prompt, PromptOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, want := range []string{
+		"Session: new, no earlier turns.",
+		"Session: 1 earlier turn is saved",
+		"Session: 2 earlier turns are saved but are not part of this conversation; use the history tool to read them (latest: turn 2).",
+	} {
+		if i >= len(firstInputs) || !strings.Contains(firstInputs[i], want) {
+			t.Fatalf("prompt %d input = %q, want it to contain %q", i+1, firstInputs, want)
+		}
+	}
+}
+
+func TestSavedTurnsIsUnknownOutsideAPrompt(t *testing.T) {
+	if got := SavedTurns(context.Background()); got != -1 {
+		t.Fatalf("SavedTurns outside a prompt = %d, want -1", got)
+	}
+}

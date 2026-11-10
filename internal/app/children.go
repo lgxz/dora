@@ -21,6 +21,19 @@ type childRecord struct {
 type childCollector struct {
 	owner    *Session
 	parentID int64
+	// saved is how many turns the session held when the prompt started.
+	saved int
+}
+
+// SavedTurns returns the number of turns the application session held when
+// the prompt that owns ctx started, or -1 outside a prompt. A nested task uses
+// it to describe the same session in its own run context.
+func SavedTurns(ctx context.Context) int {
+	collector, _ := ctx.Value(childrenKey{}).(*childCollector)
+	if collector == nil {
+		return -1
+	}
+	return collector.saved
 }
 
 // RecordTask retains a terminal task Turn for saving at an application boundary.

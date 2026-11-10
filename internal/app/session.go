@@ -119,7 +119,7 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 		return PromptResult{}, err
 	}
 	defer finish()
-	collector := &childCollector{owner: s}
+	collector := &childCollector{owner: s, saved: s.savedTurns(runCtx)}
 	runCtx = context.WithValue(runCtx, childrenKey{}, collector)
 	defer s.flushChildren(false)
 
@@ -129,7 +129,7 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 	runOptions := dora.RunOptions{
 		WorkingDirectory: s.workingDirectory,
 		// Built once, because every run of this Turn must bind the same context.
-		Context: RunContext(s.workingDirectory, time.Now(), s.hasHistory(runCtx)),
+		Context: RunContext(s.workingDirectory, time.Now(), collector.saved),
 		// Save every completed round as soon as it exists, so a crash or forced
 		// exit keeps the work done so far. A failed save is only a warning: the
 		// writer retries whatever is missing on the next save, and Finish stores
@@ -218,11 +218,14 @@ func (s *Session) Prompt(ctx context.Context, prompt string, options PromptOptio
 	}
 }
 
-// hasHistory reports whether the session already holds saved turns. A storage
-// error counts as no history: the hint is optional.
-func (s *Session) hasHistory(ctx context.Context) bool {
+// savedTurns returns how many turns the session already holds, or -1 when the
+// store cannot say: the session line of the run context is optional.
+func (s *Session) savedTurns(ctx context.Context) int {
 	page, err := s.store.ListTurns(ctx, session.ListOptions{Limit: 1})
-	return err == nil && page.Total > 0
+	if err != nil {
+		return -1
+	}
+	return page.Total
 }
 
 func (s *Session) beginPrompt(parent context.Context) (context.Context, func(), error) {

@@ -394,7 +394,8 @@ func TestRunSavesSessionsAndContinuesThem(t *testing.T) {
 	t.Setenv("DORA_HOME", t.TempDir())
 	t.Chdir(t.TempDir())
 	env := newSessionTestEnv(t)
-	hint := "use the history tool to read them"
+	newLine := "Session: new, no earlier turns."
+	oneTurn := "Session: 1 earlier turn is saved"
 
 	// A plain run is saved without any flag.
 	env.run("first")
@@ -402,8 +403,8 @@ func TestRunSavesSessionsAndContinuesThem(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("saved sessions after one run = %v", files)
 	}
-	if strings.Contains(env.userInputs[0], hint) {
-		t.Fatalf("a new session mentions earlier turns: %q", env.userInputs[0])
+	if !strings.Contains(env.userInputs[0], newLine) {
+		t.Fatalf("a new session does not say it is new: %q", env.userInputs[0])
 	}
 
 	// --continue appends to it, and tells the model about the earlier turn.
@@ -411,8 +412,8 @@ func TestRunSavesSessionsAndContinuesThem(t *testing.T) {
 	if got := savedSessionFiles(t); len(got) != 1 || got[0] != files[0] {
 		t.Fatalf("saved sessions after --continue = %v", got)
 	}
-	if !strings.Contains(env.userInputs[1], hint) {
-		t.Fatalf("a continued session does not mention earlier turns: %q", env.userInputs[1])
+	if !strings.Contains(env.userInputs[1], oneTurn) || strings.Contains(env.userInputs[1], newLine) {
+		t.Fatalf("a continued session does not count its earlier turn: %q", env.userInputs[1])
 	}
 
 	// A bare ID prefix selects it too.
