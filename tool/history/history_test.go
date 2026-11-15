@@ -76,8 +76,8 @@ func TestHistoryCapsLargeResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A list that is too large is cut in the middle.
 	for _, raw := range []string{
-		`{"action":"get","turn_id":1,"limit":50}`,
 		`{"action":"list","limit":50}`,
 	} {
 		result, err := tool.Execute(context.Background(), json.RawMessage(raw))
@@ -92,6 +92,93 @@ func TestHistoryCapsLargeResults(t *testing.T) {
 		}
 		if !strings.HasPrefix(result.Content, `{"total":`) {
 			t.Fatalf("%s result head not preserved: %q", raw, result.Content[:20])
+		}
+	}
+}
+
+// A get result stays valid JSON: one oversized round has its text shortened.
+func TestHistoryGetShortensAnOversizedRound(t *testing.T) {
+	tool, err := New(&bigReaderStub{content: strings.Repeat("x", 200_000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"get","turn_id":1,"limit":50}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) > maxResultBytes {
+		t.Fatalf("get result not capped: %d bytes", len(result.Content))
+	}
+	var page historyRoundPage
+	if err := json.Unmarshal([]byte(result.Content), &page); err != nil {
+		t.Fatalf("get result is not valid JSON: %v", err)
+	}
+	if !page.Shortened || len(page.Rounds) != 1 || !strings.Contains(page.Rounds[0].Assistant.Content, "bytes shortened") {
+		t.Fatalf("page = shortened %v, %d rounds", page.Shortened, len(page.Rounds))
+	}
+}
+
+type manyRoundsStub struct {
+	rounds, total int
+	content       string
+}
+
+func (reader *manyRoundsStub) ListTurns(context.Context, session.ListOptions) (session.TurnPage, error) {
+	return session.TurnPage{}, nil
+}
+
+func (reader *manyRoundsStub) GetRounds(_ context.Context, _ int64, options session.RoundOptions) (session.RoundPage, error) {
+	page := session.RoundPage{Total: reader.total, Offset: options.Offset, Limit: options.Limit}
+	for i := 0; i < reader.rounds; i++ {
+		page.Rounds = append(page.Rounds, dora.Round{Assistant: dora.Message{Role: dora.RoleAssistant, Content: reader.content}})
+	}
+	return page, nil
+}
+
+// Whole rounds that do not fit are dropped from the end and next_offset says
+// where to continue.
+func TestHistoryGetDropsRoundsThatDoNotFit(t *testing.T) {
+	tool, err := New(&manyRoundsStub{rounds: 5, total: 12, content: strings.Repeat("x", 10_000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"get","turn_id":1,"offset":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page historyRoundPage
+	if err := json.Unmarshal([]byte(result.Content), &page); err != nil {
+		t.Fatalf("get result is not valid JSON: %v", err)
+	}
+	if len(page.Rounds) != 3 || page.Shortened || page.NextOffset == nil || *page.NextOffset != 5 {
+		t.Fatalf("rounds %d, shortened %v, next %v", len(page.Rounds), page.Shortened, page.NextOffset)
+	}
+	if len(result.Content) > maxResultBytes {
+		t.Fatalf("get result not capped: %d bytes", len(result.Content))
+	}
+}
+
+// Rounds that fit are all returned; next_offset appears only when the turn has
+// more rounds beyond the page.
+func TestHistoryGetNextOffsetOnlyWhenRoundsRemain(t *testing.T) {
+	for _, test := range []struct {
+		total int
+		next  bool
+	}{{total: 3, next: false}, {total: 9, next: true}} {
+		tool, err := New(&manyRoundsStub{rounds: 3, total: test.total, content: "short"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"get","turn_id":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page historyRoundPage
+		if err := json.Unmarshal([]byte(result.Content), &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Rounds) != 3 || (page.NextOffset != nil) != test.next || (test.next && *page.NextOffset != 3) {
+			t.Fatalf("total %d: rounds %d, next %v", test.total, len(page.Rounds), page.NextOffset)
 		}
 	}
 }

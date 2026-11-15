@@ -321,6 +321,8 @@ func formatHistoryResult(call dora.ToolCall, message dora.Message) (string, outc
 		Offset int               `json:"offset"`
 		Turns  []json.RawMessage `json:"turns"`
 		Rounds []json.RawMessage `json:"rounds"`
+		// Shortened marks a get result whose long text fields were cut.
+		Shortened bool `json:"shortened"`
 	}
 	if json.Unmarshal([]byte(message.Content), &page) != nil {
 		// Oversized results are cut in the middle and no longer parse.
@@ -333,7 +335,11 @@ func formatHistoryResult(call dora.ToolCall, message dora.Message) (string, outc
 		if len(page.Rounds) == 0 {
 			return fmt.Sprintf("0/%d rounds", page.Total), outcomeSuccess
 		}
-		return fmt.Sprintf("rounds %d-%d of %d", page.Offset+1, page.Offset+len(page.Rounds), page.Total), outcomeSuccess
+		text := fmt.Sprintf("rounds %d-%d of %d", page.Offset+1, page.Offset+len(page.Rounds), page.Total)
+		if page.Shortened {
+			return joinResult(text, "shortened"), outcomeWarning
+		}
+		return text, outcomeSuccess
 	}
 	return fmt.Sprintf("%d/%d turns", len(page.Turns), page.Total), outcomeSuccess
 }

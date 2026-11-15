@@ -451,7 +451,12 @@ History's `get` output uses a dedicated presentation representation: tool-call
 `input` is always the original argument text as a JSON string. Invalid UTF-8 also
 gets base64 `input_bytes` for lossless inspection. This avoids marshaling invalid
 `json.RawMessage` values; the kernel and `session.Reader` retain original bytes.
-The existing history output size cap still applies.
+A 32 KiB cap applies to every history result. A `get` page that exceeds it
+stays valid JSON: whole rounds are dropped from the end and `next_offset` says
+where to continue (it also appears whenever the limit ended before the turn
+did); when the first round alone is too large, its long text fields are cut in
+the middle with a marker and `shortened` is set. A `list` result that is too
+large is cut in the middle instead.
 
 `tool/history` is registered from the first turn against the active session.
 An empty session is a valid history source whose `list` result is empty.

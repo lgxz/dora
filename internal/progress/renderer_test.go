@@ -613,6 +613,15 @@ func TestToolPresentations(t *testing.T) {
 			wantResult:  "rounds 6-9 of 9",
 		},
 		{
+			name:        "history get shortened",
+			call:        dora.ToolCall{Name: "history", Input: json.RawMessage(`{"action":"get","turn_id":7}`)},
+			message:     dora.Message{Content: `{"total":9,"offset":0,"rounds":[{}],"shortened":true}`},
+			wantName:    "history",
+			wantSummary: "get turn 7",
+			wantResult:  "rounds 1-1 of 9, shortened",
+			wantOutcome: outcomeWarning,
+		},
+		{
 			name:        "history get truncated",
 			call:        dora.ToolCall{Name: "history", Input: json.RawMessage(`{"action":"get","turn_id":7}`)},
 			message:     dora.Message{Content: "{\"total\":9,\n... [history result truncated: 99999 bytes total; narrow the query with a smaller limit or an offset] ...\n"},

@@ -26,6 +26,14 @@ const (
 	maxResultBytes   = 32 << 10
 	resultHeadBytes  = 24 << 10
 	resultMarkerText = "\n... [history result truncated: %d bytes total; narrow the query with a smaller limit or an offset] ...\n"
+	// fieldMarkerText replaces the middle of a single oversized text field in
+	// a get result, which stays valid JSON.
+	fieldMarkerText = "\n... [%d bytes shortened] ...\n"
+	// minFieldBytes is the smallest per-field cap tried when one round alone
+	// does not fit; below it the final head/tail cut takes over.
+	minFieldBytes = 256
+	// pageEnvelopeBytes reserves room for the fields around the rounds.
+	pageEnvelopeBytes = 128
 )
 
 // Tool lets the model explicitly inspect saved turns. Previous turns are
@@ -89,7 +97,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (dora.ToolResul
 		}
 		var page session.RoundPage
 		page, err = t.reader.GetRounds(ctx, *input.TurnID, session.RoundOptions{Offset: input.Offset, Limit: limit})
-		value = encodeRoundPage(page)
+		value = fitRoundPage(encodeRoundPage(page), maxResultBytes)
 	default:
 		return dora.ToolResult{}, fmt.Errorf("history: unknown action %q", input.Action)
 	}
@@ -167,6 +175,12 @@ type historyRoundPage struct {
 	Offset int            `json:"offset"`
 	Limit  int            `json:"limit"`
 	Rounds []historyRound `json:"rounds"`
+	// NextOffset is where to continue when rounds remain after this page,
+	// either because the limit ended first or because the page was cut to
+	// fit the size cap.
+	NextOffset *int `json:"next_offset,omitempty"`
+	// Shortened reports that text inside a round was cut to fit the cap.
+	Shortened bool `json:"shortened,omitempty"`
 }
 
 func encodeHistoryMessage(message dora.Message) historyMessage {
@@ -195,6 +209,84 @@ func encodeRoundPage(page session.RoundPage) historyRoundPage {
 			item.Tools[j] = encodeHistoryMessage(message)
 		}
 		result.Rounds[i] = item
+	}
+	return result
+}
+
+// fitRoundPage keeps a get result within max bytes without breaking its JSON:
+// whole rounds are dropped from the end (next_offset says where to continue),
+// and when the first round alone is too large its long text fields are cut
+// in the middle instead.
+func fitRoundPage(page historyRoundPage, max int) historyRoundPage {
+	budget := max - pageEnvelopeBytes
+	used, kept := 0, 0
+	for i, round := range page.Rounds {
+		size, ok := jsonSize(round)
+		if !ok {
+			return page
+		}
+		if i == 0 && size > budget {
+			round = shrinkRound(round, budget)
+			page.Rounds[0] = round
+			page.Shortened = true
+			if size, ok = jsonSize(round); !ok {
+				return page
+			}
+		}
+		if i > 0 && used+size > budget {
+			break
+		}
+		used += size + 1
+		kept++
+	}
+	page.Rounds = page.Rounds[:kept]
+	if kept > 0 && page.Offset+kept < page.Total {
+		next := page.Offset + kept
+		page.NextOffset = &next
+	}
+	return page
+}
+
+func jsonSize(value any) (int, bool) {
+	encoded, err := json.Marshal(value)
+	return len(encoded), err == nil
+}
+
+// shrinkRound halves a per-field cap until the round fits budget or the cap
+// reaches minFieldBytes. It works on a copy.
+func shrinkRound(round historyRound, budget int) historyRound {
+	result := round
+	for fieldCap := budget / 2; ; fieldCap /= 2 {
+		result = capRound(round, fieldCap)
+		if size, ok := jsonSize(result); !ok || size <= budget || fieldCap <= minFieldBytes {
+			return result
+		}
+	}
+}
+
+func capRound(round historyRound, fieldCap int) historyRound {
+	result := round
+	result.Assistant = capMessage(round.Assistant, fieldCap)
+	result.Tools = make([]historyMessage, len(round.Tools))
+	for i, message := range round.Tools {
+		result.Tools[i] = capMessage(message, fieldCap)
+	}
+	return result
+}
+
+func capMessage(message historyMessage, fieldCap int) historyMessage {
+	result := message
+	result.Content = capstr.HeadTail(message.Content, fieldCap, fieldCap/2, fieldMarkerText)
+	result.Reasoning = capstr.HeadTail(message.Reasoning, fieldCap, fieldCap/2, fieldMarkerText)
+	if len(message.ToolCalls) > 0 {
+		result.ToolCalls = make([]historyToolCall, len(message.ToolCalls))
+		for i, call := range message.ToolCalls {
+			call.Input = capstr.HeadTail(call.Input, fieldCap, fieldCap/2, fieldMarkerText)
+			if len(call.InputBytes) > fieldCap {
+				call.InputBytes = call.InputBytes[:fieldCap]
+			}
+			result.ToolCalls[i] = call
+		}
 	}
 	return result
 }
