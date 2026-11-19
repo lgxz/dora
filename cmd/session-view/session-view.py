@@ -290,8 +290,14 @@ def convert_value(
 
 
 def convert_row(
-    row: sqlite3.Row,
+    row: Any,
 ) -> dict[str, Any]:
+    """
+    Convert one database / JSONL row into decoded values.
+
+    Accepts any mapping (sqlite3.Row, dict, ...), so it works for both
+    the SQLite and the JSONL loader.
+    """
     values = dict(row)
     role = values.get("role")
 
@@ -463,13 +469,60 @@ def sqlite_type_to_python(
 # Dynamic dataclass
 # ======================================================================
 
+# PRAGMA table_info() column ->
+#   (JSONL schema dict key, whether the attribute is optional)
+PRAGMA_FIELDS = {
+    "name": ("name", False),
+    "type": ("type", False),
+    "notnull": ("notnull", True),
+    "pk": ("pk", True),
+}
+
+
+def pragma_columns(
+    rows: list[sqlite3.Row],
+) -> list[dict[str, Any]]:
+    """
+    Convert PRAGMA table_info() rows into column dicts for make_model().
+
+    sqlite3.Row has no .get(), so columns are read one by one; anything
+    missing falls back to the same defaults SQLite uses.
+    """
+    columns = []
+
+    for row in rows:
+        keys = row.keys()
+        column = {}
+
+        for pragma_key, (key, optional) in (
+            PRAGMA_FIELDS.items()
+        ):
+            if pragma_key in keys:
+                column[key] = row[pragma_key]
+            elif not optional:
+                column[key] = ""
+            else:
+                column[key] = 0
+
+        columns.append(column)
+
+    return columns
+
+
 def make_model(
     name: str,
-    schema: list[sqlite3.Row],
+    schema: list[Any],
     type_overrides: dict[str, type] | None = None,
 ):
     """
-    Dynamically create a dataclass from PRAGMA table_info().
+    Dynamically create a dataclass from column definitions.
+
+    Each column is a dict produced by pragma_columns() with:
+        name     - field name
+        type     - Python type, or a SQLite type name ("TEXT", "INT", ...)
+                   that is mapped through sqlite_type_to_python()
+        notnull  - False marks the field as Optional
+        pk       - True marks the field as non-Optional
     """
     type_overrides = type_overrides or {}
     model_fields = []
@@ -477,11 +530,18 @@ def make_model(
     for column in schema:
         column_name = column["name"]
 
+        column_type = column["type"]
+
+        if isinstance(column_type, type):
+            default_type = column_type
+        else:
+            default_type = sqlite_type_to_python(
+                column_type or ""
+            )
+
         python_type = type_overrides.get(
             column_name,
-            sqlite_type_to_python(
-                column["type"]
-            ),
+            default_type,
         )
 
         if (
@@ -649,7 +709,9 @@ class Table:
 
         self.model = make_model(
             model_name or name,
-            db.table_schema(name),
+            pragma_columns(
+                db.table_schema(name)
+            ),
             type_overrides,
         )
 
@@ -801,8 +863,458 @@ def load_database(
 
 
 # ======================================================================
-# Presentation
+# JSONL -> Python
 # ======================================================================
+
+TURN_TYPE = str
+"""Python type used for the turn id in JSONL mode.
+
+The JSONL format stores turn ids as JSON numbers. Override this (or the
+corresponding type_overrides entry) when ids are strings.
+"""
+
+class JsonlError(ValueError):
+    """Malformed JSONL input."""
+
+
+def _jsonl_get(
+    obj: dict[str, Any],
+    *keys: str,
+    default: Any = None,
+) -> Any:
+    """
+    Return the first key that exists in obj.
+
+    Unlike dict.get(), an existing key with value None is still returned,
+    so explicit nulls are distinguishable from absent keys.
+    """
+    for key in keys:
+        if key in obj:
+            return obj[key]
+
+    return default
+
+
+def read_jsonl(
+    filename: str,
+) -> Iterator[dict[str, Any]]:
+    """
+    Yield JSON objects from a JSONL file, one per non-empty line.
+
+    Blank lines are ignored. Malformed lines raise JsonlError with the
+    file name and line number; `#` comments are not supported.
+    """
+    with open(
+        filename,
+        "r",
+        encoding="utf-8",
+        errors="replace",
+    ) as fp:
+        for lineno, line in enumerate(fp, 1):
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise JsonlError(
+                    f"{filename}:{lineno}: invalid JSON: {exc.msg}"
+                ) from exc
+
+            if not isinstance(record, dict):
+                raise JsonlError(
+                    f"{filename}:{lineno}: expected a JSON object, "
+                    f"got {type(record).__name__}"
+                )
+
+            yield record
+
+
+def jsonl_record_type(
+    obj: dict[str, Any],
+) -> str:
+    """
+    Return the record type of one JSONL object.
+
+    Supported keys:
+        t      - record type used by agent session logs (header/turn/...)
+        type   - alias of "t"
+        record - alias; an "attempt" record wraps its payload under it
+    """
+    value = _jsonl_get(obj, "t", "type", "record")
+
+    if value is None:
+        return ""
+
+    return str(value)
+
+
+class _JsonlColumns:
+    """
+    Ordered column set with first-seen types, used to build a dataclass.
+
+    The schema is a dict, so missing values naturally become None when a
+    record is turned into the dataclass.
+    """
+
+    def __init__(self):
+        self.schema: dict[str, dict[str, Any]] = {}
+
+    def add(
+        self,
+        key: str,
+        value: Any,
+    ) -> None:
+        column = self.schema.get(key)
+
+        if column is None:
+            column = {"name": key, "type": Any, "notnull": False, "pk": False}
+            self.schema[key] = column
+
+        if column["type"] is Any and value is not None:
+            column["type"] = type(value)
+
+    def add_mapping(
+        self,
+        values: dict[str, Any],
+    ) -> None:
+        for key, value in values.items():
+            self.add(str(key), value)
+
+    def model(
+        self,
+        name: str,
+        type_overrides: dict[str, type] | None = None,
+    ):
+        type_overrides = type_overrides or {}
+
+        schema = [
+            {
+                **column,
+                "type": type_overrides.get(
+                    column["name"],
+                    column["type"],
+                ),
+            }
+            for column in self.schema.values()
+        ]
+
+        return make_model(
+            name,
+            schema,
+        )
+
+    def convert(
+        self,
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
+        return convert_row(
+            {
+                column: values.get(column)
+                for column in self.schema
+            }
+        )
+
+
+def _jsonl_messages(
+    obj: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Extract the message list of one round-like JSONL record.
+
+    Accepted shapes:
+        {"messages": [...]}            explicit message list
+        {"assistant": {...}, "tools": [...]}
+        {"role": "...", "content": ...}
+    """
+    messages = _jsonl_get(obj, "messages")
+
+    if isinstance(messages, list):
+        return [
+            message
+            for message in messages
+            if isinstance(message, dict)
+        ]
+
+    result = []
+
+    assistant = _jsonl_get(obj, "assistant")
+
+    if isinstance(assistant, dict):
+        result.append(assistant)
+
+    tools = _jsonl_get(obj, "tools")
+
+    if isinstance(tools, list):
+        result.extend(
+            tool
+            for tool in tools
+            if isinstance(tool, dict)
+        )
+
+    if result:
+        return result
+
+    if "role" in obj:
+        return [obj]
+
+    return []
+
+
+def _jsonl_turn_id(
+    obj: dict[str, Any],
+    index: int,
+) -> int:
+    value = _jsonl_get(obj, "id", "turn", "turn_id")
+
+    if value is None and "turn" in obj:
+        value = obj["turn"]
+
+    return value if value is not None else index
+
+
+def _jsonl_round_index(
+    obj: dict[str, Any],
+    index: int,
+) -> int:
+    value = _jsonl_get(obj, "round_index", "i", "round")
+
+    return value if value is not None else index
+
+
+def _jsonl_pairs(
+    records: list[dict[str, Any]],
+) -> tuple[
+    set[tuple[Any, Any]],
+    dict[tuple[Any, Any], list[int]],
+]:
+    """
+    Return (message-bearing rounds, attempts per round).
+
+    An "attempt" record may carry several candidates for one round; only
+    the one that was actually chosen (the matching round) is displayed.
+    """
+    rounds = set()
+    attempts: dict[tuple[Any, Any], list[int]] = {}
+
+    for index, obj in enumerate(records):
+        record_type = jsonl_record_type(obj)
+        turn_id = _jsonl_turn_id(obj, index)
+        round_index = _jsonl_round_index(obj, index)
+
+        if record_type == "round":
+            rounds.add((turn_id, round_index))
+
+        elif record_type == "attempt":
+            attempts.setdefault(
+                (turn_id, round_index),
+                [],
+            ).append(index)
+
+    return rounds, attempts
+
+
+def _is_jsonl_turn(
+    record_type: str,
+    obj: dict[str, Any],
+) -> bool:
+    if record_type == "turn":
+        return True
+
+    return (
+        record_type == ""
+        and any(
+            key in obj
+            for key in ("system", "user", "context")
+        )
+    )
+
+
+def load_jsonl(
+    filename: str,
+) -> dict[str, list[Any]]:
+    """
+    Load JSONL agent logs into Python dataclasses.
+
+    Recognized record types (key "t", or "type"/"record"):
+
+        header    ignored
+        turn      one row per turn; the final "end" record of the turn
+                  contributes status / usage / total_usage / at
+        round     one assistant message plus one message per tool result;
+                  the optional "usage" belongs to the assistant message.
+                  Every other field of the round (turn, i, ...) is kept.
+        attempt   a candidate response for the same round. Records whose
+                  round was never stored as a "round" are kept as an
+                  assistant message, otherwise the chosen "round" wins.
+        end       merged into its turn, never displayed on its own
+        other     a round-like / message-like object is still displayed,
+                  anything else is ignored
+
+    Records written by `--json` ({role, content, tool_call_id}) are
+    accepted as messages. Totals stay correct because `usage` is read
+    alongside the SQLite-style `usage_json` field.
+
+    All fields are preserved; columns that only some records have are
+    None for the others.
+    """
+    records = list(
+        read_jsonl(filename)
+    )
+
+    rounds, attempts = _jsonl_pairs(records)
+
+    turns_columns = _JsonlColumns()
+    messages_columns = _JsonlColumns()
+
+    turns: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
+    ends: dict[Any, dict[str, Any]] = {}
+
+    def add_message(
+        values: dict[str, Any],
+    ) -> None:
+        messages_columns.add_mapping(values)
+        messages.append(values)
+
+    for index, obj in enumerate(records):
+        record_type = jsonl_record_type(obj)
+
+        if record_type in ("header", "end"):
+            if record_type == "end":
+                ends[_jsonl_turn_id(obj, index)] = obj
+
+            continue
+
+        turn_id = _jsonl_turn_id(obj, index)
+
+        if _is_jsonl_turn(record_type, obj):
+            values = {
+                key: value
+                for key, value in obj.items()
+                if key not in ("t", "type", "record")
+            }
+            values["id"] = turn_id
+
+            turns_columns.add_mapping(values)
+            turns.append(values)
+
+            continue
+
+        round_index = _jsonl_round_index(obj, index)
+
+        pair = (turn_id, round_index)
+
+        if record_type == "attempt" and pair in rounds:
+            continue
+
+        if record_type == "attempt" and not (
+            isinstance(obj.get("assistant"), dict)
+            or isinstance(obj.get("tools"), list)
+            or isinstance(obj.get("messages"), list)
+        ):
+            # no stored round for this attempt: show its payload
+            values = (
+                obj["record"]
+                if isinstance(obj.get("record"), dict)
+                else obj
+            )
+            values = dict(values)
+            values.pop("round_index", None)
+            values["turn_id"] = turn_id
+            values["round_index"] = round_index
+            add_message(values)
+
+            continue
+
+        round_messages = _jsonl_messages(obj)
+
+        if (
+            not round_messages
+            and record_type not in ("round", "response")
+            and "role" not in obj
+        ):
+            continue
+
+        round_usage = (
+            _jsonl_get(obj, "usage")
+            if record_type == "round"
+            else None
+        )
+
+        extra = {
+            key: value
+            for key, value in obj.items()
+            if key in ("turn", "i")
+        }
+
+        for position, message in enumerate(round_messages):
+            values = dict(message)
+            values["turn_id"] = turn_id
+            values["round_index"] = round_index
+
+            if "position" not in values:
+                values["position"] = position
+
+            values.update(extra)
+
+            if (
+                position == 0
+                and round_usage is not None
+                and "usage" not in values
+            ):
+                values["usage"] = round_usage
+
+            add_message(values)
+
+    for turn in turns:
+        end = ends.get(turn.get("id"))
+
+        if end is None:
+            continue
+
+        for key, value in end.items():
+            if key in ("t", "type", "record", "turn", "id"):
+                continue
+
+            turn[key] = value
+
+    # columns may only appear on the "end" record (e.g. total_usage)
+    for turn in turns:
+        turns_columns.add_mapping(turn)
+
+    def build(
+        columns: _JsonlColumns,
+        name: str,
+        type_overrides: dict[str, type] | None,
+        values_list: list[dict[str, Any]],
+    ) -> list[Any]:
+        model = columns.model(
+            name,
+            type_overrides,
+        )
+
+        return [
+            model(**columns.convert(values))
+            for values in values_list
+        ]
+
+    return {
+        "turns": build(
+            turns_columns,
+            "turns",
+            {"id": TURN_TYPE},
+            turns,
+        ),
+        "messages": build(
+            messages_columns,
+            "messages",
+            None,
+            messages,
+        ),
+    }
 
 class _YamlDumper(yaml.SafeDumper):
     pass
@@ -845,7 +1357,10 @@ def get_nested(
     *paths: tuple[str, ...],
 ) -> Any:
     """
-    Return the first existing nested dictionary value.
+    Return the first existing non-None nested dictionary value.
+
+    Every path is tried, so a key that exists but holds None does not
+    hide a value available under a later path.
     """
     for path in paths:
         current = value
@@ -855,9 +1370,11 @@ def get_nested(
                 break
 
             current = current.get(key)
+
+            if current is None:
+                break
         else:
-            if current is not None:
-                return current
+            return current
 
     return None
 
@@ -1196,8 +1713,8 @@ def print_token_summary(
     Print total token usage for each turn.
 
     A turn total consists of:
-        turns.usage_json
-        + all messages.usage_json with the same turn_id.
+        turns.usage_json (or turns.usage)
+        + all messages.usage_json (or messages.usage) with the same turn_id.
     """
     totals: dict[Any, list[int]] = {}
 
@@ -1205,17 +1722,28 @@ def print_token_summary(
         add_token_usage(
             totals,
             getattr(turn, "id", None),
-            getattr(turn, "usage_json", None),
+            get_nested(
+                vars(turn),
+                ("usage_json",),
+                ("usage",),
+            ),
         )
 
     for message in messages:
         add_token_usage(
             totals,
             getattr(message, "turn_id", None),
-            getattr(message, "usage_json", None),
+            get_nested(
+                vars(message),
+                ("usage_json",),
+                ("usage",),
+            ),
         )
 
-    if not totals:
+    if not any(
+        any(values)
+        for values in totals.values()
+    ):
         return
 
     rows = sorted(
@@ -1375,13 +1903,19 @@ def record_rows(
     record: Any,
     *,
     hidden: set[str] | None = None,
+    expand: tuple[str, ...] = ("content",),
 ) -> list[tuple[str, Any]]:
     """
     Convert a Python record into display rows.
 
-    All dataclass fields are displayed unless explicitly hidden.
+    Dataclass fields are displayed unless explicitly hidden.
+
+    tool messages keep their payload in a JSON object; for every field
+    named in `expand` (default: "content"), the object is flattened into
+    one row per subkey.
     """
     hidden = hidden or set()
+    role = getattr(record, "role", None)
     rows = []
 
     for key, value in vars(record).items():
@@ -1392,8 +1926,8 @@ def record_rows(
             continue
 
         if (
-            key == "content"
-            and getattr(record, "role", None) == "tool"
+            key in expand
+            and role == "tool"
             and isinstance(value, dict)
         ):
             for subkey, subvalue in value.items():
@@ -1495,10 +2029,10 @@ def print_turn_header(
         )
 
     usage_text = format_usage(
-        getattr(
-            turn,
-            "usage_json",
-            None,
+        get_nested(
+            vars(turn),
+            ("usage_json",),
+            ("usage",),
         )
     )
 
@@ -1560,10 +2094,10 @@ def print_message_header(
         parts.append(job_id)
 
     usage_text = format_usage(
-        getattr(
-            record,
-            "usage_json",
-            None,
+        get_nested(
+            vars(record),
+            ("usage_json",),
+            ("usage",),
         )
     )
 
@@ -1812,20 +2346,100 @@ def print_records(
 # CLI
 # ======================================================================
 
+SOURCE_SQLITE = "sqlite"
+SOURCE_JSONL = "jsonl"
+SOURCE_AUTO = "auto"
+
+SOURCES = (
+    SOURCE_AUTO,
+    SOURCE_SQLITE,
+    SOURCE_JSONL,
+)
+
+JSONL_SUFFIXES = (
+    ".jsonl",
+    ".ndjson",
+)
+
+
+def detect_source(filename: str) -> str:
+    """
+    Guess the input format from the file name and its first bytes.
+
+    File name wins:
+        *.jsonl / *.ndjson  -> jsonl
+
+    SQLite database files start with the magic string "SQLite format 3\0";
+    anything else that is not an SQLite database is treated as JSONL.
+    """
+    lower = filename.lower()
+
+    if lower.endswith(JSONL_SUFFIXES):
+        return SOURCE_JSONL
+
+    try:
+        with open(filename, "rb") as fp:
+            head = fp.read(16)
+    except OSError:
+        head = b""
+
+    if head.startswith(b"SQLite format 3\x00"):
+        return SOURCE_SQLITE
+
+    return SOURCE_JSONL
+
+
+def load_source(
+    filename: str,
+    source: str = SOURCE_AUTO,
+) -> dict[str, list[Any]]:
+    """
+    Load turns / messages from a SQLite database or a JSONL log.
+    """
+    if source == SOURCE_AUTO:
+        source = detect_source(filename)
+
+    if source == SOURCE_JSONL:
+        return load_jsonl(filename)
+
+    if source == SOURCE_SQLITE:
+        return load_database(filename)
+
+    raise ValueError(
+        f"unknown source: {source}"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Display SQLite turn/message data."
+        description=(
+            "Display turn/message data from an SQLite database "
+            "or a JSONL agent log."
+        ),
+        epilog=(
+            "The input format is auto-detected from the file name "
+            "(.jsonl/.ndjson) and the SQLite magic header; "
+            "use --source to override it."
+        ),
     )
 
     parser.add_argument(
-        "database",
-        help="SQLite database",
+        "input",
+        metavar="FILE",
+        help="SQLite database (.db/.sqlite) or JSONL log (.jsonl)",
+    )
+
+    parser.add_argument(
+        "--source",
+        choices=SOURCES,
+        default=SOURCE_AUTO,
+        help="input format; default: auto-detect",
     )
 
     parser.add_argument(
         "--json",
         metavar="FILE",
-        help="export decoded SQLite data as JSON",
+        help="export decoded input data as JSON",
     )
 
     parser.add_argument(
@@ -1868,9 +2482,26 @@ def main() -> None:
             "--width must be greater than zero"
         )
 
-    data = load_database(
-        args.database,
-    )
+    if not os.path.isfile(args.input):
+        raise SystemExit(
+            f"input file not found: {args.input}"
+        )
+
+    try:
+        data = load_source(
+            args.input,
+            args.source,
+        )
+    except (JsonlError, sqlite3.DatabaseError) as exc:
+        source = (
+            args.source
+            if args.source != SOURCE_AUTO
+            else detect_source(args.input)
+        )
+
+        raise SystemExit(
+            f"failed to load {args.input} as {source}: {exc}"
+        )
 
     if args.json:
         save_json(
