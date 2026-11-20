@@ -21,6 +21,21 @@ from wcwidth import wcswidth
 
 
 # ======================================================================
+# Input sources
+# ======================================================================
+
+SOURCE_SQLITE = "sqlite"
+SOURCE_JSONL = "jsonl"
+SOURCE_AUTO = "auto"
+
+SOURCES = (
+    SOURCE_AUTO,
+    SOURCE_SQLITE,
+    SOURCE_JSONL,
+)
+
+
+# ======================================================================
 # Colors
 # ======================================================================
 
@@ -1899,11 +1914,47 @@ class OutputConfig:
 # Record -> display rows
 # ======================================================================
 
+# Alias tables per input source: raw field name -> canonical field name
+# expected by MESSAGE_HIDDEN_FIELDS / print_message_header.
+#
+# Each input format names the same data differently, so the translation is
+# kept per source instead of as one flat table; only the source that
+# actually produces the raw name lists it here. Formats that already use
+# the canonical names (SQLite) need no entry at all.
+#
+# A listed alias row is hidden only when its value equals the canonical
+# field's value (see record_rows), i.e. when it duplicates data already
+# shown in the header; a field that carries different data is still shown.
+MESSAGE_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    # "turn"/"i" are the JSONL names of turn_id/round_index.
+    SOURCE_JSONL: {
+        "turn": "turn_id",
+        "i": "round_index",
+    },
+}
+
+
+def message_field_aliases(
+    source: str,
+) -> dict[str, str]:
+    """
+    Return the alias table that applies to the given input source.
+
+    Unknown / alias-less sources get an empty table, so nothing is
+    translated and no field is dropped by accident.
+    """
+    return MESSAGE_FIELD_ALIASES.get(
+        source,
+        {},
+    )
+
+
 def record_rows(
     record: Any,
     *,
     hidden: set[str] | None = None,
     expand: tuple[str, ...] = ("content",),
+    aliases: dict[str, str] | None = None,
 ) -> list[tuple[str, Any]]:
     """
     Convert a Python record into display rows.
@@ -1913,13 +1964,30 @@ def record_rows(
     tool messages keep their payload in a JSON object; for every field
     named in `expand` (default: "content"), the object is flattened into
     one row per subkey.
+
+    `aliases` maps an alias field to its canonical field. An alias row is
+    hidden only when its value equals the canonical field's value (i.e.
+    it is a pure duplicate already shown in the header). If the alias
+    carries any other value it is kept, so unrelated columns that happen
+    to share a JSONL alias name are never dropped.
     """
     hidden = hidden or set()
+    aliases = aliases or {}
     role = getattr(record, "role", None)
+    fields = vars(record)
     rows = []
 
-    for key, value in vars(record).items():
+    for key, value in fields.items():
         if key in hidden:
+            continue
+
+        canonical = aliases.get(key)
+
+        if (
+            canonical is not None
+            and canonical in fields
+            and fields[canonical] == value
+        ):
             continue
 
         if value is None or value == "":
@@ -2276,6 +2344,14 @@ TURN_HIDDEN_FIELDS = {
 }
 
 MESSAGE_HIDDEN_FIELDS = {
+    # These are the canonical field names expected to be parsed into the
+    # message header (see print_message_header); the table shows everything
+    # else. Other input formats may name the same data differently, so a new
+    # field is only picked up correctly after MESSAGE_FIELD_ALIASES maps its
+    # raw name (for that input source) onto one of the names below.
+    # The lookup itself goes through message_field_aliases(source).
+    # "turn"/"i", for example, are the JSONL aliases of
+    # turn_id/round_index.
     "turn_id",
     "round_index",
     "position",
@@ -2291,7 +2367,14 @@ def print_records(
     hidden_fields: set[str],
     header: Callable[[Any, OutputConfig], None],
     config: OutputConfig,
+    aliases: dict[str, str] | None = None,
 ) -> None:
+    """
+    Print one table per record.
+
+    `aliases` is the field alias table of the input source (see
+    message_field_aliases); it is passed to record_rows.
+    """
     first = True
 
     for record in records:
@@ -2303,6 +2386,7 @@ def print_records(
         rows = record_rows(
             record,
             hidden=hidden_fields,
+            aliases=aliases,
         )
 
         header(
@@ -2346,16 +2430,6 @@ def print_records(
 # CLI
 # ======================================================================
 
-SOURCE_SQLITE = "sqlite"
-SOURCE_JSONL = "jsonl"
-SOURCE_AUTO = "auto"
-
-SOURCES = (
-    SOURCE_AUTO,
-    SOURCE_SQLITE,
-    SOURCE_JSONL,
-)
-
 JSONL_SUFFIXES = (
     ".jsonl",
     ".ndjson",
@@ -2389,6 +2463,24 @@ def detect_source(filename: str) -> str:
     return SOURCE_JSONL
 
 
+def resolve_source(
+    filename: str,
+    source: str = SOURCE_AUTO,
+) -> str:
+    """
+    Turn --source (possibly "auto") into the concrete input format.
+    """
+    if source == SOURCE_AUTO:
+        return detect_source(filename)
+
+    if source not in (SOURCE_SQLITE, SOURCE_JSONL):
+        raise ValueError(
+            f"unknown source: {source}"
+        )
+
+    return source
+
+
 def load_source(
     filename: str,
     source: str = SOURCE_AUTO,
@@ -2396,18 +2488,12 @@ def load_source(
     """
     Load turns / messages from a SQLite database or a JSONL log.
     """
-    if source == SOURCE_AUTO:
-        source = detect_source(filename)
+    source = resolve_source(filename, source)
 
     if source == SOURCE_JSONL:
         return load_jsonl(filename)
 
-    if source == SOURCE_SQLITE:
-        return load_database(filename)
-
-    raise ValueError(
-        f"unknown source: {source}"
-    )
+    return load_database(filename)
 
 
 def parse_args() -> argparse.Namespace:
@@ -2487,18 +2573,17 @@ def main() -> None:
             f"input file not found: {args.input}"
         )
 
+    source = resolve_source(
+        args.input,
+        args.source,
+    )
+
     try:
         data = load_source(
             args.input,
-            args.source,
+            source,
         )
     except (JsonlError, sqlite3.DatabaseError) as exc:
-        source = (
-            args.source
-            if args.source != SOURCE_AUTO
-            else detect_source(args.input)
-        )
-
         raise SystemExit(
             f"failed to load {args.input} as {source}: {exc}"
         )
@@ -2528,6 +2613,7 @@ def main() -> None:
         hidden_fields=MESSAGE_HIDDEN_FIELDS,
         header=print_message_header,
         config=config,
+        aliases=message_field_aliases(source),
     )
 
     print_token_summary(
